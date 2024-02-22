@@ -448,7 +448,7 @@ typedef struct MyGUI
 
 void drawRect(MyGUI* gui, uint32_t left, uint32_t right, uint32_t top, uint32_t bottom, uint32_t border, uint32_t fill)
 {
-    my_assert(gui->img != NULL);
+    CPLUG_LOG_ASSERT(gui->img != NULL);
     for (uint32_t i = top; i < bottom; i++)
     {
         for (uint32_t j = left; j < right; j++)
@@ -674,18 +674,13 @@ void cplug_destroyGUI(void* userGUI)
 void cplug_setParent(void* userGUI, void* hwnd)
 {
     MyGUI* gui = (MyGUI*)userGUI;
-    if (hwnd)
-    {
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_POPUP);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_CHILD);
-        memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
-    }
-    else
-    {
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_CHILD);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_POPUP);
-    }
+    CPLUG_LOG_ASSERT(gui->window == NULL);
+    CPLUG_LOG_ASSERT(hwnd != NULL);
+
+    memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
     SetParent((HWND)gui->window, (HWND)hwnd);
+    DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_POPUP);
+    DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_CHILD);
 }
 
 void cplug_setVisible(void* userGUI, bool visible)

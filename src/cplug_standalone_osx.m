@@ -381,7 +381,6 @@ OSStatus STAND_audioDeviceChangeListener(
     FSEventStreamRelease(g_filesystemEventStream);
 
     g_plugin.setVisible(g_plugin.userGUI, false);
-    g_plugin.setParent(g_plugin.userGUI, NULL);
     g_plugin.destroyGUI(g_plugin.userGUI);
 
     STAND_audioStop();
@@ -1154,7 +1153,6 @@ void STAND_filesystemEventCallback(
             NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
 
             g_plugin.setVisible(g_plugin.userGUI, false);
-            g_plugin.setParent(g_plugin.userGUI, NULL);
             g_plugin.destroyGUI(g_plugin.userGUI);
 
             STAND_audioStop();

@@ -54,7 +54,6 @@ Most plugins don't support these features, & most users don't ask for them or kn
 
 ## Roadmap
 
--   AUv2: Fix occasional crash when closing GUI
 -   AUv2: Get working properly in Logic Pro
 -   AUv2: Support multiple input/output busses
 -   AUv2: Support sample accurate processing AUv2

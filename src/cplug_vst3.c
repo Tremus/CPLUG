@@ -547,7 +547,6 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_removed(void* const sel
 {
     cplug_log("VST3View_removed => %p", self);
     VST3View* const view = (VST3View*)self;
-    cplug_setParent(view->userGUI, NULL);
     return Steinberg_kResultOk;
 }
 

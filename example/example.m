@@ -14,53 +14,50 @@
 
 @implementation MyGUIWrapper
 
-- (void)dealloc
-{
-    cplug_log("NSView - dealloc");
-    // Do your deinit here, not in cplug_destroyGUI
-    CFRunLoopTimerInvalidate(timerRef);
-    CFRelease(timerRef);
-
-    gui.plugin->gui = NULL;
-
-    if (gui.img)
-        free(gui.img);
-
-    [super dealloc];
-}
-
 - (BOOL)acceptsFirstMouse:(NSEvent*)event
 {
     return YES;
 }
 
+#if CPLUG_GUI_RESIZABLE
 - (void)viewDidMoveToWindow
 {
-    cplug_log("NSView - viewDidMoveToWindow");
-    NSWindow* window = [self window];
-    // init graphics API here
-#if CPLUG_GUI_RESIZABLE
+    NSWindow*         window      = [self window];
     NSWindowStyleMask windowStyle = [window styleMask];
     windowStyle                   |= NSWindowStyleMaskResizable;
     [window setStyleMask:windowStyle];
-#endif // CPLUG_GUI_RESIZABLE
+    [super viewDidMoveToWindow];
 }
+#endif // CPLUG_GUI_RESIZABLE
 
 - (void)removeFromSuperview
 {
-    cplug_log("NSView - removeFromSuperview");
-    gui.window = NULL;
-    // deinit graphics API here
+    // Do your deinit here, not in cplug_destroyGUI, which never gets called in Audio Units!
+    // Be prepared for [removeFromSuperview] to be called by a host before cplug_destroyGUI()
+    if (timerRef)
+    {
+        CFRunLoopTimerInvalidate(timerRef);
+        CFRelease(timerRef);
+        timerRef = NULL;
+    }
+
+    if (gui.plugin != NULL)
+        gui.plugin->gui = NULL;
+
+    if (gui.img != NULL)
+        free(gui.img);
+    gui.img = NULL;
     [super removeFromSuperview];
 }
 
 - (void)setFrameSize:(NSSize)newSize
 {
     // handle host resize
-    cplug_log("NSView - setFrameSize");
-
     uint32_t width  = [self frame].size.width;
     uint32_t height = [self frame].size.height;
+
+    CPLUG_LOG_ASSERT(width > 0);
+    CPLUG_LOG_ASSERT(height > 0);
 
     gui.width  = width;
     gui.height = height;
@@ -71,27 +68,24 @@
 
 - (void)viewWillAppear
 {
-    cplug_log("NSView - viewWillAppear");
     // handle visible = true
 }
 
 - (void)viewDidDisappear
 {
-    cplug_log("NSView - viewDidDisappear");
     // handle visible = false
 }
 
 - (void)viewDidChangeBackingProperties:(NSNotification*)pNotification
 {
-    cplug_log("NSView - viewDidChangeBackingProperties");
     NSWindow* window      = self.window;
     CGFloat   scaleFactor = window.backingScaleFactor;
     // handle scale factor
+    [super viewDidChangeBackingProperties];
 }
 
 - (void)drawRect:(NSRect)dirtyRect
 {
-    cplug_log("NSView - drawRect");
     drawGUI(&gui);
     const unsigned char* const _Nullable data = (unsigned char*)gui.img;
     NSDrawBitmap(self.bounds, gui.width, gui.height, 8, 3, 32, 4 * gui.width, NO, NO, NSDeviceRGBColorSpace, &data);
@@ -151,6 +145,8 @@ void* cplug_createGUI(void* userPlugin)
     gui->height = GUI_DEFAULT_HEIGHT;
     gui->img    = (uint32_t*)realloc(gui->img, gui->width * gui->height * sizeof(*gui->img));
 
+    memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
+
     CFRunLoopTimerContext context = {};
     context.info                  = wrapper;
     double interval               = 0.01; // 10ms
@@ -164,22 +160,20 @@ void* cplug_createGUI(void* userPlugin)
     return wrapper;
 }
 
-// NOTE: VST3 & CLAP only. When building with AUv2, do deinit in dealloc.
-void cplug_destroyGUI(void* userGUI) { [(MyGUIWrapper*)userGUI release]; }
+// NOTE: VST3 & CLAP only. When building with AUv2, do deinit in removeFromSuperview.
+void cplug_destroyGUI(void* userGUI)
+{
+    MyGUIWrapper* wrapper = (MyGUIWrapper*)userGUI;
+    [wrapper removeFromSuperview];
+    [wrapper release];
+}
 
 void cplug_setParent(void* userGUI, void* view)
 {
     MyGUIWrapper* wrapper = (MyGUIWrapper*)userGUI;
-    if (wrapper.superview != NULL)
-        [wrapper removeFromSuperview];
-    if (view != NULL)
-    {
-        memcpy(
-            wrapper->gui.plugin->paramValuesMain,
-            wrapper->gui.plugin->paramValuesAudio,
-            sizeof(wrapper->gui.plugin->paramValuesMain));
-        [(NSView*)view addSubview:wrapper];
-    }
+    CPLUG_LOG_ASSERT(wrapper.superview == NULL);
+    CPLUG_LOG_ASSERT(view != NULL);
+    [(NSView*)view addSubview:wrapper];
 }
 
 void cplug_setVisible(void* userGUI, bool visible) { [(MyGUIWrapper*)userGUI setHidden:(visible ? NO : YES)]; }

@@ -438,7 +438,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     // Shutdown GUI
     _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
-    _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
     _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
     DestroyWindow(hWindow);
 
@@ -539,7 +538,6 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             // Deinit
             _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
-            _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
             _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
 
             CPWIN_Audio_StopThread();

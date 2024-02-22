@@ -255,7 +255,9 @@ static inline void cplug_log(const char* const fmt, ...)
 
 #define CPLUG_LOG_ASSERT(cond)                                                                                         \
     if (unlikely(! (cond)))                                                                                            \
-        cplug_log("assertion failure: \"%s\" in file %s, line %i", #cond, __FILE__, __LINE__);
+    {                                                                                                                  \
+        cplug_log("assertion failure: \"%s\" in file %s, line %i", #cond, __FILE__, __LINE__);                         \
+    }
 
 #define CPLUG_LOG_ASSERT_RETURN(cond, ret)                                                                             \
     CPLUG_LOG_ASSERT(cond)                                                                                             \
