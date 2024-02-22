@@ -1182,9 +1182,10 @@ void STAND_filesystemEventCallback(
             g_plugin.userGUI = g_plugin.createGUI(g_plugin.userPlugin);
             cplug_assert(g_plugin.userGUI != NULL);
 
-            CGSize size = [g_window frame].size;
+            uint32_t width, height;
+            g_plugin.getSize(g_plugin.userGUI, &width, &height);
             g_plugin.setParent(g_plugin.userGUI, [g_window contentView]);
-            g_plugin.setSize(g_plugin.userGUI, size.width, size.height);
+            g_plugin.setSize(g_plugin.userGUI, width, height);
             g_plugin.setVisible(g_plugin.userGUI, true);
 
             UInt64 reloadEnd = mach_absolute_time();
