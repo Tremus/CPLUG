@@ -1397,7 +1397,7 @@ OSStatus ComponentBase_AP_Close(AUv2Plugin* auv2)
 
     int numInstances = __atomic_fetch_sub(&g_auv2InstanceCount, 1, __ATOMIC_SEQ_CST);
     if (numInstances == 1)
-        cplug_libraryLoad();
+        cplug_libraryUnload();
 
     return noErr;
 }
