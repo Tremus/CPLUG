@@ -64,7 +64,8 @@ struct CPWIN_Plugin
     uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
     void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
     void (*process)(void*, CplugProcessContext*);
-    void (*setParameterValueDenormalised)(void*, uint32_t index, double value);
+    void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
+    void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
 
     void* (*createGUI)(void* userPlugin);
     void (*destroyGUI)(void* userGUI);
@@ -77,6 +78,18 @@ struct CPWIN_Plugin
 } _gCPLUG;
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
+
+struct CPWIN_PluginStateContext
+{
+    BYTE* Data;
+    SIZE_T BytesReserved;
+    SIZE_T BytesCommited;
+
+    SIZE_T BytesWritten;
+    SIZE_T BytesRead;
+} _gPluginState;
+int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
+int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
 
 //////////
 // MIDI //
@@ -268,6 +281,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     QueryPerformanceCounter(&_gTimer.start);
 
     memset(&_gCPLUG, 0, sizeof(_gCPLUG));
+    memset(&_gPluginState, 0, sizeof(_gPluginState));
     memset(&_gMIDI, 0, sizeof(_gMIDI));
     memset(&_gAudio, 0, sizeof(_gAudio));
     memset(&_gMenus, 0, sizeof(_gMenus));
@@ -457,6 +471,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
     _gCPLUG.libraryUnload();
     FreeLibrary(_gCPLUG.Library);
+    if (_gPluginState.Data)
+        VirtualFree(_gPluginState.Data, _gPluginState.BytesReserved, 0);
 
     CoUninitialize();
     ReleaseMutex(hMutexOneInstance);
@@ -524,7 +540,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     }
-    case WM_COMMAND: // nav menu items
+    case WM_COMMAND: // clicking nav menu items triggers commands. You can also send commands for other things
     {
         switch (wParam)
         {
@@ -541,6 +557,11 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
 
             CPWIN_Audio_StopThread();
+
+            _gPluginState.BytesWritten = 0;
+            _gPluginState.BytesRead    = 0;
+            _gCPLUG.saveState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_WriteStateProc);
+
             _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
             _gCPLUG.libraryUnload();
             FreeLibrary(_gCPLUG.Library);
@@ -579,6 +600,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             _gCPLUG.libraryLoad();
             _gCPLUG.UserPlugin = _gCPLUG.createPlugin();
             cplug_assert(_gCPLUG.UserPlugin != NULL);
+            _gCPLUG.loadState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_ReadStateProc);
 
             CPWIN_Audio_RunWithSampleRateAndBlockSize(_gAudio.SampleRate, _gAudio.BlockSize);
 
@@ -745,7 +767,9 @@ void CPWIN_LoadPlugin()
         (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_getOutputBusChannelCount");
     *(LONG_PTR*)&_gCPLUG.setSampleRateAndBlockSize =
         (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_setSampleRateAndBlockSize");
-    *(LONG_PTR*)&_gCPLUG.process = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_process");
+    *(LONG_PTR*)&_gCPLUG.process   = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_process");
+    *(LONG_PTR*)&_gCPLUG.saveState = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_saveState");
+    *(LONG_PTR*)&_gCPLUG.loadState = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_loadState");
 
     *(LONG_PTR*)&_gCPLUG.createGUI      = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_createGUI");
     *(LONG_PTR*)&_gCPLUG.destroyGUI     = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_destroyGUI");
@@ -763,6 +787,8 @@ void CPWIN_LoadPlugin()
     cplug_assert(NULL != _gCPLUG.getOutputBusChannelCount);
     cplug_assert(NULL != _gCPLUG.setSampleRateAndBlockSize);
     cplug_assert(NULL != _gCPLUG.process);
+    cplug_assert(NULL != _gCPLUG.saveState);
+    cplug_assert(NULL != _gCPLUG.loadState);
 
     cplug_assert(NULL != _gCPLUG.createGUI);
     cplug_assert(NULL != _gCPLUG.destroyGUI);
@@ -773,6 +799,67 @@ void CPWIN_LoadPlugin()
     cplug_assert(NULL != _gCPLUG.checkSize);
     cplug_assert(NULL != _gCPLUG.setSize);
 }
+
+#pragma region PLUGIN_STATE
+int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+{
+    cplug_assert(stateCtx != NULL);
+    cplug_assert(writePos != NULL);
+    cplug_assert(numBytesToWrite > 0);
+
+    // The idea is we reserve heaps of address space up front, and hope we never spill over it.
+    // In the rare case your plugin does, simply reserve more address space
+    // Some plugins may save big audio files in their state, hence the BIG reserve
+    struct CPWIN_PluginStateContext* ctx = (struct CPWIN_PluginStateContext*)stateCtx;
+
+    if (ctx->Data == NULL)
+    {
+        const SIZE_T largePageSize = GetLargePageMinimum();
+        SIZE_T bigreserve = CPWIN_RoundUp(numBytesToWrite, largePageSize);
+        bigreserve *= 8;
+        ctx->Data = (BYTE*)VirtualAlloc(NULL, bigreserve, MEM_RESERVE, PAGE_READWRITE);
+        cplug_assert(ctx->Data != NULL);
+        ctx->BytesReserved = bigreserve;
+
+        SIZE_T bigcommit = numBytesToWrite * 4;
+        LPVOID retval = VirtualAlloc(ctx->Data, bigcommit, MEM_COMMIT, PAGE_READWRITE);
+        cplug_assert(retval != NULL);
+        ctx->BytesCommited = bigcommit;
+    }
+    // If you hit this assertion, you need to reserve more address space above!
+    cplug_assert(numBytesToWrite < (ctx->BytesReserved - ctx->BytesCommited));
+    if (numBytesToWrite > (ctx->BytesCommited - ctx->BytesWritten))
+    {
+        SIZE_T nextcommit = 2 * ctx->BytesCommited;
+        LPVOID retval = VirtualAlloc(ctx->Data, nextcommit, MEM_COMMIT, PAGE_READWRITE);
+        cplug_assert(retval != NULL);
+        ctx->BytesCommited = nextcommit;
+    }
+    memcpy(ctx->Data + ctx->BytesWritten, writePos, numBytesToWrite);
+    ctx->BytesWritten += numBytesToWrite;
+    return numBytesToWrite;
+}
+
+int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead)
+{
+    struct CPWIN_PluginStateContext* ctx = (struct CPWIN_PluginStateContext*)stateCtx;
+
+    cplug_assert(stateCtx != NULL);
+    cplug_assert(readPos != NULL);
+    cplug_assert(maxBytesToRead > 0);
+
+    SIZE_T remainingBytes = ctx->BytesWritten - ctx->BytesRead;
+    SIZE_T bytesToActualyRead = maxBytesToRead > remainingBytes ? remainingBytes : maxBytesToRead;
+
+    if (bytesToActualyRead)
+    {
+        memcpy(readPos, ctx->Data + ctx->BytesRead, bytesToActualyRead);
+        ctx->BytesRead += bytesToActualyRead;
+    }
+
+    return bytesToActualyRead;
+}
+#pragma endregion PLUGIN_STATE
 
 DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
 {
