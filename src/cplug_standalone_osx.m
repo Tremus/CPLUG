@@ -253,7 +253,7 @@ OSStatus STAND_audioDeviceChangeListener(
                                                defer:NO];
     [g_window setReleasedWhenClosed:NO];
     [g_window makeKeyAndOrderFront:nil];
-    [g_window setTitle:[[NSProcessInfo processInfo] processName]];
+    [g_window setTitle:@(CPLUG_PLUGIN_NAME)];
 
     [g_window setContentView:[[NSView alloc] init]];
     [g_window setDelegate:[[WindowDelegate alloc] init]];

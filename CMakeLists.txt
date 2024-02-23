@@ -74,7 +74,7 @@ elseif (APPLE)
         BUNDLE_EXTENSION vst3
         OUTPUT_NAME cplug_example                                             # out binary name, differs from target name
         CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.vst3 # out directory name, differs from target name
-        MACOSX_BUNDLE_BUNDLE_NAME cplug_example
+        MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         MACOSX_BUNDLE_GUI_IDENTIFIER com.cplug.example.vst3
@@ -127,7 +127,7 @@ set_target_properties(cplug_example_auv2 PROPERTIES
     BUNDLE_EXTENSION component
     OUTPUT_NAME "cplug_example"                                                # out binary name, differs from target name
     CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.component # out directory name, differs from target name
-    MACOSX_BUNDLE_BUNDLE_NAME "cplug_example"
+    MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/auv2.plist.in
     MACOSX_BUNDLE_COPYRIGHT CPLUG
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
@@ -167,7 +167,7 @@ if (APPLE)
         OUTPUT_NAME "cplug_example"                                           # out binary name, differs from target name
         CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.clap # out directory name, differs from target name
         MACOSX_BUNDLE_GUI_IDENTIFIER com.cplug.example.clap
-        MACOSX_BUNDLE_BUNDLE_NAME cplug_example
+        MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_LONG_VERSION_STRING "${PROJECT_VERSION}"
@@ -226,9 +226,10 @@ elseif (APPLE)
 
     set_target_properties(cplug_example_app PROPERTIES
         BUNDLE True
-        CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.app
+        OUTPUT_NAME "cplug_example"                                           # out binary name, differs from target name
+        CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.clap # out directory name, differs from target name
         MACOSX_BUNDLE_GUI_IDENTIFIER com.cplug.${PROJECT_NAME}.app
-        MACOSX_BUNDLE_BUNDLE_NAME ${PROJECT_NAME}
+        MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/app.plist.in
