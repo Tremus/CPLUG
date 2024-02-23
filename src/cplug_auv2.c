@@ -178,7 +178,7 @@ int64_t AUv2ReadProc(const void* stateCtx, void* readPos, size_t maxBytesToRead)
 
 // ------------------------------------------------------------------------------------------------
 
-OSStatus AUBase_DispatchGetPropertyInfo(
+OSStatus AUMethodGetPropertyInfo(
     AUv2Plugin*         auv2,
     AudioUnitPropertyID inID,
     AudioUnitScope      inScope,
@@ -187,32 +187,38 @@ OSStatus AUBase_DispatchGetPropertyInfo(
     bool*               outWritable)
 {
     cplug_log(
-        "AUBase_DispatchGetPropertyInfo => %u (%s) %u (%s) %u %u",
+        "AUMethodGetPropertyInfo => %u (%s) %u (%s) %u %p %p",
         inID,
         _cplugProperty2Str(inID),
         inScope,
         _cplugScope2Str(inScope),
         inElement,
-        *outDataSize);
+        outDataSize,
+        outWritable);
+
+    // NOTE: auval and some hosts may lazily pass either/both 'outDataSize' 'outDataSize' as NULL
+#define CPLUG_SAFE_SET_PTR(ptr, val)                                                                                   \
+    if (ptr != NULL)                                                                                                   \
+        *ptr = val;
 
     OSStatus result = noErr;
+    // default
+    CPLUG_SAFE_SET_PTR(outWritable, false);
 
     switch (inID)
     {
     case kAudioUnitProperty_ClassInfo:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(CFPropertyListRef);
-        *outWritable = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(CFPropertyListRef));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_StreamFormat:
-        *outDataSize = sizeof(AudioStreamBasicDescription);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioStreamBasicDescription));
         break;
 
     case kAudioUnitProperty_ElementCount:
-        *outDataSize = sizeof(UInt32);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(UInt32));
         break;
 
     case kAudioUnitProperty_SupportedNumChannels:
@@ -227,82 +233,70 @@ OSStatus AUBase_DispatchGetPropertyInfo(
             num = CPLUG_NUM_OUTPUT_BUSSES;
 
         CPLUG_LOG_ASSERT_RETURN(num != 0u, kAudioUnitErr_InvalidProperty);
-        *outDataSize = sizeof(AUChannelInfo) * num;
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AUChannelInfo) * num);
         break;
     }
+    case kAudioUnitProperty_AudioChannelLayout:
+        // Not supported.
+        // auval strangely doesn't like the default case of returning 'kAudioUnitErr_InvalidProperty' here
+        result = kAudioUnitErr_InvalidPropertyValue;
+        break;
 
     case kAudioUnitProperty_SetRenderCallback:
         CPLUG_LOG_ASSERT_RETURN(inScope != kAudioUnitScope_Output, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(AURenderCallbackStruct);
-        *outWritable = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AURenderCallbackStruct));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_FactoryPresets:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(CFArrayRef);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(CFArrayRef));
         break;
 
     case kAudioUnitProperty_PresentPreset:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(AUPreset);
-        *outWritable = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AUPreset));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_ElementName:
-        *outDataSize = sizeof(CFStringRef);
-        *outWritable = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(CFStringRef));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_ParameterList:
     {
         // Global params only, else auval starts asking for input and output parameter detials
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(AudioUnitParameterID) * CPLUG_NUM_PARAMS;
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterID) * CPLUG_NUM_PARAMS);
         break;
     }
 
     case kAudioUnitProperty_ParameterInfo:
-        *outDataSize = sizeof(AudioUnitParameterInfo);
-        *outWritable = false;
-        break;
-
-    case kAudioUnitProperty_ParameterHistoryInfo:
-        *outDataSize = sizeof(AudioUnitParameterHistoryInfo);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterInfo));
         break;
 
     case kAudioUnitProperty_Latency:
         // auval will ask for latency in the global and input scopes and then test you on it
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(Float64);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(Float64));
         break;
 
     case kAudioUnitProperty_TailTime:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(Float64);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(Float64));
         break;
 
     case kAudioUnitProperty_MaximumFramesPerSlice:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(auv2->mMaxFramesPerSlice);
-        *outWritable = true;
-        break;
-
-    case kAudioUnitProperty_LastRenderError:
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(OSStatus);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(auv2->mMaxFramesPerSlice));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_InPlaceProcessing:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(UInt32);
-        *outDataSize = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(UInt32));
+        CPLUG_SAFE_SET_PTR(outDataSize, true);
         break;
 
     case kAudioUnitProperty_SupportedChannelLayoutTags:
@@ -315,8 +309,7 @@ OSStatus AUBase_DispatchGetPropertyInfo(
             num = CPLUG_NUM_OUTPUT_BUSSES;
 
         CPLUG_LOG_ASSERT_RETURN(num != 0u, kAudioUnitErr_InvalidProperty);
-        *outDataSize = (UInt32)sizeof(AudioChannelLayoutTag) * num;
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, (UInt32)sizeof(AudioChannelLayoutTag) * num);
         break;
     }
 
@@ -324,37 +317,23 @@ OSStatus AUBase_DispatchGetPropertyInfo(
         CPLUG_LOG_ASSERT_RETURN(
             (inScope == kAudioUnitScope_Input || inScope == kAudioUnitScope_Output),
             kAudioUnitErr_InvalidScope);
-        *outWritable = true;
-        *outDataSize = sizeof(UInt32);
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(UInt32));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_HostCallbacks:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(HostCallbackInfo);
-        *outWritable = true;
-        break;
-
-    case kAudioUnitProperty_ContextName:
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(CFStringRef);
-        *outWritable = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(HostCallbackInfo));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_CocoaUI:
-        *outDataSize = sizeof(AudioUnitCocoaViewInfo);
-        *outWritable = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitCocoaViewInfo));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_ParameterClumpName:
-        *outDataSize = sizeof(AudioUnitParameterNameInfo);
-        *outWritable = false;
-        break;
-
-    case kAudioUnitProperty_IconLocation:
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        return kAudioUnitErr_InvalidProperty;
-        *outDataSize = sizeof(CFURLRef);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterNameInfo));
         break;
 
         // TODO: support MIDI out
@@ -363,19 +342,17 @@ OSStatus AUBase_DispatchGetPropertyInfo(
         // case kAudioUnitProperty_MIDIOutputCallback:
         //     CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
         //     *outDataSize = sizeof(AUMIDIOutputCallbackStruct);
-        //     *outWritable = true;
+        //     CPLUG_SAFE_SET_PTR(outWritable, true);
         //     break;
 
     case kAudioUnitProperty_NickName:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(CFStringRef);
-        *outWritable = true;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(CFStringRef));
         break;
 
     case kAudioUnitProperty_LastRenderSampleTime:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *outDataSize = sizeof(Float64);
-        *outWritable = false;
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(Float64));
         break;
 
 #if CPLUG_IS_INSTRUMENT
@@ -383,10 +360,10 @@ OSStatus AUBase_DispatchGetPropertyInfo(
         if (inScope != kAudioUnitScope_Global)
             return kAudioUnitErr_InvalidScope;
         *outDataSize = sizeof(UInt32);
-        *outWritable = false;
         break;
 #endif
     default:
+        CPLUG_SAFE_SET_PTR(outDataSize, 0);
         result = kAudioUnitErr_InvalidProperty;
         break;
     }
@@ -395,41 +372,6 @@ OSStatus AUBase_DispatchGetPropertyInfo(
 }
 
 // ------------------------------------------------------------------------------------------------
-
-static OSStatus AUMethodGetPropertyInfo(
-    AUv2Plugin*         auv2,
-    AudioUnitPropertyID prop,
-    AudioUnitScope      scope,
-    AudioUnitElement    elem,
-    UInt32*             outDataSize,
-    Boolean*            outWritable)
-{
-    // CPLUG_LOG_ASSERT_RETURN(outDataSize != NULL, kAudioUnitErr_InvalidParameterValue)
-    // CPLUG_LOG_ASSERT_RETURN(outWritable != NULL, kAudioUnitErr_InvalidParameterValue)
-    cplug_log(
-        "AUMethodGetPropertyInfo => %u (%s) %u (%s) %u %p %p",
-        prop,
-        _cplugProperty2Str(prop),
-        scope,
-        _cplugScope2Str(scope),
-        elem,
-        outDataSize,
-        outWritable);
-
-    OSStatus result = noErr;
-
-    UInt32 dataSize = 0; // 13517289 GetPropetyInfo was returning an uninitialized value when
-                         // there is an error. This is a problem for auval.
-    bool writable = false;
-
-    result = AUBase_DispatchGetPropertyInfo(auv2, prop, scope, elem, &dataSize, &writable);
-    if (outDataSize != NULL)
-        *outDataSize = dataSize;
-    if (outWritable != NULL)
-        *outWritable = (Boolean)(writable);
-
-    return result;
-}
 
 /*
 NOTE: auval may pass you more data then you requested. They want you to update this to the number of bytes written
@@ -599,7 +541,7 @@ static OSStatus AUMethodGetProperty(
         else if (inScope == kAudioUnitScope_Output)
             numBusses = CPLUG_NUM_OUTPUT_BUSSES;
 
-        *(UInt32*)(outData) = numBusses;
+        *(UInt32*)outData = numBusses;
         break;
     }
 
@@ -708,7 +650,7 @@ static OSStatus AUMethodGetProperty(
 
     // support this?
     // case kAudioUnitProperty_CurrentPreset:
-    // auval will fail you if you don't give them preset with an allocated string
+    // auval will fail you if you don't give them an allocated string
     case kAudioUnitProperty_PresentPreset:
     {
         AUPreset* preset     = (AUPreset*)outData;
@@ -718,12 +660,11 @@ static OSStatus AUMethodGetProperty(
     }
 
     // NOTE: Setting this may cause your MIDI to be sent using the method returned by kMusicDeviceMIDIEventListSelect
-//     case kAudioUnitProperty_AudioUnitMIDIProtocol:
 // #if CPLUG_WANT_MIDI_INPUT
+//     case kAudioUnitProperty_AudioUnitMIDIProtocol:
 //         *(SInt32*)outData = kMIDIProtocol_1_0;
 //         *ioDataSize       = sizeof(SInt32);
-// #else
-//         result = kAudioUnitErr_InvalidProperty;
+//         break;
 // #endif
 #if CPLUG_IS_INSTRUMENT
     case kMusicDeviceProperty_InstrumentCount:
@@ -1254,6 +1195,8 @@ static OSStatus AUMethodMusicDeviceSysExProc(AUv2Plugin* auv2, const UInt8* inDa
 }
 
 // TODO handle MIDI2?
+/*
+
 OSStatus AUMethodMusicDeviceMIDIEventList(AUv2Plugin* auv2, UInt32 inOffsetSampleFrame, const MIDIEventList* evtList)
 {
     cplug_log("AUMethodMusicDeviceMIDIEventList => %u %p", inOffsetSampleFrame, evtList);
@@ -1288,8 +1231,10 @@ OSStatus AUMethodMusicDeviceMIDIEventList(AUv2Plugin* auv2, UInt32 inOffsetSampl
 
     return noErr;
 }
+*/
 #endif
 
+/*
 OSStatus AUMethodMusicDeviceStartNoteProc(
     void*                        self,
     MusicDeviceInstrumentID      inInstrument,
@@ -1317,12 +1262,13 @@ OSStatus AUMethodMusicDeviceStopNoteProc(
     cplug_log("AUMethodMusicDeviceStopNoteProc: %u %u %u", inGroupID, inNoteInstanceID, inOffsetSampleFrame);
     return noErr;
 }
+*/
 
 static AudioComponentMethod AULookup(SInt16 selector)
 {
-    cplug_log("AULookup => %hu", selector);
+    cplug_log("AULookup => %hd", selector);
     // auval will also ask for the ids 513, 514, but I can't find what they are in the documentation
-    // Logic Pro will ask for 32767?
+    // Logic Pro will ask for -1?
     switch (selector)
     {
     case kAudioUnitInitializeSelect:
@@ -1360,12 +1306,12 @@ static AudioComponentMethod AULookup(SInt16 selector)
         return (AudioComponentMethod)AUMethodMusicDeviceMIDIEventProc;
     case kMusicDeviceSysExSelect:
         return (AudioComponentMethod)AUMethodMusicDeviceSysExProc;
-    case kMusicDeviceStartNoteSelect:
-        return (AudioComponentMethod)AUMethodMusicDeviceStartNoteProc;
-    case kMusicDeviceStopNoteSelect:
-        return (AudioComponentMethod)AUMethodMusicDeviceStopNoteProc;
-    case kMusicDeviceMIDIEventListSelect:
-        return (AudioComponentMethod)AUMethodMusicDeviceMIDIEventList;
+        // case kMusicDeviceStartNoteSelect:
+        //     return (AudioComponentMethod)AUMethodMusicDeviceStartNoteProc;
+        // case kMusicDeviceStopNoteSelect:
+        //     return (AudioComponentMethod)AUMethodMusicDeviceStopNoteProc;
+        // case kMusicDeviceMIDIEventListSelect:
+        //     return (AudioComponentMethod)AUMethodMusicDeviceMIDIEventList;
 #endif
     default:
         cplug_log("WARNING: NO PROC FOR %hu", selector);
