@@ -91,6 +91,8 @@ struct STAND_Plugin
     uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
     void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
     void (*process)(void* userPlugin, CplugProcessContext* ctx);
+    void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
+    void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
 
     void* (*createGUI)(void* userPlugin);
     void (*destroyGUI)(void* userGUI);
@@ -101,6 +103,18 @@ struct STAND_Plugin
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
 } g_plugin;
+
+struct STAND_PluginStateContext
+{
+    uint8_t* data;
+    size_t   bytesReserved;
+    size_t   bytesCommited;
+
+    size_t bytesWritten;
+    size_t bytesRead;
+} g_pluginState;
+int64_t STAND_writeStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
+int64_t STAND_readStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
 
 mach_timebase_info_data_t g_timebase;
 uint64_t                  g_appStartTime = 0;
@@ -199,6 +213,7 @@ OSStatus STAND_audioDeviceChangeListener(
     // create user plugin
     memset(&g_plugin, 0, sizeof(g_plugin));
     STAND_openLibraryWithSymbols();
+    memset(&g_pluginState, 0, sizeof(g_pluginState));
 
     g_plugin.libraryLoad();
     g_plugin.userPlugin = g_plugin.createPlugin();
@@ -403,6 +418,7 @@ OSStatus STAND_audioDeviceChangeListener(
     g_plugin.destroyPlugin(g_plugin.userPlugin);
     g_plugin.libraryUnload();
     dlclose(g_plugin.library);
+    munmap(g_pluginState.data, g_pluginState.bytesReserved);
 
     [g_window release];
     [[NSApp menu] release];
@@ -1098,6 +1114,8 @@ void STAND_openLibraryWithSymbols()
     *(size_t*)&g_plugin.getOutputBusChannelCount  = (size_t)dlsym(g_plugin.library, "cplug_getOutputBusChannelCount");
     *(size_t*)&g_plugin.setSampleRateAndBlockSize = (size_t)dlsym(g_plugin.library, "cplug_setSampleRateAndBlockSize");
     *(size_t*)&g_plugin.process                   = (size_t)dlsym(g_plugin.library, "cplug_process");
+    *(size_t*)&g_plugin.saveState                 = (size_t)dlsym(g_plugin.library, "cplug_saveState");
+    *(size_t*)&g_plugin.loadState                 = (size_t)dlsym(g_plugin.library, "cplug_loadState");
 
     *(size_t*)&g_plugin.createGUI      = (size_t)dlsym(g_plugin.library, "cplug_createGUI");
     *(size_t*)&g_plugin.destroyGUI     = (size_t)dlsym(g_plugin.library, "cplug_destroyGUI");
@@ -1115,6 +1133,8 @@ void STAND_openLibraryWithSymbols()
     cplug_assert(NULL != g_plugin.getOutputBusChannelCount);
     cplug_assert(NULL != g_plugin.setSampleRateAndBlockSize);
     cplug_assert(NULL != g_plugin.process);
+    cplug_assert(NULL != g_plugin.saveState);
+    cplug_assert(NULL != g_plugin.loadState);
 
     cplug_assert(NULL != g_plugin.createGUI);
     cplug_assert(NULL != g_plugin.destroyGUI);
@@ -1156,6 +1176,11 @@ void STAND_filesystemEventCallback(
             g_plugin.destroyGUI(g_plugin.userGUI);
 
             STAND_audioStop();
+
+            g_pluginState.bytesWritten = 0;
+            g_pluginState.bytesRead    = 0;
+            g_plugin.saveState(g_plugin.userPlugin, &g_pluginState, STAND_writeStateProc);
+
             g_plugin.destroyPlugin(g_plugin.userPlugin);
             g_plugin.libraryUnload();
 
@@ -1174,6 +1199,7 @@ void STAND_filesystemEventCallback(
             g_plugin.libraryLoad();
             g_plugin.userPlugin = g_plugin.createPlugin();
             cplug_assert(g_plugin.userPlugin != NULL);
+            g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
 
             STAND_audioStart(g_audioOutputDeviceID, g_audioSampleRate, g_audioBlockSize);
 
@@ -1194,4 +1220,62 @@ void STAND_filesystemEventCallback(
             fprintf(stderr, "Reload time %.2fms\n", reload_ms);
         }
     }
+}
+
+int64_t STAND_writeStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+{
+    cplug_assert(stateCtx != NULL);
+    cplug_assert(writePos != NULL);
+    cplug_assert(numBytesToWrite > 0);
+
+    // The idea is we reserve heaps of address space up front, and hope we never spill over it.
+    // In the rare case your plugin does, simply reserve more address space
+    // Some plugins may save big audio files in their state, hence the BIG reserve
+    struct STAND_PluginStateContext* ctx = (struct STAND_PluginStateContext*)stateCtx;
+
+    if (ctx->data == NULL)
+    {
+        size_t largePageSize = 2 * 1024 * 1024;
+        size_t bigreserve    = 8 * STAND_roundUp(numBytesToWrite, largePageSize);
+        ctx->data            = (UInt8*)mmap(MAP_FILE, bigreserve, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
+        cplug_assert((uint64_t)ctx->data != 0xffffffffffffffff);
+        ctx->bytesReserved = bigreserve;
+
+        size_t bigcommit = numBytesToWrite * 4;
+        int    retval    = mprotect(ctx->data, bigcommit, PROT_READ | PROT_WRITE);
+        cplug_assert(retval == 0);
+        ctx->bytesCommited = bigcommit;
+    }
+    // If you hit this assertion, you need to reserve more address space above!
+    cplug_assert(numBytesToWrite < (ctx->bytesReserved - ctx->bytesCommited));
+    if (numBytesToWrite > (ctx->bytesCommited - ctx->bytesWritten))
+    {
+        size_t nextcommit = 2 * ctx->bytesCommited;
+        int    retval     = mprotect(ctx->data, nextcommit, PROT_READ | PROT_WRITE);
+        cplug_assert(retval == 0);
+        ctx->bytesCommited = nextcommit;
+    }
+    memcpy(ctx->data + ctx->bytesWritten, writePos, numBytesToWrite);
+    ctx->bytesWritten += numBytesToWrite;
+    return numBytesToWrite;
+}
+
+int64_t STAND_readStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead)
+{
+    struct STAND_PluginStateContext* ctx = (struct STAND_PluginStateContext*)stateCtx;
+
+    cplug_assert(stateCtx != NULL);
+    cplug_assert(readPos != NULL);
+    cplug_assert(maxBytesToRead > 0);
+
+    size_t remainingBytes     = ctx->bytesWritten - ctx->bytesRead;
+    size_t bytesToActualyRead = maxBytesToRead > remainingBytes ? remainingBytes : maxBytesToRead;
+
+    if (bytesToActualyRead)
+    {
+        memcpy(readPos, ctx->data + ctx->bytesRead, bytesToActualyRead);
+        ctx->bytesRead += bytesToActualyRead;
+    }
+
+    return bytesToActualyRead;
 }
