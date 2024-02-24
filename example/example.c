@@ -674,7 +674,6 @@ void cplug_destroyGUI(void* userGUI)
 void cplug_setParent(void* userGUI, void* hwnd)
 {
     MyGUI* gui = (MyGUI*)userGUI;
-    CPLUG_LOG_ASSERT(gui->window == NULL);
     CPLUG_LOG_ASSERT(hwnd != NULL);
 
     memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
