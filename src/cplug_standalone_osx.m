@@ -167,20 +167,20 @@ static inline UInt64 STAND_roundUp(UInt64 value, UInt64 alignment)
 #pragma mark -Forward declarations
 
 // Main thread
-void     STAND_openLibraryWithSymbols();
-OSStatus STAND_midiConnectFirstAvailableDevice();
-void     STAND_midiDisconnect();
-OSStatus STAND_audioStart(AudioDeviceID deviceID, Float64 sampleRate, UInt32 blockSize);
-OSStatus STAND_audioStop();
-void     STAND_menuRefreshAudioOutputItems();
-void     STAND_menuRefreshMIDIInputItems();
-void     STAND_filesystemEventCallback(
-        ConstFSEventStreamRef          streamRef,
-        void* __nullable               clientCallBackInfo,
-        size_t                         numEvents,
-        void*                          eventPaths,
-        const FSEventStreamEventFlags* eventFlags,
-        const FSEventStreamEventId*    eventIds);
+void STAND_openLibraryWithSymbols();
+void STAND_midiConnectFirstAvailableDevice();
+void STAND_midiDisconnect();
+void STAND_audioStart();
+void STAND_audioStop();
+void STAND_menuRefreshAudioOutputItems();
+void STAND_menuRefreshMIDIInputItems();
+void STAND_filesystemEventCallback(
+    ConstFSEventStreamRef          streamRef,
+    void* __nullable               clientCallBackInfo,
+    size_t                         numEvents,
+    void*                          eventPaths,
+    const FSEventStreamEventFlags* eventFlags,
+    const FSEventStreamEventId*    eventIds);
 
 // MIDI thread
 void STAND_midiReadInputProc(
@@ -252,8 +252,7 @@ OSStatus STAND_audioDeviceChangeListener(
     cplug_assert(status == noErr);
     cplug_assert(g_audioOutputDeviceID != 0);
 
-    status = STAND_audioStart(g_audioOutputDeviceID, g_audioSampleRate, g_audioBlockSize);
-    cplug_assert(status == noErr);
+    STAND_audioStart();
 
     // GUI
     g_plugin.userGUI = g_plugin.createGUI(g_plugin.userPlugin);
@@ -395,9 +394,6 @@ OSStatus STAND_audioDeviceChangeListener(
     FSEventStreamInvalidate(g_filesystemEventStream);
     FSEventStreamRelease(g_filesystemEventStream);
 
-    g_plugin.setVisible(g_plugin.userGUI, false);
-    g_plugin.destroyGUI(g_plugin.userGUI);
-
     STAND_audioStop();
 
     AudioObjectPropertyAddress addr = {
@@ -415,10 +411,16 @@ OSStatus STAND_audioDeviceChangeListener(
     }
     pthread_mutex_destroy(&g_audioMutex);
 
-    g_plugin.destroyPlugin(g_plugin.userPlugin);
-    g_plugin.libraryUnload();
-    dlclose(g_plugin.library);
-    munmap(g_pluginState.data, g_pluginState.bytesReserved);
+    if (g_plugin.library)
+    {
+        g_plugin.setVisible(g_plugin.userGUI, false);
+        g_plugin.destroyGUI(g_plugin.userGUI);
+
+        g_plugin.destroyPlugin(g_plugin.userPlugin);
+        g_plugin.libraryUnload();
+        dlclose(g_plugin.library);
+        munmap(g_pluginState.data, g_pluginState.bytesReserved);
+    }
 
     [g_window release];
     [[NSApp menu] release];
@@ -436,8 +438,9 @@ OSStatus STAND_audioDeviceChangeListener(
     assert(prev != NULL);
     [prev setState:NO];
 
-    int nextSampleRate = [item tag];
-    STAND_audioStart(g_audioOutputDeviceID, nextSampleRate, g_audioBlockSize);
+    STAND_audioStop();
+    g_audioSampleRate = [item tag];
+    STAND_audioStart();
 }
 
 - (void)handleClickBlockSize:(id)selector
@@ -449,8 +452,9 @@ OSStatus STAND_audioDeviceChangeListener(
     assert(prev != NULL);
     [prev setState:NO];
 
-    int nextBlockSize = [item tag];
-    STAND_audioStart(g_audioOutputDeviceID, g_audioSampleRate, nextBlockSize);
+    STAND_audioStop();
+    g_audioBlockSize = [item tag];
+    STAND_audioStart();
 }
 
 - (void)handleClickAudioOutput:(id)selector
@@ -465,8 +469,9 @@ OSStatus STAND_audioDeviceChangeListener(
         [prev setState:NO];
     }
 
-    AudioDeviceID deviceID = [item tag];
-    STAND_audioStart(deviceID, g_audioSampleRate, g_audioBlockSize);
+    STAND_audioStop();
+    g_audioOutputDeviceID = [item tag];
+    STAND_audioStart();
 }
 
 - (void)handleClickMIDIInput:(id)selector
@@ -523,7 +528,7 @@ OSStatus STAND_audioDeviceChangeListener(
 - (void)windowDidResize:(NSNotification*)notification
 {
     NSWindow* window = notification.object;
-    CGSize    size   = [window frame].size;
+    CGSize    size   = [window contentView].frame.size;
     g_plugin.setSize(g_plugin.userGUI, size.width, size.height);
 }
 @end
@@ -733,7 +738,7 @@ void STAND_midiReadInputProc(
 }
 
 // Main thread
-OSStatus STAND_midiConnectFirstAvailableDevice()
+void STAND_midiConnectFirstAvailableDevice()
 {
     OSStatus status = noErr;
     assert(g_midiPortRef == 0);
@@ -742,30 +747,27 @@ OSStatus STAND_midiConnectFirstAvailableDevice()
     if (sourceRef == 0)
     {
         printf("Failed connecting to first available MIDI input\n");
-        return 1;
+        return;
     }
 
     status = MIDIObjectGetIntegerProperty(sourceRef, kMIDIPropertyUniqueID, &g_midiConnectedUniqueID);
     cplug_assert(status == noErr);
     cplug_assert(g_midiConnectedUniqueID != 0);
     if (g_midiConnectedUniqueID == 0)
-        return 1;
+        return;
 
     status =
         MIDIInputPortCreate(g_midiClientRef, g_midiConnectedPortName, STAND_midiReadInputProc, NULL, &g_midiPortRef);
     cplug_assert(status == noErr);
     assert(g_midiPortRef != 0);
     if (g_midiPortRef == 0)
-        return 1;
+        return;
 
     // Starts the MIDI read thread
     status = MIDIPortConnectSource(g_midiPortRef, sourceRef, NULL);
     cplug_assert(status == noErr);
-    if (g_midiConnectedUniqueID == 0)
-        return 1;
-
-    printf("Connected to MIDI input with ID: %d\n", g_midiConnectedUniqueID);
-    return status;
+    if (g_midiConnectedUniqueID != 0)
+        printf("Connected to MIDI input with ID: %d\n", g_midiConnectedUniqueID);
 }
 
 void STAND_midiDisconnect()
@@ -872,14 +874,19 @@ OSStatus STAND_audioIOProc(
 }
 
 // Main thread
-OSStatus STAND_audioStart(AudioDeviceID deviceID, Float64 sampleRate, UInt32 blockSize)
+void STAND_audioStart()
 {
+    if (g_plugin.library == NULL)
+    {
+        cplug_log("[FAILED] Called STAND_audioStart when no plugin is loaded");
+        return;
+    }
     if (g_audioOutputProcID)
         STAND_audioStop();
 
-    g_audioOutputDeviceID = deviceID;
-    g_audioSampleRate     = sampleRate;
-    g_audioBlockSize      = blockSize;
+    cplug_assert(g_audioOutputDeviceID > 0);
+    cplug_assert(g_audioSampleRate > 0);
+    cplug_assert(g_audioBlockSize > 0);
 
     OSStatus status = noErr;
 
@@ -891,26 +898,26 @@ OSStatus STAND_audioStart(AudioDeviceID deviceID, Float64 sampleRate, UInt32 blo
 
     AudioBufferList list;
     propSize = sizeof(list);
-    status   = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propSize, &list);
+    status   = AudioObjectGetPropertyData(g_audioOutputDeviceID, &addr, 0, NULL, &propSize, &list);
     cplug_assert(status == noErr);
     cplug_assert(list.mBuffers[0].mNumberChannels == g_audioNumChannels);
 
     addr.mSelector = kAudioDevicePropertyBufferFrameSize;
     propSize       = sizeof(UInt32);
-    status         = AudioObjectSetPropertyData(deviceID, &addr, 0, NULL, propSize, &blockSize);
+    status         = AudioObjectSetPropertyData(g_audioOutputDeviceID, &addr, 0, NULL, propSize, &g_audioBlockSize);
     // If this fails, we may need to clamp the users buffer size using kAudioDevicePropertyBufferFrameSizeRange
     cplug_assert(status == noErr);
 
     addr.mSelector = kAudioDevicePropertyNominalSampleRate;
-    propSize       = sizeof(sampleRate);
-    status         = AudioObjectSetPropertyData(deviceID, &addr, 0, NULL, propSize, &sampleRate);
+    propSize       = sizeof(g_audioSampleRate);
+    status         = AudioObjectSetPropertyData(g_audioOutputDeviceID, &addr, 0, NULL, propSize, &g_audioSampleRate);
     cplug_assert(status == noErr);
 
     // Apple only support interleaved audio, so we have to process in our own deinterleaved buffers, then interleve it
     // https://developer.apple.com/documentation/audiotoolbox/1503207-audioqueuenewoutput#parameters
     addr.mSelector = kAudioStreamPropertyVirtualFormat;
     AudioStreamBasicDescription desc;
-    desc.mSampleRate       = sampleRate;
+    desc.mSampleRate       = g_audioSampleRate;
     desc.mFormatID         = kAudioFormatLinearPCM;
     desc.mFormatFlags      = kAudioFormatFlagsNativeFloatPacked;
     desc.mBytesPerPacket   = sizeof(float) * g_audioNumChannels;
@@ -921,29 +928,31 @@ OSStatus STAND_audioStart(AudioDeviceID deviceID, Float64 sampleRate, UInt32 blo
     desc.mReserved         = 0;
 
     propSize = sizeof(desc);
-    status   = AudioObjectSetPropertyData(deviceID, &addr, 0, NULL, propSize, &desc);
+    status   = AudioObjectSetPropertyData(g_audioOutputDeviceID, &addr, 0, NULL, propSize, &desc);
     cplug_assert(status == noErr);
 
-    g_plugin.setSampleRateAndBlockSize(g_plugin.userPlugin, sampleRate, blockSize);
+    g_plugin.setSampleRateAndBlockSize(g_plugin.userPlugin, g_audioSampleRate, g_audioBlockSize);
 
-    status = AudioDeviceCreateIOProcID(deviceID, &STAND_audioIOProc, NULL, &g_audioOutputProcID);
+    status = AudioDeviceCreateIOProcID(g_audioOutputDeviceID, &STAND_audioIOProc, NULL, &g_audioOutputProcID);
     cplug_assert(status == noErr);
 
     g_audioStopFlag = false;
     pthread_cond_init(&g_audioStopCondition, NULL);
-    status = AudioDeviceStart(deviceID, &STAND_audioIOProc);
+    status = AudioDeviceStart(g_audioOutputDeviceID, &STAND_audioIOProc);
     cplug_assert(status == noErr);
 
-    printf("Connected to audio output with ID: %u\n", deviceID);
-
-    return status;
+    printf("Connected to audio output with ID: %u\n", g_audioOutputDeviceID);
 }
 
 // Main thread
-OSStatus STAND_audioStop()
+void STAND_audioStop()
 {
+    if (g_audioOutputProcID == NULL)
+    {
+        cplug_log("[WARNING] Called STAND_audioStop() when audio is not running");
+        return;
+    }
     cplug_assert(g_audioOutputDeviceID != 0);
-    cplug_assert(g_audioOutputProcID != NULL);
     // AudioDeviceStop is not synchronous. It signals some internal state to stop... sometime.
     // If you call stop from your main thread, your audio callback may be called several times after calling stop.
     // Apple guarantee that if you call stop from the audio thread, there will be no more successive calls
@@ -958,8 +967,6 @@ OSStatus STAND_audioStop()
     OSStatus status = AudioDeviceDestroyIOProcID(g_audioOutputDeviceID, g_audioOutputProcID);
     cplug_assert(status == noErr);
     g_audioOutputProcID = NULL;
-
-    return status;
 }
 
 #pragma mark -MIDI Device changes
@@ -1170,47 +1177,56 @@ void STAND_filesystemEventCallback(
             fprintf(stderr, "File changed: %s\n", path);
             UInt64 reloadStart = mach_absolute_time();
 
-            NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
-
-            g_plugin.setVisible(g_plugin.userGUI, false);
-            g_plugin.destroyGUI(g_plugin.userGUI);
-
             STAND_audioStop();
 
-            g_pluginState.bytesWritten = 0;
-            g_pluginState.bytesRead    = 0;
-            g_plugin.saveState(g_plugin.userPlugin, &g_pluginState, STAND_writeStateProc);
+            if (g_plugin.library)
+            {
+                NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+                g_plugin.setVisible(g_plugin.userGUI, false);
+                g_plugin.destroyGUI(g_plugin.userGUI);
 
-            g_plugin.destroyPlugin(g_plugin.userPlugin);
-            g_plugin.libraryUnload();
+                g_pluginState.bytesWritten = 0;
+                g_pluginState.bytesRead    = 0;
+                g_plugin.saveState(g_plugin.userPlugin, &g_pluginState, STAND_writeStateProc);
 
-            // Explicitly drain the pool to clean up any possible reference counting in the users library
-            // Failing to do this before dlclose will cause segfaults when the main runloops pool drains
-            [pool release];
-            dlclose(g_plugin.library);
-            memset(&g_plugin, 0, sizeof(g_plugin));
+                g_plugin.destroyPlugin(g_plugin.userPlugin);
+                g_plugin.libraryUnload();
+                // Explicitly drain the pool to clean up any possible reference counting in the users library
+                // Failing to do this before dlclose will cause segfaults when the main runloops pool drains
+                [pool release];
+                dlclose(g_plugin.library);
+                memset(&g_plugin, 0, sizeof(g_plugin));
+            }
 
             UInt64 buildStart = mach_absolute_time();
             int    code       = system(HOTRELOAD_BUILD_COMMAND);
-            assert(code == 0);
-            UInt64 buildEnd = mach_absolute_time();
+            UInt64 buildEnd   = mach_absolute_time();
 
-            STAND_openLibraryWithSymbols();
-            g_plugin.libraryLoad();
-            g_plugin.userPlugin = g_plugin.createPlugin();
-            cplug_assert(g_plugin.userPlugin != NULL);
-            g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
+            if (code != 0)
+            {
+                cplug_log("[WARNING] Rebuild failed. Exited with code: %d", code);
+            }
+            else
+            {
+                STAND_openLibraryWithSymbols();
+                g_plugin.libraryLoad();
+                g_plugin.userPlugin = g_plugin.createPlugin();
+                cplug_assert(g_plugin.userPlugin != NULL);
+                g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
 
-            STAND_audioStart(g_audioOutputDeviceID, g_audioSampleRate, g_audioBlockSize);
+                STAND_audioStart();
 
-            g_plugin.userGUI = g_plugin.createGUI(g_plugin.userPlugin);
-            cplug_assert(g_plugin.userGUI != NULL);
+                g_plugin.userGUI = g_plugin.createGUI(g_plugin.userPlugin);
+                cplug_assert(g_plugin.userGUI != NULL);
 
-            uint32_t width, height;
-            g_plugin.getSize(g_plugin.userGUI, &width, &height);
-            g_plugin.setParent(g_plugin.userGUI, [g_window contentView]);
-            g_plugin.setSize(g_plugin.userGUI, width, height);
-            g_plugin.setVisible(g_plugin.userGUI, true);
+                uint32_t width, height;
+                CGSize   subviewSize = [g_window contentView].frame.size;
+                width                = subviewSize.width;
+                height               = subviewSize.height;
+                g_plugin.setSize(g_plugin.userGUI, width, height);
+                g_plugin.setParent(g_plugin.userGUI, [g_window contentView]);
+                g_plugin.setVisible(g_plugin.userGUI, true);
+            }
 
             UInt64 reloadEnd = mach_absolute_time();
 

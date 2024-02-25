@@ -53,8 +53,8 @@
 - (void)setFrameSize:(NSSize)newSize
 {
     // handle host resize
-    uint32_t width  = [self frame].size.width;
-    uint32_t height = [self frame].size.height;
+    uint32_t width  = newSize.width;
+    uint32_t height = newSize.height;
 
     CPLUG_LOG_ASSERT(width > 0);
     CPLUG_LOG_ASSERT(height > 0);
