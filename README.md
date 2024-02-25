@@ -25,7 +25,7 @@ The source files are configurable using macros you define. A full list of these 
 | cplug.h                | < 300         | Common API            | None                      |
 | cplug_clap.c           | < 800         | CLAP wrapper          | `#include <clap/clap.h>`  |
 | cplug_standalone_osx.m | < 1,200       | Standalone            | None                      |
-| cplug_auv2.c           | < 1,500       | Audio Unit v2 wrapper | None                      |
+| cplug_auv2.c           | < 1,400       | Audio Unit v2 wrapper | None                      |
 | cplug_standalone_win.c | < 1,600       | Standalone            | None                      |
 | cplug_vst3.c           | < 2,200       | VST3 wrapper          | `#include <vst3_c_api.h>` |
 
@@ -54,7 +54,6 @@ Most plugins don't support these features, & most users don't ask for them or kn
 
 ## Roadmap
 
--   AUv2: Get working properly in Logic Pro
 -   AUv2: Support multiple input/output busses
 -   AUv2: Support sample accurate processing AUv2
 -   Standalone: Support a release build

@@ -17,6 +17,48 @@ static const double kAUDefaultSampleRate        = 44100.0;
 #define ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
 #endif
 
+static const char* _cplugLookup2Str(SInt16 selector)
+{
+    static const struct
+    {
+        const char* str;
+        SInt16      id;
+    } _auv2selectorstrings[] = {
+        {"kAudioUnitInitializeSelect", 0x0001},
+        {"kAudioUnitUninitializeSelect", 0x0002},
+        {"kAudioUnitGetPropertyInfoSelect", 0x0003},
+        {"kAudioUnitGetPropertySelect", 0x0004},
+        {"kAudioUnitSetPropertySelect", 0x0005},
+        {"kAudioUnitAddPropertyListenerSelect", 0x000A},
+        {"kAudioUnitRemovePropertyListenerSelect", 0x000B},
+        {"kAudioUnitRemovePropertyListenerWithUserDataSelect", 0x0012},
+        {"kAudioUnitAddRenderNotifySelect", 0x000F},
+        {"kAudioUnitRemoveRenderNotifySelect", 0x0010},
+        {"kAudioUnitGetParameterSelect", 0x0006},
+        {"kAudioUnitSetParameterSelect", 0x0007},
+        {"kAudioUnitScheduleParametersSelect", 0x0011},
+        {"kAudioUnitRenderSelect", 0x000E},
+        {"kAudioUnitResetSelect", 0x0009},
+        {"kAudioUnitComplexRenderSelect", 0x0013},
+        {"kAudioUnitProcessSelect", 0x0014},
+        {"kAudioUnitProcessMultipleSelect", 0x0015},
+        {"kMusicDeviceMIDIEventSelect", 0x0101},
+        {"kMusicDeviceSysExSelect", 0x0102},
+        {"kMusicDevicePrepareInstrumentSelect", 0x0103},
+        {"kMusicDeviceReleaseInstrumentSelect", 0x0104},
+        {"kMusicDeviceStartNoteSelect", 0x0105},
+        {"kMusicDeviceStopNoteSelect", 0x0106},
+        {"kMusicDeviceMIDIEventListSelect", 0x0107},
+        {"kAudioOutputUnitStartSelect", 0x0201},
+        {"kAudioOutputUnitStopSelect", 0x0202},
+    };
+
+    for (int i = 0; i < ARRSIZE(_auv2selectorstrings); i++)
+        if (selector == _auv2selectorstrings[i].id)
+            return _auv2selectorstrings[i].str;
+
+    return "UNKNOWN_PROPERTY";
+}
 static const char* _cplugProperty2Str(AudioUnitPropertyID inID)
 {
     // clang-format off
@@ -537,7 +579,9 @@ static OSStatus AUMethodGetProperty(
         if (inScope == kAudioUnitScope_Global)
             numBusses = 1;
         else if (inScope == kAudioUnitScope_Input)
-            numBusses = CPLUG_NUM_INPUT_BUSSES;
+            // If you have 0 input 'elements', Logic Pro will silently fail to load your plugin.
+            // This is not a problem in other hosts such as Ableton, FL and even auval.
+            numBusses = CPLUG_NUM_INPUT_BUSSES == 0 ? 1 : CPLUG_NUM_INPUT_BUSSES;
         else if (inScope == kAudioUnitScope_Output)
             numBusses = CPLUG_NUM_OUTPUT_BUSSES;
 
@@ -547,8 +591,8 @@ static OSStatus AUMethodGetProperty(
 
     case kAudioUnitProperty_Latency:
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        *(Float64*)(outData) = cplug_getLatencyInSamples(auv2->userPlugin);
-        *ioDataSize          = sizeof(Float64);
+        *(Float64*)outData = cplug_getLatencyInSamples(auv2->userPlugin);
+        *ioDataSize        = sizeof(Float64);
         break;
 
     case kAudioUnitProperty_SupportedNumChannels:
@@ -598,7 +642,7 @@ static OSStatus AUMethodGetProperty(
         }
         if (inScope == kAudioUnitScope_Output)
         {
-            if (inElement < CPLUG_NUM_INPUT_BUSSES)
+            if (inElement < CPLUG_NUM_OUTPUT_BUSSES)
             {
                 if (auv2->outputBusNames[inElement] == NULL)
                 {
@@ -672,7 +716,6 @@ static OSStatus AUMethodGetProperty(
             return kAudioUnitErr_InvalidScope;
         *(UInt32*)outData = 1;
         *ioDataSize       = sizeof(UInt32);
-        result            = noErr;
         break;
 #endif
     case kAudioUnitProperty_UserPlugin:
@@ -1193,82 +1236,12 @@ static OSStatus AUMethodMusicDeviceSysExProc(AUv2Plugin* auv2, const UInt8* inDa
     cplug_log("AUMethodMusicDeviceSysExProc => %p %u", inData, inLength);
     return noErr;
 }
-
-// TODO handle MIDI2?
-/*
-
-OSStatus AUMethodMusicDeviceMIDIEventList(AUv2Plugin* auv2, UInt32 inOffsetSampleFrame, const MIDIEventList* evtList)
-{
-    cplug_log("AUMethodMusicDeviceMIDIEventList => %u %p", inOffsetSampleFrame, evtList);
-
-    const MIDIEventPacket* packet = &evtList->packet[0];
-
-    UInt32 quantizedFrame = inOffsetSampleFrame / CPLUG_EVENT_FRAME_QUANTIZE * CPLUG_EVENT_FRAME_QUANTIZE;
-
-    for (UInt32 i = 0; i < evtList->numPackets; i++)
-    {
-        if (auv2->numEvents < ARRSIZE(auv2->events))
-        {
-            for (UInt32 w = 0; w < packet->wordCount; w++)
-            {
-                UInt32 midi = packet->words[w];
-
-                // Skip SYSEX
-                if ((midi & 0xff) == 0xf0)
-                    return kAudio_UnimplementedError;
-
-                cplug_log("Adding midi message 0x%08x", midi);
-                CplugEvent* event      = &auv2->events[auv2->numEvents];
-                event->type            = CPLUG_EVENT_MIDI;
-                event->midi.frame      = quantizedFrame;
-                event->midi.bytesAsInt = midi;
-
-                auv2->numEvents++;
-            }
-        }
-        packet = MIDIEventPacketNext(packet);
-    }
-
-    return noErr;
-}
-*/
 #endif
-
-/*
-OSStatus AUMethodMusicDeviceStartNoteProc(
-    void*                        self,
-    MusicDeviceInstrumentID      inInstrument,
-    MusicDeviceGroupID           inGroupID,
-    NoteInstanceID*              outNoteInstanceID,
-    UInt32                       inOffsetSampleFrame,
-    const MusicDeviceNoteParams* inParams)
-{
-    cplug_log(
-        "AUMethodMusicDeviceStartNoteProc: %u %u %p %u %p",
-        inInstrument,
-        inGroupID,
-        outNoteInstanceID,
-        inOffsetSampleFrame,
-        inParams);
-    return noErr;
-}
-
-OSStatus AUMethodMusicDeviceStopNoteProc(
-    void*              self,
-    MusicDeviceGroupID inGroupID,
-    NoteInstanceID     inNoteInstanceID,
-    UInt32             inOffsetSampleFrame)
-{
-    cplug_log("AUMethodMusicDeviceStopNoteProc: %u %u %u", inGroupID, inNoteInstanceID, inOffsetSampleFrame);
-    return noErr;
-}
-*/
 
 static AudioComponentMethod AULookup(SInt16 selector)
 {
-    cplug_log("AULookup => %hd", selector);
-    // auval will also ask for the ids 513, 514, but I can't find what they are in the documentation
-    // Logic Pro will ask for -1?
+    cplug_log("AULookup => %hd (%s)", selector, _cplugLookup2Str(selector));
+    // Logic Pro will ask for 32767/0x7fff?
     switch (selector)
     {
     case kAudioUnitInitializeSelect:
@@ -1301,22 +1274,20 @@ static AudioComponentMethod AULookup(SInt16 selector)
         return (AudioComponentMethod)AUMethodProcessAudio;
     case kAudioUnitResetSelect:
         return (AudioComponentMethod)AUMethodResetProcessing;
+    case kMusicDevicePrepareInstrumentSelect:
+    case kMusicDeviceReleaseInstrumentSelect:
+        break; // these are long deprecated
 #if CPLUG_IS_INSTRUMENT
     case kMusicDeviceMIDIEventSelect:
         return (AudioComponentMethod)AUMethodMusicDeviceMIDIEventProc;
     case kMusicDeviceSysExSelect:
         return (AudioComponentMethod)AUMethodMusicDeviceSysExProc;
-        // case kMusicDeviceStartNoteSelect:
-        //     return (AudioComponentMethod)AUMethodMusicDeviceStartNoteProc;
-        // case kMusicDeviceStopNoteSelect:
-        //     return (AudioComponentMethod)AUMethodMusicDeviceStopNoteProc;
-        // case kMusicDeviceMIDIEventListSelect:
-        //     return (AudioComponentMethod)AUMethodMusicDeviceMIDIEventList;
 #endif
     default:
-        cplug_log("WARNING: NO PROC FOR %hu", selector);
-        return NULL;
+        cplug_log("WARNING: NO PROC FOR %hd (%s)", selector, _cplugLookup2Str(selector));
+        break;
     }
+    return NULL;
 }
 
 OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInstance)
