@@ -24,8 +24,8 @@ The source files are configurable using macros you define. A full list of these 
 | ---------------------- | ------------- | --------------------- | ------------------------- |
 | cplug.h                | < 300         | Common API            | None                      |
 | cplug_clap.c           | < 800         | CLAP wrapper          | `#include <clap/clap.h>`  |
-| cplug_standalone_osx.m | < 1,300       | Standalone            | None                      |
 | cplug_auv2.c           | < 1,400       | Audio Unit v2 wrapper | None                      |
+| cplug_standalone_osx.m | < 1,400       | Standalone            | None                      |
 | cplug_standalone_win.c | < 1,600       | Standalone            | None                      |
 | cplug_vst3.c           | < 2,200       | VST3 wrapper          | `#include <vst3_c_api.h>` |
 

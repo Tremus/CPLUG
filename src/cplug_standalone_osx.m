@@ -268,7 +268,9 @@ OSStatus STAND_audioDeviceChangeListener(
     [g_window setReleasedWhenClosed:NO];
     [g_window makeKeyAndOrderFront:nil];
     [g_window setTitle:@(CPLUG_PLUGIN_NAME)];
-
+#if CPLUG_GUI_RESIZABLE
+    [g_window setStyleMask:[g_window styleMask] | NSWindowStyleMaskResizable];
+#endif
     [g_window setContentView:[[NSView alloc] init]];
     [g_window setDelegate:[[WindowDelegate alloc] init]];
 
@@ -518,15 +520,25 @@ OSStatus STAND_audioDeviceChangeListener(
 @implementation WindowDelegate
 - (NSSize)windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
 {
+    if (g_plugin.library == NULL)
+        return frameSize;
+
+    CGFloat windowHeight  = [sender frame].size.height;
+    CGFloat contentHeight = [[sender contentView] frame].size.height;
+    CGFloat diff          = 1.0 + (windowHeight - contentHeight);
+
     uint32_t width  = frameSize.width;
-    uint32_t height = frameSize.height;
+    uint32_t height = frameSize.height - diff;
     g_plugin.checkSize(g_plugin.userGUI, &width, &height);
     frameSize.width  = width;
-    frameSize.height = height;
+    frameSize.height = height + diff;
     return frameSize;
 }
 - (void)windowDidResize:(NSNotification*)notification
 {
+    if (g_plugin.library == NULL)
+        return;
+
     NSWindow* window = notification.object;
     CGSize    size   = [window contentView].frame.size;
     g_plugin.setSize(g_plugin.userGUI, size.width, size.height);
