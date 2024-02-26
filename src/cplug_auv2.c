@@ -579,7 +579,8 @@ static OSStatus AUMethodGetProperty(
         if (inScope == kAudioUnitScope_Global)
             numBusses = 1;
         else if (inScope == kAudioUnitScope_Input)
-            // If you have 0 input 'elements', Logic Pro will silently fail to load your plugin.
+            // In Logic Pro, every instrument must receive an input (eg. sidechain) whether you want to or not.
+            // If you don't do this, Logic Pro will silently fail to load your plugin.
             // This is not a problem in other hosts such as Ableton, FL and even auval.
             numBusses = CPLUG_NUM_INPUT_BUSSES == 0 ? 1 : CPLUG_NUM_INPUT_BUSSES;
         else if (inScope == kAudioUnitScope_Output)
