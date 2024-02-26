@@ -523,15 +523,15 @@ OSStatus STAND_audioDeviceChangeListener(
     if (g_plugin.library == NULL)
         return frameSize;
 
-    CGFloat windowHeight  = [sender frame].size.height;
-    CGFloat contentHeight = [[sender contentView] frame].size.height;
-    CGFloat diff          = 1.0 + (windowHeight - contentHeight);
+    CGFloat windowHeight   = [sender frame].size.height;
+    CGFloat contentHeight  = [[sender contentView] frame].size.height;
+    CGFloat titleBarHeight = windowHeight - contentHeight;
 
     uint32_t width  = frameSize.width;
-    uint32_t height = frameSize.height - diff;
+    uint32_t height = frameSize.height - titleBarHeight;
     g_plugin.checkSize(g_plugin.userGUI, &width, &height);
     frameSize.width  = width;
-    frameSize.height = height + diff;
+    frameSize.height = height + titleBarHeight;
     return frameSize;
 }
 - (void)windowDidResize:(NSNotification*)notification
