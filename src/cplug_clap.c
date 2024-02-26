@@ -1,5 +1,5 @@
-// Released into the public domain by Tré Dudman - 2024
-// For licensing and more info see https://github.com/Tremus/CPLUG
+/* Released into the public domain by Tré Dudman - 2024
+ * For licensing and more info see https://github.com/Tremus/CPLUG */
 
 #include <clap/clap.h>
 #include <cplug.h>

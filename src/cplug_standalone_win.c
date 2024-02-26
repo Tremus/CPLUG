@@ -1,5 +1,5 @@
-// Released into the public domain by Tré Dudman - 2024
-// For licensing and more info see https://github.com/Tremus/CPLUG
+/* Released into the public domain by Tré Dudman - 2024
+ * For licensing and more info see https://github.com/Tremus/CPLUG */
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -81,7 +81,7 @@ void CPWIN_LoadPlugin();
 
 struct CPWIN_PluginStateContext
 {
-    BYTE* Data;
+    BYTE*  Data;
     SIZE_T BytesReserved;
     SIZE_T BytesCommited;
 
@@ -624,9 +624,9 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 _gCPLUG.UserGUI = _gCPLUG.createGUI(_gCPLUG.UserPlugin);
                 cplug_assert(_gCPLUG.UserGUI != NULL);
 
-                RECT clientsize;
-                GetClientRect(hWnd, &clientsize);
-                _gCPLUG.setSize(_gCPLUG.UserGUI, clientsize.right - clientsize.left, clientsize.bottom - clientsize.top);
+                RECT size;
+                GetClientRect(hWnd, &size);
+                _gCPLUG.setSize(_gCPLUG.UserGUI, size.right - size.left, size.bottom - size.top);
 
                 _gCPLUG.setParent(_gCPLUG.UserGUI, hWnd);
                 _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
@@ -647,7 +647,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         {
             CPWIN_Audio_Stop();
             char text[8];
-            int numCharsCopied = GetMenuStringA(_gMenus.hSampleRateSubmenu, wParam, text, sizeof(text), MF_BYCOMMAND);
+            int  numCharsCopied = GetMenuStringA(_gMenus.hSampleRateSubmenu, wParam, text, sizeof(text), MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             _gAudio.SampleRate = atoi(text);
             CPWIN_Audio_Start();
@@ -666,7 +666,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         {
             CPWIN_Audio_Stop();
             char text[8];
-            int numCharsCopied = GetMenuStringA(_gMenus.hBlockSizeSubmenu, wParam, text, sizeof(text), MF_BYCOMMAND);
+            int  numCharsCopied = GetMenuStringA(_gMenus.hBlockSizeSubmenu, wParam, text, sizeof(text), MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             _gAudio.BlockSize = atoi(text);
             CPWIN_Audio_Start();
@@ -802,7 +802,7 @@ void CPWIN_LoadPlugin()
 }
 
 #pragma region PLUGIN_STATE
-int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
     cplug_assert(stateCtx != NULL);
     cplug_assert(writePos != NULL);
@@ -816,14 +816,14 @@ int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numByt
     if (ctx->Data == NULL)
     {
         const SIZE_T largePageSize = GetLargePageMinimum();
-        SIZE_T bigreserve = CPWIN_RoundUp(numBytesToWrite, largePageSize);
-        bigreserve *= 8;
-        ctx->Data = (BYTE*)VirtualAlloc(NULL, bigreserve, MEM_RESERVE, PAGE_READWRITE);
+        SIZE_T       bigreserve    = CPWIN_RoundUp(numBytesToWrite, largePageSize);
+        bigreserve                 *= 8;
+        ctx->Data                  = (BYTE*)VirtualAlloc(NULL, bigreserve, MEM_RESERVE, PAGE_READWRITE);
         cplug_assert(ctx->Data != NULL);
         ctx->BytesReserved = bigreserve;
 
         SIZE_T bigcommit = numBytesToWrite * 4;
-        LPVOID retval = VirtualAlloc(ctx->Data, bigcommit, MEM_COMMIT, PAGE_READWRITE);
+        LPVOID retval    = VirtualAlloc(ctx->Data, bigcommit, MEM_COMMIT, PAGE_READWRITE);
         cplug_assert(retval != NULL);
         ctx->BytesCommited = bigcommit;
     }
@@ -832,7 +832,7 @@ int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numByt
     if (numBytesToWrite > (ctx->BytesCommited - ctx->BytesWritten))
     {
         SIZE_T nextcommit = 2 * ctx->BytesCommited;
-        LPVOID retval = VirtualAlloc(ctx->Data, nextcommit, MEM_COMMIT, PAGE_READWRITE);
+        LPVOID retval     = VirtualAlloc(ctx->Data, nextcommit, MEM_COMMIT, PAGE_READWRITE);
         cplug_assert(retval != NULL);
         ctx->BytesCommited = nextcommit;
     }
@@ -849,7 +849,7 @@ int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytes
     cplug_assert(readPos != NULL);
     cplug_assert(maxBytesToRead > 0);
 
-    SIZE_T remainingBytes = ctx->BytesWritten - ctx->BytesRead;
+    SIZE_T remainingBytes     = ctx->BytesWritten - ctx->BytesRead;
     SIZE_T bytesToActualyRead = maxBytesToRead > remainingBytes ? remainingBytes : maxBytesToRead;
 
     if (bytesToActualyRead)

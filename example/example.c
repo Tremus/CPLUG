@@ -1,8 +1,5 @@
 #include <cplug.h>
-
-#include <clap/clap.h>
 #include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 #ifdef _WIN32

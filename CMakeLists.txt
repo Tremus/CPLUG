@@ -226,8 +226,8 @@ elseif (APPLE)
 
     set_target_properties(cplug_example_app PROPERTIES
         BUNDLE True
-        OUTPUT_NAME "cplug_example"                                           # out binary name, differs from target name
-        CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.clap # out directory name, differs from target name
+        OUTPUT_NAME "cplug_example"                                          # out binary name, differs from target name
+        CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.app # out directory name, differs from target name
         MACOSX_BUNDLE_GUI_IDENTIFIER com.cplug.${PROJECT_NAME}.app
         MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
