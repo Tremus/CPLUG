@@ -78,6 +78,7 @@ elseif (APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         MACOSX_BUNDLE_GUI_IDENTIFIER com.cplug.example.vst3
+        MACOSX_BUNDLE_COPYRIGHT CPLUG
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/vst3.plist.in
     )
     file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.vst3/Contents/PkgInfo)
@@ -128,9 +129,9 @@ set_target_properties(cplug_example_auv2 PROPERTIES
     OUTPUT_NAME "cplug_example"                                                # out binary name, differs from target name
     CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/cplug_example.component # out directory name, differs from target name
     MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
-    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/auv2.plist.in
-    MACOSX_BUNDLE_COPYRIGHT CPLUG
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+    MACOSX_BUNDLE_COPYRIGHT CPLUG
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/auv2.plist.in
     )
 file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.component/Contents/PkgInfo)
 file(WRITE ${CMAKE_BINARY_DIR}/cplug_example.component/Contents/PkgInfo "BNDL????")
@@ -171,8 +172,8 @@ if (APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_LONG_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_COPYRIGHT CPLUG
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/clap.plist.in
-        MACOSX_BUNDLE_COPYRIGHT "CPLUG"
         )
     file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.clap/Contents/PkgInfo)
     file(WRITE ${CMAKE_BINARY_DIR}/cplug_example.clap/Contents/PkgInfo "BNDL????")
@@ -232,6 +233,7 @@ elseif (APPLE)
         MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_COPYRIGHT CPLUG
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/app.plist.in
     )
     file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.app/Contents/PkgInfo)
