@@ -515,6 +515,8 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3View_release(void* self)
         return view_refcount;
 
     cplug_setVisible(view->userGUI, false);
+    // Some hosts (Ableton) don't call removed() before destroying your GUI, others (Bitwig) do.
+    cplug_setParent(view->userGUI, NULL);
     cplug_destroyGUI(view->userGUI);
 #ifndef _WIN32
     free(view);

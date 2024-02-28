@@ -655,10 +655,7 @@ void* cplug_createGUI(void* userPlugin)
 
 void cplug_destroyGUI(void* userGUI)
 {
-    MyGUI* gui = (MyGUI*)userGUI;
-
-    cplug_setParent(userGUI, NULL);
-
+    MyGUI* gui       = (MyGUI*)userGUI;
     gui->plugin->gui = NULL;
 
     if (gui->img)

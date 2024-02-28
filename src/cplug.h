@@ -175,7 +175,7 @@ CPLUG_API void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_rea
 CPLUG_API void* cplug_createGUI(void* userPlugin);
 CPLUG_API void  cplug_destroyGUI(void* userGUI);
 // If not NULL, set your window/view as a child/subview. If NULL, remove from parent/superview.
-// This is a good place to init/deinit your GFX
+// This is a good place to init/deinit your GFX and timer. Be prepared for this to be called multiple times with NULL
 CPLUG_API void cplug_setParent(void* userGUI, void* hwnd_or_nsview);
 // CLAP only. VST3 simply create/destroy your window.
 CPLUG_API void cplug_setVisible(void* userGUI, bool visible);
@@ -245,6 +245,7 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 // When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
 static inline void cplug_log(const char* const fmt, ...)
 {
+    freopen("C:\\Users\\tredu\\Desktop\\log.txt", "a", stderr);
     va_list args;
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);

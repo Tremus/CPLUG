@@ -316,6 +316,7 @@ void CLAPExtGUI_destroy(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtGUI_destroy");
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    cplug_setParent(clap->userGUI, NULL);
     cplug_destroyGUI(clap->userGUI);
     clap->userGUI = NULL;
 }
