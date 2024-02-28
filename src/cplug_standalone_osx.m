@@ -416,6 +416,7 @@ OSStatus STAND_audioDeviceChangeListener(
     if (g_plugin.library)
     {
         g_plugin.setVisible(g_plugin.userGUI, false);
+        g_plugin.setParent(g_plugin.userGUI, NULL);
         g_plugin.destroyGUI(g_plugin.userGUI);
 
         g_plugin.destroyPlugin(g_plugin.userPlugin);
@@ -1195,6 +1196,7 @@ void STAND_filesystemEventCallback(
             {
                 NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
                 g_plugin.setVisible(g_plugin.userGUI, false);
+                g_plugin.setParent(g_plugin.userGUI, NULL);
                 g_plugin.destroyGUI(g_plugin.userGUI);
 
                 g_pluginState.bytesWritten = 0;

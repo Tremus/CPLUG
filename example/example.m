@@ -164,16 +164,18 @@ void* cplug_createGUI(void* userPlugin)
 void cplug_destroyGUI(void* userGUI)
 {
     MyGUIWrapper* wrapper = (MyGUIWrapper*)userGUI;
-    [wrapper removeFromSuperview];
+    if (wrapper.superview)
+        [wrapper removeFromSuperview];
     [wrapper release];
 }
 
 void cplug_setParent(void* userGUI, void* view)
 {
     MyGUIWrapper* wrapper = (MyGUIWrapper*)userGUI;
-    CPLUG_LOG_ASSERT(wrapper.superview == NULL);
-    CPLUG_LOG_ASSERT(view != NULL);
-    [(NSView*)view addSubview:wrapper];
+    if (wrapper.superview)
+        [wrapper removeFromSuperview];
+    if (view)
+        [(NSView*)view addSubview:wrapper];
 }
 
 void cplug_setVisible(void* userGUI, bool visible) { [(MyGUIWrapper*)userGUI setHidden:(visible ? NO : YES)]; }

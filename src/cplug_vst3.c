@@ -441,7 +441,15 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_addRef(void* const s
 static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_release(void* const self)
 {
     VST3ViewContentScale* const scale = (VST3ViewContentScale*)self;
-    return cplug_atomic_fetch_add_i32(&scale->refcounter, -1) - 1;
+    int refcount = cplug_atomic_fetch_add_i32(&scale->refcounter, -1) - 1;
+
+    if (refcount == 0 && cplug_atomic_load_i32(&scale->refcounter) == 0)
+    {
+        cplug_log("VST3ViewContentScale_setContentScaleFactor | Freeing VST3View");
+        VST3View* view = (VST3View*)((char*)scale - offsetof(VST3View, scale));
+        free(view);
+    }
+    return refcount;
 }
 // Steinberg_IPlugViewContentScaleSupport
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -473,7 +481,7 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
         return Steinberg_kResultOk;
     }
 
-#ifndef __APPLE__
+#ifdef _WIN32
     if (tuid_match(Steinberg_IPlugViewContentScaleSupport_iid, iid))
     {
         cplug_log("query_interface_view => %p %s %p | OK convert", self, _cplug_tuid2str(iid), iface);
@@ -508,7 +516,12 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3View_release(void* self)
 
     cplug_setVisible(view->userGUI, false);
     cplug_destroyGUI(view->userGUI);
+#ifndef _WIN32
     free(view);
+#else
+    cplug_log("VST3View_release | should call free from IPlugViewContentScaleSupport extension");
+    view->scale.lpVtbl->release(&view->scale);
+#endif
     return 0;
 }
 
@@ -547,6 +560,8 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_removed(void* const sel
 {
     cplug_log("VST3View_removed => %p", self);
     VST3View* const view = (VST3View*)self;
+    cplug_setVisible(view->userGUI, false);
+    cplug_setParent(view->userGUI, NULL);
     return Steinberg_kResultOk;
 }
 

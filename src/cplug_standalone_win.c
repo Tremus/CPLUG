@@ -356,6 +356,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         return 1;
     }
 
+    DPI_AWARENESS_CONTEXT prevDpiCtx = GetThreadDpiAwarenessContext();
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+
     _gCPLUG.UserGUI = _gCPLUG.createGUI(_gCPLUG.UserPlugin);
     cplug_assert(_gCPLUG.UserGUI != NULL);
 
@@ -383,6 +386,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         fprintf(stderr, "Could not create window\n");
         return 1;
     }
+    if (prevDpiCtx)
+        SetThreadDpiAwarenessContext(prevDpiCtx);
 
     ///////////////
     // INIT MENU //
@@ -468,6 +473,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     if (_gCPLUG.Library)
     {
         _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
+        _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
         _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
         _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
         _gCPLUG.libraryUnload();
@@ -560,6 +566,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             {
                 // Deinit
                 _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
+                _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
                 _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
 
                 CPWIN_Audio_Stop();

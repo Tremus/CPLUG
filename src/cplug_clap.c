@@ -324,7 +324,7 @@ static bool CLAPExtGUI_set_scale(const clap_plugin_t* plugin, double scale)
 {
     cplug_log("CLAPExtGUI_set_scale => %f", scale);
     cplug_setScaleFactor(((CLAPPlugin*)plugin->plugin_data)->userGUI, (float)scale);
-    return false;
+    return true;
 }
 
 static bool CLAPExtGUI_get_size(const clap_plugin_t* plugin, uint32_t* width, uint32_t* height)

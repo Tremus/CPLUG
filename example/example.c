@@ -1,5 +1,6 @@
 #include <cplug.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -649,34 +650,48 @@ void* cplug_createGUI(void* userPlugin)
 
     SetWindowLongPtrA((HWND)gui->window, 0, (LONG_PTR)gui);
 
-    SetTimer((HWND)gui->window, MY_TIMER_ID, 10, NULL);
-
     return gui;
 }
 
 void cplug_destroyGUI(void* userGUI)
 {
-    MyGUI* gui       = (MyGUI*)userGUI;
+    MyGUI* gui = (MyGUI*)userGUI;
+
+    cplug_setParent(userGUI, NULL);
+
     gui->plugin->gui = NULL;
 
     if (gui->img)
         free(gui->img);
 
-    KillTimer((HWND)gui->window, MY_TIMER_ID);
     DestroyWindow((HWND)gui->window);
     UnregisterClassA(gui->uniqueClassName, NULL);
     free(gui);
 }
 
-void cplug_setParent(void* userGUI, void* hwnd)
+void cplug_setParent(void* userGUI, void* newParent)
 {
     MyGUI* gui = (MyGUI*)userGUI;
-    CPLUG_LOG_ASSERT(hwnd != NULL);
 
-    memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
-    SetParent((HWND)gui->window, (HWND)hwnd);
-    DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_POPUP);
-    DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_CHILD);
+    HWND oldParent = GetParent((HWND)gui->window);
+    if (oldParent)
+    {
+        KillTimer((HWND)gui->window, MY_TIMER_ID);
+
+        SetParent((HWND)gui->window, NULL);
+        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_CHILD);
+        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_POPUP);
+    }
+
+    if (newParent)
+    {
+        SetParent((HWND)gui->window, (HWND)newParent);
+        memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
+        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_POPUP);
+        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_CHILD);
+
+        SetTimer((HWND)gui->window, MY_TIMER_ID, 10, NULL);
+    }
 }
 
 void cplug_setVisible(void* userGUI, bool visible)
