@@ -244,6 +244,7 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 #include <stdio.h>
 #define cplug_log(fmt, ...) fprintf(stderr, fmt "\n", __VA_ARGS__)
 #endif
+#endif
 
 #define CPLUG_LOG_ASSERT(cond)                                                                                         \
     if (unlikely(! (cond)))                                                                                            \
