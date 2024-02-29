@@ -237,22 +237,10 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 #define unlikely(x) x
 #endif
 
-#if defined(NDEBUG)
-#define cplug_log(...)
-#else
-#include <stdarg.h>
+#ifndef cplug_log
 #include <stdio.h>
-
-// When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
-static inline void cplug_log(const char* const fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
-    va_end(args);
-}
-#endif // NDEBUG
+#define cplug_log(fmt, ...) fprintf(stderr, fmt "\n", __VA_ARGS__)
+#endif
 
 #define CPLUG_LOG_ASSERT(cond)                                                                                         \
     if (unlikely(! (cond)))                                                                                            \
