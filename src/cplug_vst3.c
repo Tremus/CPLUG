@@ -769,7 +769,7 @@ static int32_t SMTG_STDMETHODCALLTYPE VST3Controller_getParameterCount(void* sel
 {
     // cplug_log("VST3Controller_getParameterCount => %p", self);
     CplugHostContext* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
-    return cplug_getParamCount(vst3);
+    return cplug_getParamCount(vst3->userPlugin);
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -779,7 +779,7 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
     CplugHostContext* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     memset(info, 0, sizeof(*info));
-    CPLUG_LOG_ASSERT_RETURN(index >= 0 && index < cplug_getParamCount(vst3), Steinberg_kInvalidArgument);
+    CPLUG_LOG_ASSERT_RETURN(index >= 0 && index < cplug_getParamCount(vst3->userPlugin), Steinberg_kInvalidArgument);
     info->id = index;
 
     // set up flags
@@ -818,7 +818,7 @@ VST3Controller_getParamStringByValue(void* self, uint32_t index, double normalis
     CplugHostContext* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     // Bitwig 5 has been spotted failing this assertion
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
-    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3), Steinberg_kInvalidArgument);
+    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3->userPlugin), Steinberg_kInvalidArgument);
 
     char   buf[128];
     double denormalised = cplug_denormaliseParameterValue(vst3->userPlugin, index, normalised);
@@ -834,7 +834,7 @@ VST3Controller_getParamValueByString(void* self, uint32_t index, char16_t* input
     // cplug_log("VST3Controller_getParamValueByString => %p %u %p %p", self, rindex, input, output);
     CplugHostContext* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
-    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3), Steinberg_kInvalidArgument);
+    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3->userPlugin), Steinberg_kInvalidArgument);
 
     char as_utf8[128];
     _cplug_utf16To8(as_utf8, input, 128);
@@ -852,7 +852,7 @@ VST3Controller_normalizedParamToPlain(void* self, uint32_t index, double normali
     // cplug_log("VST3Controller_normalizedParamToPlain => %p %u %f", self, rindex, normalised);
     CplugHostContext* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, 0.0);
-    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3), 0.0);
+    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3->userPlugin), 0.0);
 
     return cplug_denormaliseParameterValue(vst3->userPlugin, index, normalised);
 }
@@ -863,7 +863,7 @@ static double SMTG_STDMETHODCALLTYPE VST3Controller_plainParamToNormalised(void*
     // cplug_log("VST3Controller_plainParamToNormalised => %p %u %f", self, index, plain);
     CplugHostContext* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
-    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3), 0.0);
+    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3->userPlugin), 0.0);
 
     return cplug_normaliseParameterValue(vst3->userPlugin, index, plain);
 }
@@ -877,7 +877,7 @@ static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* sel
     if (index >= cplug_midiControllerOffset)
         return 0.0;
 
-    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3), 0.0);
+    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3->userPlugin), 0.0);
     double val = cplug_getParameterValue(vst3->userPlugin, index);
     return cplug_normaliseParameterValue(vst3->userPlugin, index, val);
 }
@@ -926,7 +926,7 @@ VST3Controller_setParamNormalized(void* const self, const uint32_t index, const 
         return Steinberg_kResultOk;
     }
 
-    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3), 0.0);
+    CPLUG_LOG_ASSERT_RETURN(index < cplug_getParamCount(vst3->userPlugin), 0.0);
     double denormalisedVal = cplug_denormaliseParameterValue(vst3->userPlugin, index, normalised);
     cplug_setParameterValue(vst3->userPlugin, index, denormalisedVal);
 

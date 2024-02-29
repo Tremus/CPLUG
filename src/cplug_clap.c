@@ -185,14 +185,14 @@ uint32_t CLAPExtParams_count(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtParams_count");
     CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
-    return cplug_getParamCount(clap);
+    return cplug_getParamCount(clap->userPlugin);
 }
 
 bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, clap_param_info_t* param_info)
 {
     cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
     CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
-    CPLUG_LOG_ASSERT_RETURN(param_index < cplug_getParamCount(clap), false);
+    CPLUG_LOG_ASSERT_RETURN(param_index < cplug_getParamCount(clap->userPlugin), false);
 
     param_info->id = param_index;
     snprintf(param_info->name, sizeof(param_info->name), "%s", cplug_getParameterName(clap->userPlugin, param_index));
@@ -223,7 +223,7 @@ bool CLAPExtParams_get_value(const clap_plugin_t* plugin, clap_id param_id, doub
 {
     cplug_log("CLAPExtParams_get_value => %u %p", param_id, out_value);
     CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
-    CPLUG_LOG_ASSERT_RETURN(param_id < cplug_getParamCount(clap), false);
+    CPLUG_LOG_ASSERT_RETURN(param_id < cplug_getParamCount(clap->userPlugin), false);
     *out_value = cplug_getParameterValue(clap->userPlugin, param_id);
     return true;
 }
@@ -237,7 +237,7 @@ bool CLAPExtParams_value_to_text(
 {
     // cplug_log("CLAPExtParams_value_to_text => %u %f %p %u", param_id, value, out_buffer, out_buffer_capacity);
     CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
-    CPLUG_LOG_ASSERT_RETURN(param_id < cplug_getParamCount(clap), false);
+    CPLUG_LOG_ASSERT_RETURN(param_id < cplug_getParamCount(clap->userPlugin), false);
 
     cplug_parameterValueToString(clap->userPlugin, param_id, out_buffer, out_buffer_capacity, value);
     return true;
@@ -251,7 +251,7 @@ bool CLAPExtParams_text_to_value(
 {
     cplug_log("CLAPExtParams_text_to_value => %u %p %p", param_id, param_value_text, out_value);
     CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
-    CPLUG_LOG_ASSERT_RETURN(param_id < cplug_getParamCount(clap), false);
+    CPLUG_LOG_ASSERT_RETURN(param_id < cplug_getParamCount(clap->userPlugin), false);
     *out_value       = cplug_parameterStringToValue(clap->userPlugin, param_id, param_value_text);
     return true;
 }

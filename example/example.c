@@ -97,7 +97,7 @@ void cplug_destroyPlugin(void* ptr)
     free(ptr);
 }
 
-uint32_t cplug_getParamCount(CplugHostContext* hostCtx)
+uint32_t cplug_getParamCount(void* ptr)
 {
     return kParameterCount;
 }
