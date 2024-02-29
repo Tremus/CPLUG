@@ -78,7 +78,7 @@ enum MIDIMenuTag
 
 #pragma mark -Global state
 
-struct STAND_Plugin
+typedef struct CplugHostContext
 {
     void* library;
     void* userPlugin;
@@ -102,7 +102,9 @@ struct STAND_Plugin
     void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
-} g_plugin;
+} CplugHostContext;
+
+CplugHostContext g_plugin;
 
 struct STAND_PluginStateContext
 {

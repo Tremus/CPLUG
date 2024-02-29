@@ -51,11 +51,11 @@
 // Plugin //
 ////////////
 
-struct CPWIN_Plugin
+typedef struct CplugHostContext
 {
     HMODULE Library;
-    void*   UserPlugin;
-    void*   UserGUI;
+    void*   userPlugin;
+    void*   userGUI;
 
     void (*libraryLoad)();
     void (*libraryUnload)();
@@ -75,7 +75,10 @@ struct CPWIN_Plugin
     void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
-} _gCPLUG;
+} CplugHostContext;
+
+CplugHostContext _gCPLUG;
+
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
 
@@ -288,8 +291,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     CPWIN_LoadPlugin();
     _gCPLUG.libraryLoad();
-    _gCPLUG.UserPlugin = _gCPLUG.createPlugin();
-    cplug_assert(_gCPLUG.UserPlugin != NULL);
+    _gCPLUG.userPlugin = _gCPLUG.createPlugin();
+    cplug_assert(_gCPLUG.userPlugin != NULL);
 
     ///////////////
     // INIT MIDI //
@@ -310,7 +313,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     _gAudio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
     _gAudio.BlockSize   = CPLUG_DEFAULT_BLOCK_SIZE;
-    _gAudio.NumChannels = _gCPLUG.getOutputBusChannelCount(_gCPLUG.UserPlugin, 0);
+    _gAudio.NumChannels = _gCPLUG.getOutputBusChannelCount(_gCPLUG.userPlugin, 0);
     cplug_assert(_gAudio.NumChannels == 1 || _gAudio.NumChannels == 2); // TODO: supported other configurations
 
     // Scan for device
@@ -359,11 +362,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     DPI_AWARENESS_CONTEXT prevDpiCtx = GetThreadDpiAwarenessContext();
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
 
-    _gCPLUG.UserGUI = _gCPLUG.createGUI(_gCPLUG.UserPlugin);
-    cplug_assert(_gCPLUG.UserGUI != NULL);
+    _gCPLUG.userGUI = _gCPLUG.createGUI(_gCPLUG.userPlugin);
+    cplug_assert(_gCPLUG.userGUI != NULL);
 
     uint32_t guiWidth, guiHeight;
-    _gCPLUG.getSize(_gCPLUG.UserGUI, &guiWidth, &guiHeight);
+    _gCPLUG.getSize(_gCPLUG.userGUI, &guiWidth, &guiHeight);
 
     RECT rect = {0, 0, (LONG)guiWidth, (LONG)guiHeight};
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
@@ -437,10 +440,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     cplug_assert(hWatchThread != NULL);
 
     // Window ready
-    _gCPLUG.setParent(_gCPLUG.UserGUI, hWindow);
+    _gCPLUG.setParent(_gCPLUG.userGUI, hWindow);
 
     ShowWindow(hWindow, cmdshow);
-    _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
+    _gCPLUG.setVisible(_gCPLUG.userGUI, true);
 
     while (GetMessageA(&msg, NULL, 0, 0))
     {
@@ -472,10 +475,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // Destroy plugin
     if (_gCPLUG.Library)
     {
-        _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
-        _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
-        _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
-        _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
+        _gCPLUG.setVisible(_gCPLUG.userGUI, false);
+        _gCPLUG.setParent(_gCPLUG.userGUI, NULL);
+        _gCPLUG.destroyGUI(_gCPLUG.userGUI);
+        _gCPLUG.destroyPlugin(_gCPLUG.userPlugin);
         _gCPLUG.libraryUnload();
         FreeLibrary(_gCPLUG.Library);
     }
@@ -515,7 +518,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
         width  -= px;
         height -= py;
-        _gCPLUG.checkSize(_gCPLUG.UserGUI, &width, &height);
+        _gCPLUG.checkSize(_gCPLUG.userGUI, &width, &height);
         width  += px;
         height += py;
 
@@ -530,14 +533,14 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         GetClientRect(hWnd, &rect);
         uint32_t width  = rect.right - rect.left;
         uint32_t height = rect.bottom - rect.top;
-        _gCPLUG.setSize(_gCPLUG.UserGUI, width, height);
+        _gCPLUG.setSize(_gCPLUG.userGUI, width, height);
         return 0;
     }
     case WM_DPICHANGED:
     {
         int   g_dpi  = HIWORD(wParam);
         FLOAT fscale = (float)g_dpi / USER_DEFAULT_SCREEN_DPI;
-        _gCPLUG.setScaleFactor(_gCPLUG.UserGUI, fscale);
+        _gCPLUG.setScaleFactor(_gCPLUG.userGUI, fscale);
 
         RECT* const prcNewWindow = (RECT*)lParam;
         SetWindowPos(
@@ -565,17 +568,17 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             if (_gCPLUG.Library)
             {
                 // Deinit
-                _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
-                _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
-                _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
+                _gCPLUG.setVisible(_gCPLUG.userGUI, false);
+                _gCPLUG.setParent(_gCPLUG.userGUI, NULL);
+                _gCPLUG.destroyGUI(_gCPLUG.userGUI);
 
                 CPWIN_Audio_Stop();
 
                 _gPluginState.BytesWritten = 0;
                 _gPluginState.BytesRead    = 0;
-                _gCPLUG.saveState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_WriteStateProc);
+                _gCPLUG.saveState(_gCPLUG.userPlugin, &_gPluginState, CPWIN_WriteStateProc);
 
-                _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
+                _gCPLUG.destroyPlugin(_gCPLUG.userPlugin);
                 _gCPLUG.libraryUnload();
                 FreeLibrary(_gCPLUG.Library);
                 memset(&_gCPLUG, 0, sizeof(_gCPLUG));
@@ -622,21 +625,21 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             {
                 CPWIN_LoadPlugin();
                 _gCPLUG.libraryLoad();
-                _gCPLUG.UserPlugin = _gCPLUG.createPlugin();
-                cplug_assert(_gCPLUG.UserPlugin != NULL);
-                _gCPLUG.loadState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_ReadStateProc);
+                _gCPLUG.userPlugin = _gCPLUG.createPlugin();
+                cplug_assert(_gCPLUG.userPlugin != NULL);
+                _gCPLUG.loadState(_gCPLUG.userPlugin, &_gPluginState, CPWIN_ReadStateProc);
 
                 CPWIN_Audio_Start();
 
-                _gCPLUG.UserGUI = _gCPLUG.createGUI(_gCPLUG.UserPlugin);
-                cplug_assert(_gCPLUG.UserGUI != NULL);
+                _gCPLUG.userGUI = _gCPLUG.createGUI(_gCPLUG.userPlugin);
+                cplug_assert(_gCPLUG.userGUI != NULL);
 
                 RECT size;
                 GetClientRect(hWnd, &size);
-                _gCPLUG.setSize(_gCPLUG.UserGUI, size.right - size.left, size.bottom - size.top);
+                _gCPLUG.setSize(_gCPLUG.userGUI, size.right - size.left, size.bottom - size.top);
 
-                _gCPLUG.setParent(_gCPLUG.UserGUI, hWnd);
-                _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
+                _gCPLUG.setParent(_gCPLUG.userGUI, hWnd);
+                _gCPLUG.setVisible(_gCPLUG.userGUI, true);
             }
 
             UINT64 reloadEnd = CPWIN_GetNowNS();
@@ -1296,7 +1299,7 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
     {
         cplug_assert(_gAudio.ProcessBufferNumOverprocessedFrames == 0);
 
-        _gCPLUG.process(_gCPLUG.UserPlugin, &ctx.cplugContext);
+        _gCPLUG.process(_gCPLUG.userPlugin, &ctx.cplugContext);
 
         UINT32 framesToCopy = remainingBlockFrames < _gAudio.BlockSize ? remainingBlockFrames : _gAudio.BlockSize;
         SIZE_T bytesToCopy  = sizeof(float) * _gAudio.NumChannels * framesToCopy;
@@ -1519,7 +1522,7 @@ void CPWIN_Audio_Start()
         cplug_assert(_gAudio.ProcessBuffer != NULL);
     }
 
-    _gCPLUG.setSampleRateAndBlockSize(_gCPLUG.UserPlugin, _gAudio.SampleRate, _gAudio.BlockSize);
+    _gCPLUG.setSampleRateAndBlockSize(_gCPLUG.userPlugin, _gAudio.SampleRate, _gAudio.BlockSize);
 
     _gAudio.ProcessBufferNumOverprocessedFrames = 0;
     _gAudio.FlagExitAudioThread                 = 0;

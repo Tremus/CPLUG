@@ -154,7 +154,7 @@ static const char* _cplugScope2Str(AudioUnitScope inScope)
     return "UNKNOWN_SCOPE";
 }
 
-typedef struct AUv2Plugin
+typedef struct CplugHostContext
 {
     // The AudioComponentPlugInInterface must remain first
     AudioComponentPlugInInterface mPlugInInterface;
@@ -183,7 +183,7 @@ typedef struct AUv2Plugin
     // Store events here because AUv2 won't simply pass us all events in a single process callback
     UInt32     numEvents;
     CplugEvent events[CPLUG_EVENT_QUEUE_SIZE];
-} AUv2Plugin;
+} CplugHostContext;
 
 int64_t AUv2WriteProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
@@ -221,7 +221,7 @@ int64_t AUv2ReadProc(const void* stateCtx, void* readPos, size_t maxBytesToRead)
 // ------------------------------------------------------------------------------------------------
 
 OSStatus AUMethodGetPropertyInfo(
-    AUv2Plugin*         auv2,
+    CplugHostContext*         auv2,
     AudioUnitPropertyID inID,
     AudioUnitScope      inScope,
     AudioUnitElement    inElement,
@@ -423,7 +423,7 @@ Properties they test you on include:
   - Tail time
 */
 static OSStatus AUMethodGetProperty(
-    AUv2Plugin*         auv2,
+    CplugHostContext*         auv2,
     AudioUnitPropertyID inID,
     AudioUnitScope      inScope,
     AudioUnitElement    inElement,
@@ -731,7 +731,7 @@ static OSStatus AUMethodGetProperty(
 }
 
 static OSStatus AUMethodSetProperty(
-    AUv2Plugin*         auv2,
+    CplugHostContext*         auv2,
     AudioUnitPropertyID inID,
     AudioUnitScope      inScope,
     AudioUnitElement    inElement,
@@ -848,7 +848,7 @@ static OSStatus AUMethodSetProperty(
 }
 
 static OSStatus AUMethodAddPropertyListener(
-    AUv2Plugin*                   auv2,
+    CplugHostContext*                   auv2,
     AudioUnitPropertyID           prop,
     AudioUnitPropertyListenerProc proc,
     void*                         userData)
@@ -868,7 +868,7 @@ static OSStatus AUMethodAddPropertyListener(
 }
 
 static OSStatus
-AUMethodRemovePropertyListener(AUv2Plugin* auv2, AudioUnitPropertyID prop, AudioUnitPropertyListenerProc proc)
+AUMethodRemovePropertyListener(CplugHostContext* auv2, AudioUnitPropertyID prop, AudioUnitPropertyListenerProc proc)
 {
     cplug_log("AUMethodRemovePropertyListener => %u (%s) %p %p", prop, _cplugProperty2Str(prop), proc);
 
@@ -885,7 +885,7 @@ AUMethodRemovePropertyListener(AUv2Plugin* auv2, AudioUnitPropertyID prop, Audio
 }
 
 static OSStatus AUMethodRemovePropertyListenerWithUserData(
-    AUv2Plugin*                   auv2,
+    CplugHostContext*                   auv2,
     AudioUnitPropertyID           prop,
     AudioUnitPropertyListenerProc proc,
     void*                         userData)
@@ -909,14 +909,14 @@ static OSStatus AUMethodRemovePropertyListenerWithUserData(
     return noErr;
 }
 
-static OSStatus AUMethodAddRenderNotify(AUv2Plugin* auv2, AURenderCallback proc, void* userData)
+static OSStatus AUMethodAddRenderNotify(CplugHostContext* auv2, AURenderCallback proc, void* userData)
 {
     cplug_log("AUMethodAddRenderNotify => %u %p %p", proc, userData);
     // Pretend to do something
     return noErr;
 }
 
-static OSStatus AUMethodRemoveRenderNotify(AUv2Plugin* auv2, AURenderCallback proc, void* userData)
+static OSStatus AUMethodRemoveRenderNotify(CplugHostContext* auv2, AURenderCallback proc, void* userData)
 {
     cplug_log("AUMethodRemoveRenderNotify => %u %p %p", proc, userData);
     // Pretend to do something
@@ -924,7 +924,7 @@ static OSStatus AUMethodRemoveRenderNotify(AUv2Plugin* auv2, AURenderCallback pr
 }
 
 static OSStatus AUMethodGetParameter(
-    AUv2Plugin*              auv2,
+    CplugHostContext*              auv2,
     AudioUnitParameterID     param,
     AudioUnitScope           scope,
     AudioUnitElement         elem,
@@ -939,7 +939,7 @@ static OSStatus AUMethodGetParameter(
 
 // this is a (potentially) realtime method; no lock
 static OSStatus AUMethodSetParameter(
-    AUv2Plugin*             auv2,
+    CplugHostContext*             auv2,
     AudioUnitParameterID    param,
     AudioUnitScope          scope,
     AudioUnitElement        elem,
@@ -958,7 +958,7 @@ static OSStatus AUMethodSetParameter(
     return noErr;
 }
 
-static OSStatus AUMethodScheduleParameters(AUv2Plugin* auv2, const AudioUnitParameterEvent* events, UInt32 numEvents)
+static OSStatus AUMethodScheduleParameters(CplugHostContext* auv2, const AudioUnitParameterEvent* events, UInt32 numEvents)
 {
     cplug_log("AUMethodScheduleParameters => %p %u", events, numEvents);
     CPLUG_LOG_ASSERT_RETURN(events != NULL, kAudioUnitErr_InvalidParameterValue);
@@ -987,7 +987,7 @@ static OSStatus AUMethodScheduleParameters(AUv2Plugin* auv2, const AudioUnitPara
     return status;
 }
 
-static OSStatus AUMethodInitializeProcessing(AUv2Plugin* auv2)
+static OSStatus AUMethodInitializeProcessing(CplugHostContext* auv2)
 {
     cplug_log("AUMethodInitializeProcessing");
     // Despite this 'initialize' naming convention, the bahaviour of this method is more closely aligned with VST3
@@ -996,7 +996,7 @@ static OSStatus AUMethodInitializeProcessing(AUv2Plugin* auv2)
     return noErr;
 }
 
-static OSStatus AUMethodUninitializeProcessing(AUv2Plugin* auv2)
+static OSStatus AUMethodUninitializeProcessing(CplugHostContext* auv2)
 {
     cplug_log("AUMethodUninitializeProcessing");
     // Read comments in AUMethodInitialize
@@ -1006,7 +1006,7 @@ static OSStatus AUMethodUninitializeProcessing(AUv2Plugin* auv2)
 typedef struct AUv2ProcessContextTranslator
 {
     CplugProcessContext cplugContext;
-    AUv2Plugin*         auv2;
+    CplugHostContext*         auv2;
     UInt32              midiIdx;
     float*              channels[2];
 } AUv2ProcessContextTranslator;
@@ -1103,7 +1103,7 @@ float** AUv2ProcessContextTranslator_getAudioOutput(const CplugProcessContext* c
 }
 
 static OSStatus AUMethodProcessAudio(
-    AUv2Plugin*                 auv2,
+    CplugHostContext*                 auv2,
     AudioUnitRenderActionFlags* ioActionFlags,
     const AudioTimeStamp*       inTimeStamp,
     UInt32                      inOutputBusNumber,
@@ -1201,7 +1201,7 @@ static OSStatus AUMethodProcessAudio(
     return noErr;
 }
 
-static OSStatus AUMethodResetProcessing(AUv2Plugin* auv2, AudioUnitScope scope, AudioUnitElement elem)
+static OSStatus AUMethodResetProcessing(CplugHostContext* auv2, AudioUnitScope scope, AudioUnitElement elem)
 {
     cplug_log("AUMethodResetProcessing => %u %u", scope, elem);
     // TODO: support this?
@@ -1212,7 +1212,7 @@ static OSStatus AUMethodResetProcessing(AUv2Plugin* auv2, AudioUnitScope scope, 
 
 #if CPLUG_IS_INSTRUMENT
 static OSStatus AUMethodMusicDeviceMIDIEventProc(
-    AUv2Plugin* auv2,
+    CplugHostContext* auv2,
     UInt32      inStatus,
     UInt32      inData1,
     UInt32      inData2,
@@ -1232,7 +1232,7 @@ static OSStatus AUMethodMusicDeviceMIDIEventProc(
     return noErr;
 }
 
-static OSStatus AUMethodMusicDeviceSysExProc(AUv2Plugin* auv2, const UInt8* inData, UInt32 inLength)
+static OSStatus AUMethodMusicDeviceSysExProc(CplugHostContext* auv2, const UInt8* inData, UInt32 inLength)
 {
     cplug_log("AUMethodMusicDeviceSysExProc => %p %u", inData, inLength);
     return noErr;
@@ -1291,7 +1291,7 @@ static AudioComponentMethod AULookup(SInt16 selector)
     return NULL;
 }
 
-OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInstance)
+OSStatus ComponentBase_AP_Open(CplugHostContext* auv2, AudioComponentInstance compInstance)
 {
     cplug_log("ComponentBase_AP_Open");
     auv2->compInstance = compInstance;
@@ -1299,7 +1299,7 @@ OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInst
     return auv2->userPlugin != NULL ? noErr : kAudioUnitErr_FailedInitialization;
 }
 
-OSStatus ComponentBase_AP_Close(AUv2Plugin* auv2)
+OSStatus ComponentBase_AP_Close(CplugHostContext* auv2)
 {
     cplug_log("ComponentBase_AP_Close");
     cplug_destroyPlugin(auv2->userPlugin);
@@ -1328,7 +1328,7 @@ __attribute__((visibility("default"))) void* GetPluginFactory(const AudioCompone
     if (numInstances == 0)
         cplug_libraryLoad();
 
-    AUv2Plugin* auv2 = (AUv2Plugin*)(malloc(sizeof(AUv2Plugin)));
+    CplugHostContext* auv2 = (CplugHostContext*)(malloc(sizeof(CplugHostContext)));
     memset(auv2, 0, sizeof(*auv2));
 
     auv2->mPlugInInterface.Open     = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;

@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef struct CLAPPlugin
+typedef struct CplugHostContext
 {
     clap_plugin_t clapPlugin;
     void*         userPlugin;
@@ -17,7 +17,7 @@ typedef struct CLAPPlugin
     const clap_host_latency_t* host_latency;
     const clap_host_state_t*   host_state;
     const clap_host_params_t*  host_params;
-} CLAPPlugin;
+} CplugHostContext;
 
 #if CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES > 0
 /////////////////////////////
@@ -34,7 +34,7 @@ static bool
 CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input, clap_audio_port_info_t* info)
 {
     cplug_log("CLAPExtAudioPorts_get => %u %p", (unsigned)is_input, info);
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
 
     if (is_input && index < CPLUG_NUM_INPUT_BUSSES)
     {
@@ -131,7 +131,7 @@ static const clap_plugin_note_ports_t s_clap_note_ports = {
 uint32_t CLAPExtLatency_get(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtLatency_get");
-    return cplug_getLatencyInSamples(((CLAPPlugin*)plugin->plugin_data)->userPlugin);
+    return cplug_getLatencyInSamples(((CplugHostContext*)plugin->plugin_data)->userPlugin);
 }
 
 static const clap_plugin_latency_t s_clap_latency = {
@@ -145,7 +145,7 @@ static const clap_plugin_latency_t s_clap_latency = {
 uint32_t CLAPExtTail_get(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtTail_get");
-    return cplug_getTailInSamples(((CLAPPlugin*)plugin->plugin_data)->userPlugin);
+    return cplug_getTailInSamples(((CplugHostContext*)plugin->plugin_data)->userPlugin);
 }
 
 static const clap_plugin_tail_t s_clap_tail = {
@@ -159,7 +159,7 @@ static const clap_plugin_tail_t s_clap_tail = {
 bool CLAPExtState_save(const clap_plugin_t* plugin, const clap_ostream_t* stream)
 {
     cplug_log("CLAPExtState_save => %p", stream);
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
     cplug_saveState(clap->userPlugin, stream, (cplug_writeProc)stream->write);
     return true;
 }
@@ -167,7 +167,7 @@ bool CLAPExtState_save(const clap_plugin_t* plugin, const clap_ostream_t* stream
 bool CLAPExtState_load(const clap_plugin_t* plugin, const clap_istream_t* stream)
 {
     cplug_log("CLAPExtState_load %p", stream);
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
     cplug_loadState(clap->userPlugin, stream, (cplug_readProc)stream->read);
     return true;
 }
@@ -193,7 +193,7 @@ bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, c
     cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
     CPLUG_LOG_ASSERT_RETURN(param_index < CPLUG_NUM_PARAMS, false);
 
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
 
     param_info->id = param_index;
     snprintf(param_info->name, sizeof(param_info->name), "%s", cplug_getParameterName(clap->userPlugin, param_index));
@@ -224,7 +224,7 @@ bool CLAPExtParams_get_value(const clap_plugin_t* plugin, clap_id param_id, doub
 {
     cplug_log("CLAPExtParams_get_value => %u %p", param_id, out_value);
     CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
-    *out_value = cplug_getParameterValue(((CLAPPlugin*)plugin->plugin_data)->userPlugin, param_id);
+    *out_value = cplug_getParameterValue(((CplugHostContext*)plugin->plugin_data)->userPlugin, param_id);
     return true;
 }
 
@@ -238,7 +238,7 @@ bool CLAPExtParams_value_to_text(
     // cplug_log("CLAPExtParams_value_to_text => %u %f %p %u", param_id, value, out_buffer, out_buffer_capacity);
     CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
 
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
     cplug_parameterValueToString(clap->userPlugin, param_id, out_buffer, out_buffer_capacity, value);
     return true;
 }
@@ -251,7 +251,7 @@ bool CLAPExtParams_text_to_value(
 {
     cplug_log("CLAPExtParams_text_to_value => %u %p %p", param_id, param_value_text, out_value);
     CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
     *out_value       = cplug_parameterStringToValue(clap->userPlugin, param_id, param_value_text);
     return true;
 }
@@ -305,7 +305,7 @@ bool CLAPExtGUI_create(const clap_plugin_t* plugin, const char* api, bool is_flo
     cplug_log("CLAPExtGUI_create => %s %u", api, (unsigned)is_floating);
     CPLUG_LOG_ASSERT_RETURN(CLAPExtGUI_is_api_supported(plugin, api, is_floating), false);
 
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
     clap->userGUI    = cplug_createGUI(clap->userPlugin);
     CPLUG_LOG_ASSERT_RETURN(clap->userGUI != NULL, false);
 
@@ -315,7 +315,7 @@ bool CLAPExtGUI_create(const clap_plugin_t* plugin, const char* api, bool is_flo
 void CLAPExtGUI_destroy(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtGUI_destroy");
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
     cplug_setParent(clap->userGUI, NULL);
     cplug_destroyGUI(clap->userGUI);
     clap->userGUI = NULL;
@@ -324,14 +324,14 @@ void CLAPExtGUI_destroy(const clap_plugin_t* plugin)
 static bool CLAPExtGUI_set_scale(const clap_plugin_t* plugin, double scale)
 {
     cplug_log("CLAPExtGUI_set_scale => %f", scale);
-    cplug_setScaleFactor(((CLAPPlugin*)plugin->plugin_data)->userGUI, (float)scale);
+    cplug_setScaleFactor(((CplugHostContext*)plugin->plugin_data)->userGUI, (float)scale);
     return true;
 }
 
 static bool CLAPExtGUI_get_size(const clap_plugin_t* plugin, uint32_t* width, uint32_t* height)
 {
     cplug_log("CLAPExtGUI_get_size => %p %p", width, height);
-    cplug_getSize(((CLAPPlugin*)plugin->plugin_data)->userGUI, width, height);
+    cplug_getSize(((CplugHostContext*)plugin->plugin_data)->userGUI, width, height);
     return true;
 }
 
@@ -345,7 +345,7 @@ static bool CLAPExtGUI_get_resize_hints(const clap_plugin_t* plugin, clap_gui_re
 {
     cplug_log("CLAPExtGUI_resize_hints => %p", hints);
     return cplug_getResizeHints(
-        ((CLAPPlugin*)plugin->plugin_data)->userGUI,
+        ((CplugHostContext*)plugin->plugin_data)->userGUI,
         &hints->can_resize_horizontally,
         &hints->can_resize_vertically,
         &hints->preserve_aspect_ratio,
@@ -356,20 +356,20 @@ static bool CLAPExtGUI_get_resize_hints(const clap_plugin_t* plugin, clap_gui_re
 static bool CLAPExtGUI_adjust_size(const clap_plugin_t* plugin, uint32_t* width, uint32_t* height)
 {
     cplug_log("CLAPExtGUI_adjust_size => %u %u", *width, *height);
-    cplug_checkSize(((CLAPPlugin*)plugin->plugin_data)->userGUI, width, height);
+    cplug_checkSize(((CplugHostContext*)plugin->plugin_data)->userGUI, width, height);
     return true;
 }
 
 static bool CLAPExtGUI_set_size(const clap_plugin_t* plugin, uint32_t width, uint32_t height)
 {
     cplug_log("CLAPExtGUI_set_size => %u %u", width, height);
-    return cplug_setSize(((CLAPPlugin*)plugin->plugin_data)->userGUI, width, height);
+    return cplug_setSize(((CplugHostContext*)plugin->plugin_data)->userGUI, width, height);
 }
 
 static bool CLAPExtGUI_set_parent(const clap_plugin_t* plugin, const clap_window_t* window)
 {
     cplug_log("CLAPExtGUI_set_parent => %p", window);
-    cplug_setParent(((CLAPPlugin*)plugin->plugin_data)->userGUI, window->ptr);
+    cplug_setParent(((CplugHostContext*)plugin->plugin_data)->userGUI, window->ptr);
     return true;
 }
 
@@ -387,14 +387,14 @@ static void CLAPExtGUI_suggest_title(const clap_plugin_t* plugin, const char* ti
 static bool CLAPExtGUI_show(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtGUI_show");
-    cplug_setVisible(((CLAPPlugin*)plugin->plugin_data)->userGUI, true);
+    cplug_setVisible(((CplugHostContext*)plugin->plugin_data)->userGUI, true);
     return true;
 }
 
 static bool CLAPExtGUI_hide(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtGUI_hide");
-    cplug_setVisible(((CLAPPlugin*)plugin->plugin_data)->userGUI, false);
+    cplug_setVisible(((CplugHostContext*)plugin->plugin_data)->userGUI, false);
     return true;
 }
 
@@ -424,7 +424,7 @@ static const clap_plugin_gui_t s_clap_gui = {
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
     cplug_log("CLAPPlugin_init");
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
 
     clap->userPlugin = cplug_createPlugin();
 
@@ -443,7 +443,7 @@ static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 static void CLAPPlugin_destroy(const struct clap_plugin* plugin)
 {
     cplug_log("CLAPPlugin_destroy");
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
     cplug_destroyPlugin(clap->userPlugin);
     free(clap);
 }
@@ -455,7 +455,7 @@ static bool CLAPPlugin_activate(
     uint32_t             max_frames_count)
 {
     cplug_log("CLAPPlugin_activate => %f %u %u", sample_rate, min_frames_count, max_frames_count);
-    cplug_setSampleRateAndBlockSize(((CLAPPlugin*)plugin->plugin_data)->userPlugin, sample_rate, max_frames_count);
+    cplug_setSampleRateAndBlockSize(((CplugHostContext*)plugin->plugin_data)->userPlugin, sample_rate, max_frames_count);
     return true;
 }
 
@@ -594,7 +594,7 @@ float** ClapProcessContext_getAudioOutput(const struct CplugProcessContext* ctx,
 static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, const clap_process_t* process)
 {
     // cplug_log("CLAPPlugin_process => %p", process);
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CplugHostContext* clap = (CplugHostContext*)plugin->plugin_data;
 
     struct ClapProcessContextTranslator translator;
     memset(&translator, 0, sizeof(translator));
@@ -718,7 +718,7 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     // clap-validator tests you on this
     CPLUG_LOG_ASSERT_RETURN(strcmp(plugin_id, CPLUG_CLAP_ID) == 0, NULL);
 
-    CLAPPlugin* clap                  = (CLAPPlugin*)calloc(1, sizeof(CLAPPlugin));
+    CplugHostContext* clap                  = (CplugHostContext*)calloc(1, sizeof(CplugHostContext));
     clap->clapPlugin.desc             = &s_clap_desc;
     clap->clapPlugin.plugin_data      = clap;
     clap->clapPlugin.init             = CLAPPlugin_init;
