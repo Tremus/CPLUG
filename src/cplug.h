@@ -42,9 +42,10 @@ extern "C" {
 CPLUG_API void cplug_libraryLoad();
 CPLUG_API void cplug_libraryUnload();
 
-CPLUG_API void* cplug_createPlugin();
+CPLUG_API void* cplug_createPlugin(void*);
 CPLUG_API void  cplug_destroyPlugin(void*);
 
+CPLUG_API uint32_t cplug_getParamCount(void*);
 CPLUG_API uint32_t cplug_getInputBusChannelCount(void*, uint32_t bus_idx);
 CPLUG_API uint32_t cplug_getOutputBusChannelCount(void*, uint32_t bus_idx);
 

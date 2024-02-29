@@ -310,7 +310,7 @@ OSStatus AUMethodGetPropertyInfo(
     {
         // Global params only, else auval starts asking for input and output parameter detials
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterID) * CPLUG_NUM_PARAMS);
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterID) * cplug_getParamCount(auv2));
         break;
     }
 
@@ -507,7 +507,7 @@ static OSStatus AUMethodGetProperty(
     case kAudioUnitProperty_ParameterList:
     {
         AudioUnitParameterID* paramList = (AudioUnitParameterID*)(outData);
-        for (UInt32 i = 0; i < CPLUG_NUM_PARAMS; i++)
+        for (UInt32 i = 0; i < cplug_getParamCount(auv2); i++)
             paramList[i] = i;
         break;
     }
@@ -931,7 +931,7 @@ static OSStatus AUMethodGetParameter(
     AudioUnitParameterValue* value)
 {
     // cplug_log("AUMethodGetParameter => %u %s %u %p", param, _cplugScope2Str(scope), elem, value);
-    CPLUG_LOG_ASSERT_RETURN(elem < CPLUG_NUM_PARAMS, kAudioUnitErr_InvalidParameter);
+    CPLUG_LOG_ASSERT_RETURN(elem < cplug_getParamCount(auv2), kAudioUnitErr_InvalidParameter);
     CPLUG_LOG_ASSERT_RETURN(auv2->userPlugin != NULL, kAudioUnitErr_Uninitialized);
     *value = (AudioUnitParameterValue)cplug_getParameterValue(auv2->userPlugin, param);
     return noErr;
@@ -948,7 +948,7 @@ static OSStatus AUMethodSetParameter(
 {
     // cplug_log("AUMethodSetParameter => %u %s %u %f %u", param, _cplugScope2Str(scope), elem, value, bufferOffset);
     CPLUG_LOG_ASSERT_RETURN(isfinite(value), kAudioUnitErr_InvalidParameter);
-    CPLUG_LOG_ASSERT_RETURN(param < CPLUG_NUM_PARAMS, kAudioUnitErr_InvalidParameter);
+    CPLUG_LOG_ASSERT_RETURN(param < cplug_getParamCount(auv2), kAudioUnitErr_InvalidParameter);
     CPLUG_LOG_ASSERT_RETURN(auv2->userPlugin != NULL, kAudioUnitErr_Uninitialized);
 
     if (! isfinite(value))
@@ -1295,7 +1295,7 @@ OSStatus ComponentBase_AP_Open(CplugHostContext* auv2, AudioComponentInstance co
 {
     cplug_log("ComponentBase_AP_Open");
     auv2->compInstance = compInstance;
-    auv2->userPlugin   = cplug_createPlugin();
+    auv2->userPlugin   = cplug_createPlugin(auv2);
     return auv2->userPlugin != NULL ? noErr : kAudioUnitErr_FailedInitialization;
 }
 

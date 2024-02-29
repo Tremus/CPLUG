@@ -68,7 +68,7 @@ void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramIdx, 
 void cplug_libraryLoad(){};
 void cplug_libraryUnload(){};
 
-void* cplug_createPlugin()
+void* cplug_createPlugin(CplugHostContext* hostCtx)
 {
     MyPlugin* plugin = (MyPlugin*)malloc(sizeof(MyPlugin));
     memset(plugin, 0, sizeof(*plugin));
@@ -95,6 +95,11 @@ void cplug_destroyPlugin(void* ptr)
 {
     // Free any allocated resources in your plugin here
     free(ptr);
+}
+
+uint32_t cplug_getParamCount(CplugHostContext* hostCtx)
+{
+    return kParameterCount;
 }
 
 /* --------------------------------------------------------------------------------------------------------
@@ -133,7 +138,7 @@ const char* cplug_getOutputBusName(void* ptr, uint32_t idx)
 
 const char* cplug_getParameterName(void* ptr, uint32_t index)
 {
-    static const char* param_names[CPLUG_NUM_PARAMS] = {
+    static const char* param_names[kParameterCount] = {
         "Example Float Parameter",
         "Example Int Parameter",
         "Example Bool Parameter"};

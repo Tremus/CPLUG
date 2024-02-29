@@ -86,7 +86,7 @@ typedef struct CplugHostContext
 
     void (*libraryLoad)();
     void (*libraryUnload)();
-    void* (*createPlugin)();
+    void* (*createPlugin)(void*);
     void (*destroyPlugin)(void* userPlugin);
     uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
     void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
@@ -1226,7 +1226,7 @@ void STAND_filesystemEventCallback(
             {
                 STAND_openLibraryWithSymbols();
                 g_plugin.libraryLoad();
-                g_plugin.userPlugin = g_plugin.createPlugin();
+                g_plugin.userPlugin = g_plugin.createPlugin(g_plugin);
                 cplug_assert(g_plugin.userPlugin != NULL);
                 g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
 
