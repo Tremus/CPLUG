@@ -245,7 +245,6 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 // When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
 static inline void cplug_log(const char* const fmt, ...)
 {
-    freopen("C:\\Users\\tredu\\Desktop\\log.txt", "a", stderr);
     va_list args;
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
