@@ -271,7 +271,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         return 1;
     }
 
-    if (FAILED(CoInitializeEx(0, COINIT_MULTITHREADED)))
+    if (FAILED(OleInitialize(NULL)))
     {
         fprintf(stderr, "Failed initialising COM\n");
         return 1;
@@ -484,7 +484,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         VirtualFree(_gPluginState.Data, _gPluginState.BytesReserved, 0);
 
     DestroyWindow(hWindow);
-    CoUninitialize();
+    OleUninitialize();
     ReleaseMutex(hMutexOneInstance);
     CloseHandle(hMutexOneInstance);
     return msg.wParam;
