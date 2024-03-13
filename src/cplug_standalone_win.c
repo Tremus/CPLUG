@@ -230,8 +230,7 @@ DWORD CALLBACK CPWIN_HandleDeviceChange(
     DWORD                 EventDataSize);
 // File watch thread
 DWORD WINAPI  CPWIN_WatchFileChangesProc(LPVOID hwnd);
-volatile LONG _gFlagShouldRebuild;
-int           _gFlagExitFileWatchThread;
+int _gFlagExitFileWatchThread;
 
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -431,7 +430,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     cplug_assert(hCMNotification != NULL);
 
     // Setup file watcher
-    _gFlagShouldRebuild       = 0;
     _gFlagExitFileWatchThread = 0;
     HANDLE hWatchThread       = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
     cplug_assert(hWatchThread != NULL);
@@ -556,10 +554,6 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         {
         case IDM_Hotreload:
         {
-            LONG rebuild = _InterlockedExchange(&_gFlagShouldRebuild, 0);
-            if (! rebuild)
-                return 0;
-
             UINT64 reloadStart = CPWIN_GetNowNS();
 
             if (_gCPLUG.Library)
@@ -888,7 +882,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
         return 1;
     }
     OVERLAPPED overlapped;
-    overlapped.hEvent = CreateEvent(NULL, FALSE, 0, NULL);
+    overlapped.hEvent = CreateEventA(NULL, FALSE, 0, NULL);
 
     BYTE infobuffer[1024];
     // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
@@ -907,14 +901,21 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
         return 1;
     }
 
+    int throttlereload = 0;
     while (_gFlagExitFileWatchThread == 0)
     {
         DWORD result = WaitForSingleObject(overlapped.hEvent, 50);
 
-        if (result == WAIT_OBJECT_0)
+        if (result == WAIT_TIMEOUT)
+        {
+            if (throttlereload != 0)
+                PostMessageA((HWND)hwnd, WM_COMMAND, IDM_Hotreload, 0);
+            throttlereload = 0;
+        }
+        else if (result == WAIT_OBJECT_0)
         {
             DWORD bytes_transferred;
-            GetOverlappedResult(hDirectory, &overlapped, &bytes_transferred, FALSE);
+            GetOverlappedResult(hDirectory, &overlapped, &bytes_transferred, TRUE);
 
             FILE_NOTIFY_INFORMATION* event = (FILE_NOTIFY_INFORMATION*)infobuffer;
 
@@ -925,8 +926,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
                 if (event->Action == FILE_ACTION_MODIFIED)
                 {
                     fwprintf(stderr, L"File changed: %.*s\n", name_len, event->FileName);
-                    _InterlockedExchange(&_gFlagShouldRebuild, 1);
-                    PostMessageA((HWND)hwnd, WM_COMMAND, IDM_Hotreload, 0);
+                    throttlereload++;
                 }
 
                 // Iterate events
