@@ -40,6 +40,4 @@ enum Parameters
     kParameterCount
 };
 
-#define CPLUG_NUM_PARAMS kParameterCount
-
 #endif // PLUGIN_CONFIG_H

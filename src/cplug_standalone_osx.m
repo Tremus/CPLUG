@@ -78,7 +78,7 @@ enum MIDIMenuTag
 
 #pragma mark -Global state
 
-struct STAND_Plugin
+typedef struct CplugHostContext
 {
     void* library;
     void* userPlugin;
@@ -86,7 +86,7 @@ struct STAND_Plugin
 
     void (*libraryLoad)();
     void (*libraryUnload)();
-    void* (*createPlugin)();
+    void* (*createPlugin)(void*);
     void (*destroyPlugin)(void* userPlugin);
     uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
     void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
@@ -102,7 +102,9 @@ struct STAND_Plugin
     void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
-} g_plugin;
+} CplugHostContext;
+
+CplugHostContext g_plugin;
 
 struct STAND_PluginStateContext
 {
@@ -1224,7 +1226,7 @@ void STAND_filesystemEventCallback(
             {
                 STAND_openLibraryWithSymbols();
                 g_plugin.libraryLoad();
-                g_plugin.userPlugin = g_plugin.createPlugin();
+                g_plugin.userPlugin = g_plugin.createPlugin(g_plugin);
                 cplug_assert(g_plugin.userPlugin != NULL);
                 g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
 
