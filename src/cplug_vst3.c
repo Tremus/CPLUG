@@ -1,4 +1,4 @@
-/* This file is subject to the terms of the VST3 SDK License. See here www.steinberg.net/sdklicenses
+/* This file is subject to the terms of the VST3 SDK License. See here https://www.steinberg.net/sdklicenses
  * Originally authored by Filipe Coelho as a part of DPF https://github.com/DISTRHO/DPF
  * A special thanks goes to him for allowing the use of his code here.
  * Edited and ported to CPLUG by Tré Dudman */
@@ -241,6 +241,7 @@ void _cplug_utf8To16(char16_t* dst, const char* src, int len)
         src = _cplug_decode8(src, &cp);
         it  = _cplug_encode16(it, cp);
     }
+    *it = 0;
 }
 void _cplug_utf16To8(char* dst, const char16_t* src, int len)
 {
@@ -251,6 +252,7 @@ void _cplug_utf16To8(char* dst, const char16_t* src, int len)
 		src = _cplug_decode16(src, &cp);
 		it  = _cplug_encode8(it, cp);
 	}
+    *it = 0;
 }
 // clang-format on
 
@@ -440,8 +442,8 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_addRef(void* const s
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_release(void* const self)
 {
-    VST3ViewContentScale* const scale = (VST3ViewContentScale*)self;
-    int refcount = cplug_atomic_fetch_add_i32(&scale->refcounter, -1) - 1;
+    VST3ViewContentScale* const scale    = (VST3ViewContentScale*)self;
+    int                         refcount = cplug_atomic_fetch_add_i32(&scale->refcounter, -1) - 1;
 
     if (refcount == 0 && cplug_atomic_load_i32(&scale->refcounter) == 0)
     {
@@ -812,8 +814,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_getParamStringByValue(void* self, uint32_t index, double normalised, Steinberg_Vst_String128 output)
 {
     // NOTE very noisy, called many times
-    // cplug_log("VST3Controller_getParamStringByValue => %p %u %f %p", self, index, normalised,
-    // output);
+    // cplug_log("VST3Controller_getParamStringByValue => %p %u %f %p", self, index, normalised, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     // Bitwig 5 has been spotted failing this assertion
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);

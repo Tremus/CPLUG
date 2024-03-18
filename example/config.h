@@ -37,6 +37,7 @@ enum Parameters
     kParameterFloat,
     kParameterInt,
     kParameterBool,
+    kParameterUTF8,
     kParameterCount
 };
 

@@ -87,6 +87,12 @@ void* cplug_createPlugin()
     plugin->paramInfo[kParameterBool].flags = CPLUG_FLAG_PARAMETER_IS_BOOL;
     plugin->paramInfo[kParameterBool].max   = 1.0f;
 
+    plugin->paramValuesAudio[kParameterUTF8]       = 0.0f;
+    plugin->paramInfo[kParameterUTF8].flags        = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE;
+    plugin->paramInfo[kParameterUTF8].min          = 0.0f;
+    plugin->paramInfo[kParameterUTF8].max          = 1.0f;
+    plugin->paramInfo[kParameterUTF8].defaultValue = 0.0f;
+
     plugin->midiNote = -1;
 
     return plugin;
@@ -133,10 +139,18 @@ const char* cplug_getOutputBusName(void* ptr, uint32_t idx)
 
 const char* cplug_getParameterName(void* ptr, uint32_t index)
 {
-    static const char* param_names[CPLUG_NUM_PARAMS] = {
-        "Example Float Parameter",
-        "Example Int Parameter",
-        "Example Bool Parameter"};
+    static const char* param_names[] = {
+        "Parameter Float",
+        "Parameter Int",
+        "Parameter Bool",
+        // https://utf8everywhere.org/
+        // UTF8    = 1 byte per character
+        // Приве́т  = 2 bytes
+        // नमस्ते     = 3 bytes
+        // שלום = 3 בייטים
+        // 🐨       = 4 bytes
+        "UTF8 Приве́т नमस्ते שָׁלוֹם 🐨"};
+    static_assert((sizeof(param_names) / sizeof(param_names[0])) == kParameterCount, "Invalid length");
     return param_names[index];
 }
 
@@ -232,7 +246,9 @@ void cplug_parameterValueToString(void* ptr, uint32_t index, char* buf, size_t b
     if (flags & CPLUG_FLAG_PARAMETER_IS_BOOL)
         value = value >= 0.5 ? 1 : 0;
 
-    if (flags & (CPLUG_FLAG_PARAMETER_IS_INTEGER | CPLUG_FLAG_PARAMETER_IS_BOOL))
+    if (index == kParameterUTF8)
+        snprintf(buf, bufsize, "%.2f Приве́т नमस्ते שָׁלוֹם 🐨", value);
+    else if (flags & (CPLUG_FLAG_PARAMETER_IS_INTEGER | CPLUG_FLAG_PARAMETER_IS_BOOL))
         snprintf(buf, bufsize, "%d", (int)value);
     else
         snprintf(buf, bufsize, "%.2f", value);
