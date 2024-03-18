@@ -28,6 +28,8 @@
 #define ENABLE_DENORMALS fesetenv(&_fenv);
 #endif
 
+static_assert((int)CPLUG_NUM_PARAMS == kParameterCount, "Must be equal");
+
 typedef struct ParamInfo
 {
     float min;
