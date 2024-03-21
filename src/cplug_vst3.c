@@ -236,7 +236,7 @@ void _cplug_utf8To16(char16_t* dst, const char* src, int len)
 {
     char16_t* it = dst;
     int cp;
-    while (*src && (it < dst + len))
+    while (*src && (it < dst + len - 1))
     {
         src = _cplug_decode8(src, &cp);
         it  = _cplug_encode16(it, cp);
@@ -247,7 +247,7 @@ void _cplug_utf16To8(char* dst, const char16_t* src, int len)
 {
 	char* it = dst;
 	int cp;
-	while (*src && (it < dst + len))
+	while (*src && (it < dst + len - 1))
 	{
 		src = _cplug_decode16(src, &cp);
 		it  = _cplug_encode8(it, cp);
