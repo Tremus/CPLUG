@@ -439,6 +439,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     ShowWindow(hWindow, cmdshow);
     _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
+    SetForegroundWindow(hWindow);
 
     while (GetMessageA(&msg, NULL, 0, 0))
     {
