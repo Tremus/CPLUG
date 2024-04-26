@@ -11,17 +11,17 @@
 #include <pthread.h>
 
 #define CPLUG_MIDI_RINGBUFFER_SIZE 128
-#define MAX_BLOCK_SIZE 2048
+#define MAX_BLOCK_SIZE             2048
 
-#define USER_SAMPLE_RATE 44100
-#define USER_BLOCK_SIZE 512
+#define USER_SAMPLE_RATE  44100
+#define USER_BLOCK_SIZE   512
 #define USER_NUM_CHANNELS 2
 
 #ifndef ARRSIZE
 #define ARRSIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 #endif
 
-#define unlikely(x) __builtin_expect(x, 0)
+#define unlikely(x)  __builtin_expect(x, 0)
 #define SLEEP_MS(ms) usleep(ms * 1000)
 
 #define cplug_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
@@ -233,9 +233,9 @@ OSStatus STAND_audioDeviceChangeListener(
     // https://lists.apple.com/archives/Coreaudio-api/2010/Aug//msg00304.html
     CFRunLoopRef               runLoopRef = NULL;
     AudioObjectPropertyAddress addr       = {
-              kAudioHardwarePropertyRunLoop,
-              kAudioObjectPropertyScopeGlobal,
-              kAudioObjectPropertyElementMaster};
+        kAudioHardwarePropertyRunLoop,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMaster};
     AudioObjectSetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, sizeof(CFRunLoopRef), &runLoopRef);
 
     // Use wildcard to get all changes
@@ -856,7 +856,7 @@ OSStatus STAND_audioIOProc(
     cplug_assert(outOutputData->mBuffers->mNumberChannels == g_audioNumChannels);
     cplug_assert(outOutputData->mBuffers->mDataByteSize == (g_audioNumChannels * g_audioBlockSize * sizeof(float)));
 
-    OSXProcessContextTranlator translator;
+    OSXProcessContextTranlator translator  = {0};
     translator.cplugContext.numFrames      = g_audioBlockSize;
     translator.cplugContext.enqueueEvent   = OSXProcessContext_enqueueEvent;
     translator.cplugContext.dequeueEvent   = OSXProcessContext_dequeueEvent;

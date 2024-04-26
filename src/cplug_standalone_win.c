@@ -30,15 +30,15 @@
 #define cplug_assert(cond) (cond) ? (void)0 : __debugbreak()
 
 #if ! defined(CPLUG_MIDI_BUFFER_COUNT) || ! defined(CPLUG_MIDI_BUFFER_SIZE) || ! defined(CPLUG_MIDI_RINGBUFFER_SIZE)
-#define CPLUG_MIDI_BUFFER_COUNT 4
-#define CPLUG_MIDI_BUFFER_SIZE 1024
+#define CPLUG_MIDI_BUFFER_COUNT    4
+#define CPLUG_MIDI_BUFFER_SIZE     1024
 #define CPLUG_MIDI_RINGBUFFER_SIZE 128
 #endif
 
 #if ! defined(CPLUG_DEFAULT_BLOCK_SIZE) || ! defined(CPLUG_DEFAULT_SAMPLE_RATE)
 // WARNING: using 44100 is currently glitchy, don't know why. It's not a default for now
 #define CPLUG_DEFAULT_SAMPLE_RATE 48000
-#define CPLUG_DEFAULT_BLOCK_SIZE 512
+#define CPLUG_DEFAULT_BLOCK_SIZE  512
 #endif
 
 #ifdef __cplusplus
@@ -229,8 +229,8 @@ DWORD CALLBACK CPWIN_HandleDeviceChange(
     PCM_NOTIFY_EVENT_DATA EventData,
     DWORD                 EventDataSize);
 // File watch thread
-DWORD WINAPI  CPWIN_WatchFileChangesProc(LPVOID hwnd);
-int _gFlagExitFileWatchThread;
+DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd);
+int          _gFlagExitFileWatchThread;
 
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -251,8 +251,8 @@ static inline INT64 CPWIN_GetNowNS()
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     now.QuadPart -= _gTimer.start.QuadPart;
-    INT64 q      = now.QuadPart / _gTimer.freq.QuadPart;
-    INT64 r      = now.QuadPart % _gTimer.freq.QuadPart;
+    INT64 q       = now.QuadPart / _gTimer.freq.QuadPart;
+    INT64 r       = now.QuadPart % _gTimer.freq.QuadPart;
     return q * 1000000000 + r * 1000000000 / _gTimer.freq.QuadPart;
 }
 
@@ -817,10 +817,10 @@ int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t
 
     if (ctx->Data == NULL)
     {
-        const SIZE_T largePageSize = GetLargePageMinimum();
-        SIZE_T       bigreserve    = CPWIN_RoundUp(numBytesToWrite, largePageSize);
+        const SIZE_T largePageSize  = GetLargePageMinimum();
+        SIZE_T       bigreserve     = CPWIN_RoundUp(numBytesToWrite, largePageSize);
         bigreserve                 *= 8;
-        ctx->Data                  = (BYTE*)VirtualAlloc(NULL, bigreserve, MEM_RESERVE, PAGE_READWRITE);
+        ctx->Data                   = (BYTE*)VirtualAlloc(NULL, bigreserve, MEM_RESERVE, PAGE_READWRITE);
         cplug_assert(ctx->Data != NULL);
         ctx->BytesReserved = bigreserve;
 
@@ -965,7 +965,8 @@ static inline UINT CPWIN_MenuFlag(UINT a, UINT b) { return a == b ? (MF_STRING |
 void CPWIN_Menu_RefreshSampleRates()
 {
     while (RemoveMenu(_gMenus.hSampleRateSubmenu, 0, MF_BYPOSITION))
-    {}
+    {
+    }
 
     AppendMenuA(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 44100), IDM_SampleRate_44100, "44100");
     AppendMenuA(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 48000), IDM_SampleRate_48000, "48000");
@@ -976,7 +977,8 @@ void CPWIN_Menu_RefreshSampleRates()
 void CPWIN_Menu_RefreshBlockSizes()
 {
     while (RemoveMenu(_gMenus.hBlockSizeSubmenu, 0, MF_BYPOSITION))
-    {}
+    {
+    }
 
     AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 128), IDM_BlockSize_128, "128");
     AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 192), IDM_BlockSize_192, "192");
@@ -992,7 +994,8 @@ void CPWIN_Menu_RefreshBlockSizes()
 void CPWIN_Menu_RefreshAudioOutputs()
 {
     while (RemoveMenu(_gMenus.hAudioOutputSubmenu, 0, MF_BYPOSITION))
-    {}
+    {
+    }
 
     IMMDeviceCollection* pCollection = NULL;
     _gAudio.pIMMDeviceEnumerator->lpVtbl
@@ -1047,7 +1050,8 @@ void CPWIN_Menu_RefreshAudioOutputs()
 void CPWIN_Menu_RefreshMIDIInputs()
 {
     while (RemoveMenu(_gMenus.hMIDIInputsSubMenu, 0, MF_BYPOSITION))
-    {}
+    {
+    }
 
     MIDIINCAPS2A caps;
     memset(&caps, 0, sizeof(caps));
@@ -1281,7 +1285,7 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
         cplug_assert(remainingBlockFrames < blockSize); // check overflow
     }
 
-    WindowsProcessContext ctx;
+    WindowsProcessContext ctx       = {0};
     ctx.cplugContext.numFrames      = _gAudio.BlockSize;
     ctx.cplugContext.enqueueEvent   = CPWIN_Audio_enqueueEvent;
     ctx.cplugContext.dequeueEvent   = CPWIN_Audio_dequeueEvent;

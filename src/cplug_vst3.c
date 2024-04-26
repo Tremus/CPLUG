@@ -346,8 +346,8 @@ static void _cplug_pushLeakedVST3(VST3Plugin* ptr)
     if (_cplug_leakedVST3Cap >= _cplug_leakedVST3Count)
     {
         _cplug_leakedVST3Cap += 32;
-        size_t nextCapBytes  = sizeof(void*) * (_cplug_leakedVST3Cap);
-        _cplug_leakedVST3Arr = (VST3Plugin**)realloc(_cplug_leakedVST3Arr, nextCapBytes);
+        size_t nextCapBytes   = sizeof(void*) * (_cplug_leakedVST3Cap);
+        _cplug_leakedVST3Arr  = (VST3Plugin**)realloc(_cplug_leakedVST3Arr, nextCapBytes);
     }
     _cplug_leakedVST3Arr[_cplug_leakedVST3Count] = ptr;
     _cplug_leakedVST3Count++;
@@ -355,7 +355,7 @@ static void _cplug_pushLeakedVST3(VST3Plugin* ptr)
 
 static int _cplug_tryDeleteVST3(VST3Plugin* vst3)
 {
-    int total = 0;
+    int total  = 0;
     total     += cplug_atomic_load_i32(&vst3->component.refcounter);
     total     += cplug_atomic_load_i32(&vst3->controller.refcounter);
     total     += cplug_atomic_load_i32(&vst3->processor.refcounter);
@@ -1233,8 +1233,6 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Processor_setProcessing(void* const self, const Steinberg_TBool processing)
 {
     cplug_log("VST3Processor_setProcessing => %p %u", self, processing);
-    VST3Plugin* const vst3 = _cplug_pointerShiftProcessor((VST3Processor*)self);
-
     // do we care about this function?
 
     return Steinberg_kResultOk;
@@ -1460,9 +1458,8 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
         data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32,
         Steinberg_kInvalidArgument);
 
-    VST3ProcessContextTranslator translator;
-    memset(&translator, 0, sizeof(translator));
-    translator.cplugContext.numFrames = data->numSamples;
+    VST3ProcessContextTranslator translator = {0};
+    translator.cplugContext.numFrames       = data->numSamples;
 
     if (data->processContext != NULL)
     {
@@ -1474,24 +1471,24 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
         if (data->processContext->state & Steinberg_Vst_ProcessContext_StatesAndFlags_kProjectTimeMusicValid)
         {
             translator.cplugContext.flags         |= CPLUG_FLAG_TRANSPORT_HAS_PLAYHEAD_BEATS;
-            translator.cplugContext.playheadBeats = data->processContext->projectTimeMusic;
+            translator.cplugContext.playheadBeats  = data->processContext->projectTimeMusic;
         }
         if (data->processContext->state & Steinberg_Vst_ProcessContext_StatesAndFlags_kCycleActive)
         {
             translator.cplugContext.flags          |= CPLUG_FLAG_TRANSPORT_IS_LOOPING;
-            translator.cplugContext.loopStartBeats = data->processContext->cycleStartMusic;
-            translator.cplugContext.loopEndBeats   = data->processContext->cycleEndMusic;
+            translator.cplugContext.loopStartBeats  = data->processContext->cycleStartMusic;
+            translator.cplugContext.loopEndBeats    = data->processContext->cycleEndMusic;
         }
         if (data->processContext->state & Steinberg_Vst_ProcessContext_StatesAndFlags_kTempoValid)
         {
             translator.cplugContext.flags |= CPLUG_FLAG_TRANSPORT_HAS_BPM;
-            translator.cplugContext.bpm   = data->processContext->tempo;
+            translator.cplugContext.bpm    = data->processContext->tempo;
         }
         if (data->processContext->state & Steinberg_Vst_ProcessContext_StatesAndFlags_kTimeSigValid)
         {
             translator.cplugContext.flags              |= CPLUG_FLAG_TRANSPORT_HAS_TIME_SIGNATURE;
-            translator.cplugContext.timeSigNumerator   = data->processContext->timeSigNumerator;
-            translator.cplugContext.timeSigDenominator = data->processContext->timeSigDenominator;
+            translator.cplugContext.timeSigNumerator    = data->processContext->timeSigNumerator;
+            translator.cplugContext.timeSigDenominator  = data->processContext->timeSigDenominator;
         }
     }
 
@@ -1793,7 +1790,6 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_activateBus(
         _cplug_getBusDirectionStr(bus_direction),
         bus_idx,
         state);
-    VST3Plugin* vst3 = _cplug_pointerShiftComponent((VST3Component*)self);
     CPLUG_LOG_ASSERT_RETURN(
         bus_direction == Steinberg_Vst_BusDirections_kInput || bus_direction == Steinberg_Vst_BusDirections_kOutput,
         Steinberg_kInvalidArgument);
@@ -1957,8 +1953,6 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         _cplug_tuid2str(class_id),
         _cplug_tuid2str(iid),
         instance);
-    VST3Factory* const factory = (VST3Factory*)(self);
-
     if (tuid_match(class_id, cplug_tuid_component) &&
         (tuid_match(iid, Steinberg_Vst_IComponent_iid) || tuid_match(iid, Steinberg_FUnknown_iid)))
     {
@@ -2092,20 +2086,20 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Factory_setHostContext(void* const 
 
 #if defined(_WIN32)
 #define CPLUG_VST3_EXPORT __declspec(dllexport)
-#define VST3_ENTRY InitDll
-#define VST3_ENTRY_ARGS void
-#define VST3_EXIT ExitDll
+#define VST3_ENTRY        InitDll
+#define VST3_ENTRY_ARGS   void
+#define VST3_EXIT         ExitDll
 #else
 #define CPLUG_VST3_EXPORT __attribute__((visibility("default")))
 
 #if defined(__APPLE__)
-#define VST3_ENTRY bundleEntry
+#define VST3_ENTRY      bundleEntry
 #define VST3_ENTRY_ARGS void* _ptr
-#define VST3_EXIT bundleExit
+#define VST3_EXIT       bundleExit
 #else
-#define VST3_ENTRY ModuleEntry
+#define VST3_ENTRY      ModuleEntry
 #define VST3_ENTRY_ARGS void* _ptr
-#define VST3_EXIT ModuleExit
+#define VST3_EXIT       ModuleExit
 #endif
 
 #endif

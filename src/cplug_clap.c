@@ -596,9 +596,8 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
     // cplug_log("CLAPPlugin_process => %p", process);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    struct ClapProcessContextTranslator translator;
-    memset(&translator, 0, sizeof(translator));
-    translator.cplugContext.numFrames = process->frames_count;
+    struct ClapProcessContextTranslator translator = {0};
+    translator.cplugContext.numFrames              = process->frames_count;
 
     if (process->transport)
     {
@@ -610,27 +609,27 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
         if (process->transport->song_pos_beats != 0)
         {
             translator.cplugContext.flags |= CPLUG_FLAG_TRANSPORT_HAS_PLAYHEAD_BEATS;
-            double posBeats               = (double)process->transport->song_pos_beats / (double)CLAP_BEATTIME_FACTOR;
+            double posBeats                = (double)process->transport->song_pos_beats / (double)CLAP_BEATTIME_FACTOR;
             translator.cplugContext.playheadBeats = posBeats;
         }
         if (process->transport->flags & CLAP_TRANSPORT_HAS_TEMPO)
         {
             translator.cplugContext.flags |= CPLUG_FLAG_TRANSPORT_HAS_BPM;
-            translator.cplugContext.bpm   = process->transport->tempo;
+            translator.cplugContext.bpm    = process->transport->tempo;
         }
         if (process->transport->flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE)
         {
             translator.cplugContext.flags |= CPLUG_FLAG_TRANSPORT_IS_LOOPING;
-            double loopStartBeats         = (double)process->transport->loop_start_beats / (double)CLAP_BEATTIME_FACTOR;
-            double loopEndBeats           = (double)process->transport->loop_end_beats / (double)CLAP_BEATTIME_FACTOR;
+            double loopStartBeats = (double)process->transport->loop_start_beats / (double)CLAP_BEATTIME_FACTOR;
+            double loopEndBeats   = (double)process->transport->loop_end_beats / (double)CLAP_BEATTIME_FACTOR;
             translator.cplugContext.loopStartBeats = loopStartBeats;
             translator.cplugContext.loopStartBeats = loopEndBeats;
         }
         if (process->transport->flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE)
         {
             translator.cplugContext.flags              |= CPLUG_FLAG_TRANSPORT_HAS_TIME_SIGNATURE;
-            translator.cplugContext.timeSigNumerator   = process->transport->tsig_num;
-            translator.cplugContext.timeSigDenominator = process->transport->tsig_denom;
+            translator.cplugContext.timeSigNumerator    = process->transport->tsig_num;
+            translator.cplugContext.timeSigDenominator  = process->transport->tsig_denom;
         }
     }
 

@@ -1122,8 +1122,7 @@ static OSStatus AUMethodProcessAudio(
 
     if (*ioActionFlags == 0 || (*ioActionFlags & kAudioUnitRenderAction_DoNotCheckRenderArgs))
     {
-        AUv2ProcessContextTranslator translator;
-        memset(&translator, 0, sizeof(translator));
+        AUv2ProcessContextTranslator translator = {0};
 
         CplugProcessContext* ctx    = &translator.cplugContext;
         HostCallbackInfo*    hostcb = &auv2->mHostCallbackInfo;
@@ -1146,7 +1145,7 @@ static OSStatus AUMethodProcessAudio(
             if (timesigNum != 0)
             {
                 ctx->flags            |= CPLUG_FLAG_TRANSPORT_HAS_TIME_SIGNATURE;
-                ctx->timeSigNumerator = timesigNum;
+                ctx->timeSigNumerator  = timesigNum;
             }
         }
         // Ableton 10 doesn't support transportStateProc2, so this should be our first choice
