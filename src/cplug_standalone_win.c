@@ -228,18 +228,12 @@ DWORD CALLBACK CPWIN_HandleDeviceChange(
     CM_NOTIFY_ACTION      Action,
     PCM_NOTIFY_EVENT_DATA EventData,
     DWORD                 EventDataSize);
+
+#ifdef HOTRELOAD_WATCH_DIR
 // File watch thread
 DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd);
 int          _gFlagExitFileWatchThread;
-
-// Main Thread
-LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-
-static inline UINT64 CPWIN_RoundUp(UINT64 v, UINT64 align)
-{
-    UINT64 inc = (align - (v % align)) % align;
-    return v + inc;
-}
+HANDLE       _ghWatchThread;
 
 // Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
 struct
@@ -254,6 +248,16 @@ static inline INT64 CPWIN_GetNowNS()
     INT64 q       = now.QuadPart / _gTimer.freq.QuadPart;
     INT64 r       = now.QuadPart % _gTimer.freq.QuadPart;
     return q * 1000000000 + r * 1000000000 / _gTimer.freq.QuadPart;
+}
+#endif // HOTRELOAD_WATCH_DIR
+
+// Main Thread
+LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
+static inline UINT64 CPWIN_RoundUp(UINT64 v, UINT64 align)
+{
+    UINT64 inc = (align - (v % align)) % align;
+    return v + inc;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmdshow)
@@ -276,8 +280,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         return 1;
     }
 
+#ifdef HOTRELOAD_WATCH_DIR
     QueryPerformanceFrequency(&_gTimer.freq);
     QueryPerformanceCounter(&_gTimer.start);
+#endif
 
     memset(&_gCPLUG, 0, sizeof(_gCPLUG));
     memset(&_gPluginState, 0, sizeof(_gPluginState));
@@ -327,6 +333,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     CPWIN_Audio_SetDevice(-1); // -1 == default device
     CPWIN_Audio_Start();
+    cplug_assert(_gAudio.ProcessBuffer);
 
     /////////////////
     // INIT WINDOW //
@@ -429,10 +436,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     cplug_assert(result == CR_SUCCESS);
     cplug_assert(hCMNotification != NULL);
 
+#ifdef HOTRELOAD_WATCH_DIR
     // Setup file watcher
     _gFlagExitFileWatchThread = 0;
-    HANDLE hWatchThread       = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
-    cplug_assert(hWatchThread != NULL);
+    _ghWatchThread            = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
+    cplug_assert(_ghWatchThread != NULL);
+#endif
 
     // Window ready
     _gCPLUG.setParent(_gCPLUG.UserGUI, hWindow);
@@ -447,10 +456,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         DispatchMessageA(&msg);
     }
 
+#ifdef HOTRELOAD_WATCH_DIR
     // Stop file watcher
     _gFlagExitFileWatchThread = 1;
-    WaitForSingleObject(hWatchThread, INFINITE);
-    CloseHandle(hWatchThread);
+    WaitForSingleObject(_ghWatchThread, INFINITE);
+    CloseHandle(_ghWatchThread);
+#endif
 
     // Shutdown device notifications
     CM_Unregister_Notification(hCMNotification);
@@ -553,6 +564,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     {
         switch (wParam)
         {
+#ifdef HOTRELOAD_BUILD_COMMAND
         case IDM_Hotreload:
         {
             UINT64 reloadStart = CPWIN_GetNowNS();
@@ -642,6 +654,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             fprintf(stderr, "Reload time %.2fms\n", reload_ms);
             break;
         }
+#endif // HOTRELOAD_BUILD_COMMAND
         case IDM_SampleRate_44100:
         case IDM_SampleRate_48000:
         case IDM_SampleRate_88200:
@@ -759,29 +772,33 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 void CPWIN_LoadPlugin()
 {
     cplug_assert(_gCPLUG.Library == NULL);
+
+#ifdef HOTRELOAD_LIB_PATH
+#define CPLUG_GET_PROC_ADDR(name) GetProcAddress(_gCPLUG.Library, #name)
     _gCPLUG.Library = LoadLibraryA(HOTRELOAD_LIB_PATH);
+#else // not a hotrealoding build
+#define CPLUG_GET_PROC_ADDR(func) func
+#endif
 
     // This looks ugly because of the strict types in C++. C is ironically more elegant
-    *(LONG_PTR*)&_gCPLUG.libraryLoad   = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_libraryLoad");
-    *(LONG_PTR*)&_gCPLUG.libraryUnload = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_libraryUnload");
-    *(LONG_PTR*)&_gCPLUG.createPlugin  = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_createPlugin");
-    *(LONG_PTR*)&_gCPLUG.destroyPlugin = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_destroyPlugin");
-    *(LONG_PTR*)&_gCPLUG.getOutputBusChannelCount =
-        (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_getOutputBusChannelCount");
-    *(LONG_PTR*)&_gCPLUG.setSampleRateAndBlockSize =
-        (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_setSampleRateAndBlockSize");
-    *(LONG_PTR*)&_gCPLUG.process   = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_process");
-    *(LONG_PTR*)&_gCPLUG.saveState = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_saveState");
-    *(LONG_PTR*)&_gCPLUG.loadState = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_loadState");
+    *(LONG_PTR*)&_gCPLUG.libraryLoad               = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryLoad);
+    *(LONG_PTR*)&_gCPLUG.libraryUnload             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryUnload);
+    *(LONG_PTR*)&_gCPLUG.createPlugin              = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createPlugin);
+    *(LONG_PTR*)&_gCPLUG.destroyPlugin             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyPlugin);
+    *(LONG_PTR*)&_gCPLUG.getOutputBusChannelCount  = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getOutputBusChannelCount);
+    *(LONG_PTR*)&_gCPLUG.setSampleRateAndBlockSize = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSampleRateAndBlockSize);
+    *(LONG_PTR*)&_gCPLUG.process                   = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_process);
+    *(LONG_PTR*)&_gCPLUG.saveState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_saveState);
+    *(LONG_PTR*)&_gCPLUG.loadState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_loadState);
 
-    *(LONG_PTR*)&_gCPLUG.createGUI      = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_createGUI");
-    *(LONG_PTR*)&_gCPLUG.destroyGUI     = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_destroyGUI");
-    *(LONG_PTR*)&_gCPLUG.setParent      = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_setParent");
-    *(LONG_PTR*)&_gCPLUG.setVisible     = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_setVisible");
-    *(LONG_PTR*)&_gCPLUG.setScaleFactor = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_setScaleFactor");
-    *(LONG_PTR*)&_gCPLUG.getSize        = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_getSize");
-    *(LONG_PTR*)&_gCPLUG.checkSize      = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_checkSize");
-    *(LONG_PTR*)&_gCPLUG.setSize        = (LONG_PTR)GetProcAddress(_gCPLUG.Library, "cplug_setSize");
+    *(LONG_PTR*)&_gCPLUG.createGUI      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createGUI);
+    *(LONG_PTR*)&_gCPLUG.destroyGUI     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyGUI);
+    *(LONG_PTR*)&_gCPLUG.setParent      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setParent);
+    *(LONG_PTR*)&_gCPLUG.setVisible     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setVisible);
+    *(LONG_PTR*)&_gCPLUG.setScaleFactor = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setScaleFactor);
+    *(LONG_PTR*)&_gCPLUG.getSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getSize);
+    *(LONG_PTR*)&_gCPLUG.checkSize      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_checkSize);
+    *(LONG_PTR*)&_gCPLUG.setSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSize);
 
     cplug_assert(NULL != _gCPLUG.libraryLoad);
     cplug_assert(NULL != _gCPLUG.libraryUnload);
@@ -864,6 +881,7 @@ int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytes
 }
 #pragma endregion PLUGIN_STATE
 
+#ifdef HOTRELOAD_WATCH_DIR
 DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
 {
     // Most this code was taken from here: https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8
@@ -957,6 +975,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
     }
     return 0;
 }
+#endif // HOTRELOAD_WATCH_DIR
 
 #pragma region MENUS
 
@@ -1438,11 +1457,13 @@ void CPWIN_Audio_SetDevice(int deviceIdx)
 
 void CPWIN_Audio_Start()
 {
+#ifdef HOTRELOAD_BUILD_COMMAND
     if (_gCPLUG.Library == NULL)
     {
         cplug_log("[FAILED] Called CPWIN_Audio_Start when no plugin is loaded");
         return;
     }
+#endif
     cplug_assert(_gAudio.SampleRate != 0);
     cplug_assert(_gAudio.BlockSize != 0);
     static const IID _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};
