@@ -80,7 +80,9 @@ enum MIDIMenuTag
 
 struct STAND_Plugin
 {
+#ifdef HOTRELOAD_LIB_PATH
     void* library;
+#endif
     void* userPlugin;
     void* userGUI;
 
@@ -104,6 +106,7 @@ struct STAND_Plugin
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
 } g_plugin;
 
+#ifdef HOTRELOAD_BUILD_COMMAND
 struct STAND_PluginStateContext
 {
     uint8_t* data;
@@ -115,6 +118,7 @@ struct STAND_PluginStateContext
 } g_pluginState;
 int64_t STAND_writeStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
 int64_t STAND_readStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
+#endif // HOTRELOAD_BUILD_COMMAND
 
 mach_timebase_info_data_t g_timebase;
 uint64_t                  g_appStartTime = 0;
@@ -213,7 +217,6 @@ OSStatus STAND_audioDeviceChangeListener(
     // create user plugin
     memset(&g_plugin, 0, sizeof(g_plugin));
     STAND_openLibraryWithSymbols();
-    memset(&g_pluginState, 0, sizeof(g_pluginState));
 
     g_plugin.libraryLoad();
     g_plugin.userPlugin = g_plugin.createPlugin();
@@ -367,6 +370,9 @@ OSStatus STAND_audioDeviceChangeListener(
     [midiInputMenu setTag:MIDIMenuTagInput];
     STAND_menuRefreshMIDIInputItems();
 
+#ifdef HOTRELOAD_WATCH_DIR
+    memset(&g_pluginState, 0, sizeof(g_pluginState));
+
     // https://developer.apple.com/documentation/coreservices/file_system_events?language=objc
     static const void* watchpaths[] = {CFSTR(HOTRELOAD_WATCH_DIR)};
     CFArrayRef         arrref       = CFArrayCreate(NULL, (const void**)&watchpaths, ARRSIZE(watchpaths), NULL);
@@ -386,6 +392,7 @@ OSStatus STAND_audioDeviceChangeListener(
     bool started = FSEventStreamStart(g_filesystemEventStream);
     assert(started);
     CFRelease(arrref);
+#endif // HOTRELOAD_WATCH_DIR
 
     [NSApp activateIgnoringOtherApps:YES];
 }
@@ -413,17 +420,21 @@ OSStatus STAND_audioDeviceChangeListener(
     }
     pthread_mutex_destroy(&g_audioMutex);
 
+#ifdef HOTRELOAD_LIB_PATH
     if (g_plugin.library)
     {
+#endif
         g_plugin.setVisible(g_plugin.userGUI, false);
         g_plugin.setParent(g_plugin.userGUI, NULL);
         g_plugin.destroyGUI(g_plugin.userGUI);
 
         g_plugin.destroyPlugin(g_plugin.userPlugin);
         g_plugin.libraryUnload();
+#ifdef HOTRELOAD_LIB_PATH
         dlclose(g_plugin.library);
         munmap(g_pluginState.data, g_pluginState.bytesReserved);
     }
+#endif
 
     [g_window release];
     [[NSApp menu] release];
@@ -521,8 +532,10 @@ OSStatus STAND_audioDeviceChangeListener(
 @implementation WindowDelegate
 - (NSSize)windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
 {
+#ifdef HOTRELOAD_LIB_PATH
     if (g_plugin.library == NULL)
         return frameSize;
+#endif
 
     CGFloat windowHeight   = [sender frame].size.height;
     CGFloat contentHeight  = [[sender contentView] frame].size.height;
@@ -537,8 +550,10 @@ OSStatus STAND_audioDeviceChangeListener(
 }
 - (void)windowDidResize:(NSNotification*)notification
 {
+#ifdef HOTRELOAD_LIB_PATH
     if (g_plugin.library == NULL)
         return;
+#endif
 
     NSWindow* window = notification.object;
     CGSize    size   = [window contentView].frame.size;
@@ -889,11 +904,13 @@ OSStatus STAND_audioIOProc(
 // Main thread
 void STAND_audioStart()
 {
+#ifdef HOTRELOAD_LIB_PATH
     if (g_plugin.library == NULL)
     {
         cplug_log("[FAILED] Called STAND_audioStart when no plugin is loaded");
         return;
     }
+#endif // HOTRELOAD_LIB_PATH
     if (g_audioOutputProcID)
         STAND_audioStop();
 
@@ -1122,29 +1139,34 @@ OSStatus STAND_audioDeviceChangeListener(
 #pragma mark -Hotreloading
 void STAND_openLibraryWithSymbols()
 {
+#ifdef HOTRELOAD_LIB_PATH
     cplug_assert(g_plugin.library == NULL);
     g_plugin.library = dlopen(HOTRELOAD_LIB_PATH, RTLD_NOW);
     cplug_assert(g_plugin.library != NULL);
+#define CPLUG_DLSYM(name) dlsym(g_plugin.library, #name)
+#else
+#define CPLUG_DLSYM(func) func
+#endif // HOTRELOAD_LIB_PATH
 
     // The ugly pointer silliness seen here is to deal with C++ not liking us setting void pointers
-    *(size_t*)&g_plugin.libraryLoad               = (size_t)dlsym(g_plugin.library, "cplug_libraryLoad");
-    *(size_t*)&g_plugin.libraryUnload             = (size_t)dlsym(g_plugin.library, "cplug_libraryUnload");
-    *(size_t*)&g_plugin.createPlugin              = (size_t)dlsym(g_plugin.library, "cplug_createPlugin");
-    *(size_t*)&g_plugin.destroyPlugin             = (size_t)dlsym(g_plugin.library, "cplug_destroyPlugin");
-    *(size_t*)&g_plugin.getOutputBusChannelCount  = (size_t)dlsym(g_plugin.library, "cplug_getOutputBusChannelCount");
-    *(size_t*)&g_plugin.setSampleRateAndBlockSize = (size_t)dlsym(g_plugin.library, "cplug_setSampleRateAndBlockSize");
-    *(size_t*)&g_plugin.process                   = (size_t)dlsym(g_plugin.library, "cplug_process");
-    *(size_t*)&g_plugin.saveState                 = (size_t)dlsym(g_plugin.library, "cplug_saveState");
-    *(size_t*)&g_plugin.loadState                 = (size_t)dlsym(g_plugin.library, "cplug_loadState");
+    *(size_t*)&g_plugin.libraryLoad               = (size_t)CPLUG_DLSYM(cplug_libraryLoad);
+    *(size_t*)&g_plugin.libraryUnload             = (size_t)CPLUG_DLSYM(cplug_libraryUnload);
+    *(size_t*)&g_plugin.createPlugin              = (size_t)CPLUG_DLSYM(cplug_createPlugin);
+    *(size_t*)&g_plugin.destroyPlugin             = (size_t)CPLUG_DLSYM(cplug_destroyPlugin);
+    *(size_t*)&g_plugin.getOutputBusChannelCount  = (size_t)CPLUG_DLSYM(cplug_getOutputBusChannelCount);
+    *(size_t*)&g_plugin.setSampleRateAndBlockSize = (size_t)CPLUG_DLSYM(cplug_setSampleRateAndBlockSize);
+    *(size_t*)&g_plugin.process                   = (size_t)CPLUG_DLSYM(cplug_process);
+    *(size_t*)&g_plugin.saveState                 = (size_t)CPLUG_DLSYM(cplug_saveState);
+    *(size_t*)&g_plugin.loadState                 = (size_t)CPLUG_DLSYM(cplug_loadState);
 
-    *(size_t*)&g_plugin.createGUI      = (size_t)dlsym(g_plugin.library, "cplug_createGUI");
-    *(size_t*)&g_plugin.destroyGUI     = (size_t)dlsym(g_plugin.library, "cplug_destroyGUI");
-    *(size_t*)&g_plugin.setParent      = (size_t)dlsym(g_plugin.library, "cplug_setParent");
-    *(size_t*)&g_plugin.setVisible     = (size_t)dlsym(g_plugin.library, "cplug_setVisible");
-    *(size_t*)&g_plugin.setScaleFactor = (size_t)dlsym(g_plugin.library, "cplug_setScaleFactor");
-    *(size_t*)&g_plugin.getSize        = (size_t)dlsym(g_plugin.library, "cplug_getSize");
-    *(size_t*)&g_plugin.checkSize      = (size_t)dlsym(g_plugin.library, "cplug_checkSize");
-    *(size_t*)&g_plugin.setSize        = (size_t)dlsym(g_plugin.library, "cplug_setSize");
+    *(size_t*)&g_plugin.createGUI      = (size_t)CPLUG_DLSYM(cplug_createGUI);
+    *(size_t*)&g_plugin.destroyGUI     = (size_t)CPLUG_DLSYM(cplug_destroyGUI);
+    *(size_t*)&g_plugin.setParent      = (size_t)CPLUG_DLSYM(cplug_setParent);
+    *(size_t*)&g_plugin.setVisible     = (size_t)CPLUG_DLSYM(cplug_setVisible);
+    *(size_t*)&g_plugin.setScaleFactor = (size_t)CPLUG_DLSYM(cplug_setScaleFactor);
+    *(size_t*)&g_plugin.getSize        = (size_t)CPLUG_DLSYM(cplug_getSize);
+    *(size_t*)&g_plugin.checkSize      = (size_t)CPLUG_DLSYM(cplug_checkSize);
+    *(size_t*)&g_plugin.setSize        = (size_t)CPLUG_DLSYM(cplug_setSize);
 
     cplug_assert(NULL != g_plugin.libraryLoad);
     cplug_assert(NULL != g_plugin.libraryUnload);
@@ -1166,6 +1188,7 @@ void STAND_openLibraryWithSymbols()
     cplug_assert(NULL != g_plugin.setSize);
 }
 
+#ifdef HOTRELOAD_BUILD_COMMAND
 // main thread
 void STAND_filesystemEventCallback(
     ConstFSEventStreamRef          streamRef,
@@ -1309,3 +1332,4 @@ int64_t STAND_readStateProc(const void* stateCtx, void* readPos, size_t maxBytes
 
     return bytesToActualyRead;
 }
+#endif // HOTRELOAD_BUILD_COMMAND

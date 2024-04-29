@@ -56,7 +56,6 @@ Most plugins don't support these features, & most users don't ask for them or kn
 
 -   AUv2: Support multiple input/output busses
 -   AUv2: Support sample accurate processing AUv2
--   Standalone: Support a release build
 -   Add example using PUGL & NanoVG
 -   Add example using Dear ImGUI
 -   Add example using Nuklear
