@@ -53,9 +53,11 @@
 
 struct CPWIN_Plugin
 {
+#ifdef HOTRELOAD_LIB_PATH
     HMODULE Library;
-    void*   UserPlugin;
-    void*   UserGUI;
+#endif
+    void* UserPlugin;
+    void* UserGUI;
 
     void (*libraryLoad)();
     void (*libraryUnload)();
@@ -79,6 +81,7 @@ struct CPWIN_Plugin
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
 
+#ifdef HOTRELOAD_WATCH_DIR
 struct CPWIN_PluginStateContext
 {
     BYTE*  Data;
@@ -90,6 +93,27 @@ struct CPWIN_PluginStateContext
 } _gPluginState;
 int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
 int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
+
+// File watch thread
+DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd);
+int          _gFlagExitFileWatchThread;
+HANDLE       _ghWatchThread;
+
+// Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
+struct
+{
+    LARGE_INTEGER freq, start;
+} _gTimer;
+static inline INT64 CPWIN_GetNowNS()
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    now.QuadPart -= _gTimer.start.QuadPart;
+    INT64 q       = now.QuadPart / _gTimer.freq.QuadPart;
+    INT64 r       = now.QuadPart % _gTimer.freq.QuadPart;
+    return q * 1000000000 + r * 1000000000 / _gTimer.freq.QuadPart;
+}
+#endif // HOTRELOAD_WATCH_DIR
 
 //////////
 // MIDI //
@@ -229,28 +253,6 @@ DWORD CALLBACK CPWIN_HandleDeviceChange(
     PCM_NOTIFY_EVENT_DATA EventData,
     DWORD                 EventDataSize);
 
-#ifdef HOTRELOAD_WATCH_DIR
-// File watch thread
-DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd);
-int          _gFlagExitFileWatchThread;
-HANDLE       _ghWatchThread;
-
-// Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
-struct
-{
-    LARGE_INTEGER freq, start;
-} _gTimer;
-static inline INT64 CPWIN_GetNowNS()
-{
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    now.QuadPart -= _gTimer.start.QuadPart;
-    INT64 q       = now.QuadPart / _gTimer.freq.QuadPart;
-    INT64 r       = now.QuadPart % _gTimer.freq.QuadPart;
-    return q * 1000000000 + r * 1000000000 / _gTimer.freq.QuadPart;
-}
-#endif // HOTRELOAD_WATCH_DIR
-
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -283,10 +285,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 #ifdef HOTRELOAD_WATCH_DIR
     QueryPerformanceFrequency(&_gTimer.freq);
     QueryPerformanceCounter(&_gTimer.start);
+    memset(&_gPluginState, 0, sizeof(_gPluginState));
 #endif
 
     memset(&_gCPLUG, 0, sizeof(_gCPLUG));
-    memset(&_gPluginState, 0, sizeof(_gPluginState));
     memset(&_gMIDI, 0, sizeof(_gMIDI));
     memset(&_gAudio, 0, sizeof(_gAudio));
     memset(&_gMenus, 0, sizeof(_gMenus));
@@ -479,19 +481,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // Shutdown MIDI
     CPWIN_MIDI_DisconnectInput();
 
-    // Destroy plugin
+// Destroy plugin
+#ifdef HOTRELOAD_WATCH_DIR
     if (_gCPLUG.Library)
     {
+#endif
         _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
         _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
         _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
         _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
         _gCPLUG.libraryUnload();
+#ifdef HOTRELOAD_WATCH_DIR
         FreeLibrary(_gCPLUG.Library);
     }
-
     if (_gPluginState.Data)
         VirtualFree(_gPluginState.Data, _gPluginState.BytesReserved, 0);
+#endif
 
     DestroyWindow(hWindow);
     OleUninitialize();
@@ -771,11 +776,11 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 void CPWIN_LoadPlugin()
 {
-    cplug_assert(_gCPLUG.Library == NULL);
-
 #ifdef HOTRELOAD_LIB_PATH
+    cplug_assert(_gCPLUG.Library == NULL);
 #define CPLUG_GET_PROC_ADDR(name) GetProcAddress(_gCPLUG.Library, #name)
     _gCPLUG.Library = LoadLibraryA(HOTRELOAD_LIB_PATH);
+    cplug_assert(_gCPLUG.Library != NULL);
 #else // not a hotrealoding build
 #define CPLUG_GET_PROC_ADDR(func) func
 #endif
@@ -820,6 +825,7 @@ void CPWIN_LoadPlugin()
     cplug_assert(NULL != _gCPLUG.setSize);
 }
 
+#ifdef HOTRELOAD_WATCH_DIR
 #pragma region PLUGIN_STATE
 int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
@@ -881,7 +887,6 @@ int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytes
 }
 #pragma endregion PLUGIN_STATE
 
-#ifdef HOTRELOAD_WATCH_DIR
 DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
 {
     // Most this code was taken from here: https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8
