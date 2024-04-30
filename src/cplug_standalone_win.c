@@ -252,6 +252,7 @@ DWORD CALLBACK CPWIN_HandleDeviceChange(
     CM_NOTIFY_ACTION      Action,
     PCM_NOTIFY_EVENT_DATA EventData,
     DWORD                 EventDataSize);
+HCMNOTIFICATION _ghCMNotification;
 
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -427,16 +428,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     // Callback to detect connected/disconnected MIDI/Audio devices
     // Must be initialised afer the menu because the callback changes menu items based on new/removed devices
-    HCMNOTIFICATION  hCMNotification;
     CM_NOTIFY_FILTER notifyFilter;
     memset(&notifyFilter, 0, sizeof(notifyFilter));
     notifyFilter.cbSize     = sizeof(notifyFilter);
     notifyFilter.Flags      = CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES;
     notifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
 
-    HRESULT result = CM_Register_Notification(&notifyFilter, hWindow, CPWIN_HandleDeviceChange, &hCMNotification);
+    HRESULT result = CM_Register_Notification(&notifyFilter, hWindow, CPWIN_HandleDeviceChange, &_ghCMNotification);
     cplug_assert(result == CR_SUCCESS);
-    cplug_assert(hCMNotification != NULL);
+    cplug_assert(_ghCMNotification != NULL);
 
 #ifdef HOTRELOAD_WATCH_DIR
     // Setup file watcher
@@ -458,47 +458,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         DispatchMessageA(&msg);
     }
 
-#ifdef HOTRELOAD_WATCH_DIR
-    // Stop file watcher
-    _gFlagExitFileWatchThread = 1;
-    WaitForSingleObject(_ghWatchThread, INFINITE);
-    CloseHandle(_ghWatchThread);
-#endif
-
-    // Shutdown device notifications
-    CM_Unregister_Notification(hCMNotification);
-
-    // Shutdown audio
-    if (_gAudio.hAudioEvent)
-        CPWIN_Audio_Stop();
-    cplug_assert(_gAudio.ProcessBuffer != NULL);
-    VirtualFree(_gAudio.ProcessBuffer, _gAudio.ProcessBufferCap, 0);
-    cplug_assert(_gAudio.pIMMDevice != NULL);
-    _gAudio.pIMMDevice->lpVtbl->Release(_gAudio.pIMMDevice);
-    cplug_assert(_gAudio.pIMMDeviceEnumerator != NULL);
-    _gAudio.pIMMDeviceEnumerator->lpVtbl->Release(_gAudio.pIMMDeviceEnumerator);
-
-    // Shutdown MIDI
-    CPWIN_MIDI_DisconnectInput();
-
-// Destroy plugin
-#ifdef HOTRELOAD_WATCH_DIR
-    if (_gCPLUG.Library)
-    {
-#endif
-        _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
-        _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
-        _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
-        _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
-        _gCPLUG.libraryUnload();
-#ifdef HOTRELOAD_WATCH_DIR
-        FreeLibrary(_gCPLUG.Library);
-    }
-    if (_gPluginState.Data)
-        VirtualFree(_gPluginState.Data, _gPluginState.BytesReserved, 0);
-#endif
-
-    DestroyWindow(hWindow);
     OleUninitialize();
     ReleaseMutex(hMutexOneInstance);
     CloseHandle(hMutexOneInstance);
@@ -512,10 +471,47 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     case WM_CREATE:
         break;
     case WM_DESTROY:
-        break;
-    case WM_CLOSE: // User pressed the window X/Close button
         PostQuitMessage(0);
-        break;
+        return 0;
+    case WM_CLOSE: // User pressed the window X/Close button
+        // Shutdown device notifications
+        CM_Unregister_Notification(_ghCMNotification);
+
+        // Shutdown audio
+        if (_gAudio.hAudioEvent)
+            CPWIN_Audio_Stop();
+        cplug_assert(_gAudio.ProcessBuffer != NULL);
+        VirtualFree(_gAudio.ProcessBuffer, _gAudio.ProcessBufferCap, 0);
+        cplug_assert(_gAudio.pIMMDevice != NULL);
+        _gAudio.pIMMDevice->lpVtbl->Release(_gAudio.pIMMDevice);
+        cplug_assert(_gAudio.pIMMDeviceEnumerator != NULL);
+        _gAudio.pIMMDeviceEnumerator->lpVtbl->Release(_gAudio.pIMMDeviceEnumerator);
+
+        // Shutdown MIDI
+        CPWIN_MIDI_DisconnectInput();
+
+        // Destroy plugin
+#ifdef HOTRELOAD_WATCH_DIR
+        // Stop file watcher
+        _gFlagExitFileWatchThread = 1;
+        WaitForSingleObject(_ghWatchThread, INFINITE);
+        CloseHandle(_ghWatchThread);
+        if (_gCPLUG.Library)
+        {
+#endif
+            _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
+            _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
+            _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
+            _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
+            _gCPLUG.libraryUnload();
+#ifdef HOTRELOAD_WATCH_DIR
+            FreeLibrary(_gCPLUG.Library);
+        }
+        if (_gPluginState.Data)
+            VirtualFree(_gPluginState.Data, _gPluginState.BytesReserved, 0);
+#endif
+        DestroyWindow(hWnd);
+        return 0;
     case WM_SIZING: // User is resizing
     {
         RECT*    rect   = (RECT*)lParam;
@@ -589,7 +585,8 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
                 _gCPLUG.libraryUnload();
-                FreeLibrary(_gCPLUG.Library);
+                BOOL ok = FreeLibrary(_gCPLUG.Library);
+                cplug_assert(ok);
                 memset(&_gCPLUG, 0, sizeof(_gCPLUG));
             }
 
