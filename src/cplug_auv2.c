@@ -392,11 +392,6 @@ OSStatus AUMethodGetPropertyInfo(
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(CFStringRef));
         break;
 
-    case kAudioUnitProperty_LastRenderSampleTime:
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(Float64));
-        break;
-
 #if CPLUG_IS_INSTRUMENT
     case kMusicDeviceProperty_InstrumentCount:
         if (inScope != kAudioUnitScope_Global)
