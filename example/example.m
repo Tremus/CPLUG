@@ -183,8 +183,9 @@ void cplug_setVisible(void* userGUI, bool visible) { [(MyGUIWrapper*)userGUI set
 void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
 {
     MyGUIWrapper* wrapper = (MyGUIWrapper*)userGUI;
-    *width                = (uint32_t)wrapper.frame.size.width;
-    *height               = (uint32_t)wrapper.frame.size.height;
+    CGSize        size    = wrapper.frame.size;
+    *width                = (uint32_t)size.width;
+    *height               = (uint32_t)size.height;
 }
 
 bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)

@@ -350,7 +350,7 @@ OSStatus AUMethodGetPropertyInfo(
         else if (inScope == kAudioUnitScope_Output)
             num = CPLUG_NUM_OUTPUT_BUSSES;
 
-        CPLUG_LOG_ASSERT_RETURN(num != 0u, kAudioUnitErr_InvalidProperty);
+        CPLUG_LOG_ASSERT_RETURN(num != 0, kAudioUnitErr_InvalidProperty);
         CPLUG_SAFE_SET_PTR(outDataSize, (UInt32)sizeof(AudioChannelLayoutTag) * num);
         break;
     }
@@ -428,7 +428,7 @@ static OSStatus AUMethodGetProperty(
     // CPLUG_LOG_ASSERT_RETURN(outData != NULL, kAudio_ParamError)
     // CPLUG_LOG_ASSERT_RETURN(ioDataSize != NULL, kAudio_ParamError)
     cplug_log(
-        "AUMethodGetProperty    => %u (%s) %u (%s) %u %p %u",
+        "AUMethodGetProperty     => %u (%s) %u (%s) %u %p %u",
         inID,
         _cplugProperty2Str(inID),
         inScope,
@@ -503,7 +503,7 @@ static OSStatus AUMethodGetProperty(
     {
         AudioUnitParameterID* paramList = (AudioUnitParameterID*)(outData);
         for (UInt32 i = 0; i < CPLUG_NUM_PARAMS; i++)
-            paramList[i] = i;
+            paramList[i] = cplug_getParameterID(auv2->userPlugin, i);
         break;
     }
 
@@ -519,11 +519,11 @@ static OSStatus AUMethodGetProperty(
 
         double min, max;
         cplug_getParameterRange(auv2->userPlugin, inElement, &min, &max);
-        const uint32_t hints      = cplug_getParameterFlags(auv2->userPlugin, inElement);
+        const uint32_t flags      = cplug_getParameterFlags(auv2->userPlugin, inElement);
         const float    defaultVal = cplug_getDefaultParameterValue(auv2->userPlugin, inElement);
 
         paramInfo->unit = 0;
-        if (hints & CPLUG_FLAG_PARAMETER_IS_BOOL)
+        if (flags & CPLUG_FLAG_PARAMETER_IS_BOOL)
             paramInfo->unit = kAudioUnitParameterUnit_Boolean;
         // Audio units appear not to support integer values.
         // They do have a unit type 'indexed', which is meant to be paired with an array of names.
@@ -539,7 +539,7 @@ static OSStatus AUMethodGetProperty(
         // The downside to this is that it allocates a CFString. The upside is we can add value suffixes and indexed
         // param labels in a single function
         paramInfo->flags = kAudioUnitParameterFlag_HasName | kAudioUnitParameterFlag_IsReadable;
-        if ((hints & CPLUG_FLAG_PARAMETER_IS_READ_ONLY) == 0)
+        if ((flags & CPLUG_FLAG_PARAMETER_IS_READ_ONLY) == 0)
             paramInfo->flags |= kAudioUnitParameterFlag_IsWritable;
 
         break;
@@ -774,11 +774,9 @@ static OSStatus AUMethodSetProperty(
         break;
 
     case kAudioUnitProperty_SampleRate:
-    {
         auv2->sampleRate = *(Float64*)inData;
         cplug_setSampleRateAndBlockSize(auv2->userPlugin, auv2->sampleRate, auv2->mMaxFramesPerSlice);
         break;
-    }
 
     case kAudioUnitProperty_StreamFormat:
     {
@@ -812,30 +810,26 @@ static OSStatus AUMethodSetProperty(
         break;
 
     case kAudioUnitProperty_SetRenderCallback:
-    {
         // Pretend to set this. auval only test that you set it, not that you use it
         break;
-    }
 
     case kAudioUnitProperty_PresentPreset:
-    {
         CPLUG_LOG_ASSERT_RETURN(inDataSize == sizeof(AUPreset), kAudioUnitErr_InvalidPropertyValue);
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
         // Pretend to set preset
         break;
-    }
 
     case kAudioUnitProperty_HostCallbacks:
-    {
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
         CPLUG_LOG_ASSERT_RETURN(inDataSize >= sizeof(auv2->mHostCallbackInfo), kAudioUnitErr_InvalidParameterValue);
         memcpy(&auv2->mHostCallbackInfo, inData, sizeof(auv2->mHostCallbackInfo));
         break;
-    }
+
+    case kAudioUnitProperty_ClassInfoFromDocument:
+        break;
 
     default:
         result = kAudioUnitErr_InvalidProperty;
-
         break;
     }
 
@@ -918,22 +912,21 @@ static OSStatus AUMethodRemoveRenderNotify(AUv2Plugin* auv2, AURenderCallback pr
     return noErr;
 }
 
-static OSStatus AUMethodGetParameter(
+static OSStatus AUMethodGetParameterValue(
     AUv2Plugin*              auv2,
     AudioUnitParameterID     param,
     AudioUnitScope           scope,
     AudioUnitElement         elem,
     AudioUnitParameterValue* value)
 {
-    // cplug_log("AUMethodGetParameter => %u %s %u %p", param, _cplugScope2Str(scope), elem, value);
-    CPLUG_LOG_ASSERT_RETURN(elem < CPLUG_NUM_PARAMS, kAudioUnitErr_InvalidParameter);
+    cplug_log("AUMethodGetParameterValue => %u %s %u %p", param, _cplugScope2Str(scope), elem, value);
     CPLUG_LOG_ASSERT_RETURN(auv2->userPlugin != NULL, kAudioUnitErr_Uninitialized);
     *value = (AudioUnitParameterValue)cplug_getParameterValue(auv2->userPlugin, param);
     return noErr;
 }
 
 // this is a (potentially) realtime method; no lock
-static OSStatus AUMethodSetParameter(
+static OSStatus AUMethodSetParameterValue(
     AUv2Plugin*             auv2,
     AudioUnitParameterID    param,
     AudioUnitScope          scope,
@@ -941,9 +934,8 @@ static OSStatus AUMethodSetParameter(
     AudioUnitParameterValue value,
     UInt32                  bufferOffset)
 {
-    // cplug_log("AUMethodSetParameter => %u %s %u %f %u", param, _cplugScope2Str(scope), elem, value, bufferOffset);
+    cplug_log("AUMethodSetParameterValue => %u %s %u %f %u", param, _cplugScope2Str(scope), elem, value, bufferOffset);
     CPLUG_LOG_ASSERT_RETURN(isfinite(value), kAudioUnitErr_InvalidParameter);
-    CPLUG_LOG_ASSERT_RETURN(param < CPLUG_NUM_PARAMS, kAudioUnitErr_InvalidParameter);
     CPLUG_LOG_ASSERT_RETURN(auv2->userPlugin != NULL, kAudioUnitErr_Uninitialized);
 
     if (! isfinite(value))
@@ -1010,48 +1002,32 @@ bool AUv2ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const C
 {
     // cplug_log("AUv2ProcessContextTranslator_enqueueEvent => %u", event->type);
     AUv2ProcessContextTranslator* translator = (AUv2ProcessContextTranslator*)ctx;
+    OSStatus                      status     = noErr;
+    AudioUnitEvent                auevent;
 
     switch (event->type)
     {
-    case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
-    {
-        AudioUnitEvent auevent;
-        auevent.mEventType                        = kAudioUnitEvent_ParameterValueChange;
-        auevent.mArgument.mParameter.mAudioUnit   = translator->auv2->compInstance;
-        auevent.mArgument.mParameter.mParameterID = event->parameter.idx;
-        auevent.mArgument.mParameter.mScope       = kAudioUnitScope_Global;
-        auevent.mArgument.mParameter.mElement     = 0;
-        OSStatus status                           = AUEventListenerNotify(NULL, NULL, &auevent);
-        CPLUG_LOG_ASSERT(status == noErr);
-        return true;
-    }
     case CPLUG_EVENT_PARAM_CHANGE_BEGIN:
-    {
-        AudioUnitEvent auevent;
-        auevent.mEventType                        = kAudioUnitEvent_BeginParameterChangeGesture;
-        auevent.mArgument.mParameter.mAudioUnit   = translator->auv2->compInstance;
-        auevent.mArgument.mParameter.mParameterID = event->parameter.idx;
-        auevent.mArgument.mParameter.mScope       = kAudioUnitScope_Global;
-        auevent.mArgument.mParameter.mElement     = 0;
-        OSStatus status                           = AUEventListenerNotify(NULL, NULL, &auevent);
-        CPLUG_LOG_ASSERT(status == noErr);
-        return true;
-    }
+        auevent.mEventType = kAudioUnitEvent_BeginParameterChangeGesture;
+        break;
+    case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
+        auevent.mEventType = kAudioUnitEvent_ParameterValueChange;
+        break;
     case CPLUG_EVENT_PARAM_CHANGE_END:
-    {
-        AudioUnitEvent auevent;
-        auevent.mEventType                        = kAudioUnitEvent_EndParameterChangeGesture;
-        auevent.mArgument.mParameter.mAudioUnit   = translator->auv2->compInstance;
-        auevent.mArgument.mParameter.mParameterID = event->parameter.idx;
-        auevent.mArgument.mParameter.mScope       = kAudioUnitScope_Global;
-        auevent.mArgument.mParameter.mElement     = 0;
-        OSStatus status                           = AUEventListenerNotify(NULL, NULL, &auevent);
-        CPLUG_LOG_ASSERT(status == noErr);
-        return true;
-    }
+        auevent.mEventType = kAudioUnitEvent_EndParameterChangeGesture;
+        break;
     default:
         return false;
     }
+
+    auevent.mArgument.mParameter.mAudioUnit   = translator->auv2->compInstance;
+    auevent.mArgument.mParameter.mParameterID = event->parameter.id;
+    auevent.mArgument.mParameter.mScope       = kAudioUnitScope_Global;
+    auevent.mArgument.mParameter.mElement     = 0;
+
+    status = AUEventListenerNotify(NULL, NULL, &auevent);
+    CPLUG_LOG_ASSERT(status == noErr);
+    return status == noErr;
 }
 
 bool AUv2ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
@@ -1174,20 +1150,19 @@ static OSStatus AUMethodProcessAudio(
         ctx->getAudioInput  = AUv2ProcessContextTranslator_getAudioInput;
         ctx->getAudioOutput = AUv2ProcessContextTranslator_getAudioOutput;
 
-        translator.auv2    = auv2;
-        translator.midiIdx = 0;
+        translator.auv2 = auv2;
 
         CPLUG_LOG_ASSERT(ioData->mNumberBuffers == 2);
         for (int i = 0; i < ioData->mNumberBuffers; i++)
         {
-            int numChannels = ioData->mBuffers[i].mNumberChannels;
+            UInt32 numChannels = ioData->mBuffers[i].mNumberChannels;
             CPLUG_LOG_ASSERT(numChannels == 1);
             // The very smart people at Apple test you on this. Yes you actually have to return noErr.
             CPLUG_LOG_ASSERT_RETURN(ioData->mBuffers[i].mData != NULL, noErr);
             translator.channels[i] = (float*)ioData->mBuffers[i].mData;
         }
 
-        cplug_process(auv2->userPlugin, &translator.cplugContext);
+        cplug_process(auv2->userPlugin, (CplugProcessContext*)&translator);
         // Clear MIDI event list
         auv2->numEvents = 0;
     }
@@ -1260,9 +1235,9 @@ static AudioComponentMethod AULookup(SInt16 selector)
     case kAudioUnitRemoveRenderNotifySelect:
         return (AudioComponentMethod)AUMethodRemoveRenderNotify;
     case kAudioUnitGetParameterSelect:
-        return (AudioComponentMethod)AUMethodGetParameter;
+        return (AudioComponentMethod)AUMethodGetParameterValue;
     case kAudioUnitSetParameterSelect:
-        return (AudioComponentMethod)AUMethodSetParameter;
+        return (AudioComponentMethod)AUMethodSetParameterValue;
     case kAudioUnitScheduleParametersSelect:
         return (AudioComponentMethod)AUMethodScheduleParameters;
     case kAudioUnitRenderSelect:
@@ -1322,13 +1297,11 @@ __attribute__((visibility("default"))) void* GetPluginFactory(const AudioCompone
     if (numInstances == 0)
         cplug_libraryLoad();
 
-    AUv2Plugin* auv2 = (AUv2Plugin*)(malloc(sizeof(AUv2Plugin)));
-    memset(auv2, 0, sizeof(*auv2));
+    AUv2Plugin* auv2 = (AUv2Plugin*)(calloc(1, sizeof(AUv2Plugin)));
 
-    auv2->mPlugInInterface.Open     = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
-    auv2->mPlugInInterface.Close    = (OSStatus(*)(void*))ComponentBase_AP_Close;
-    auv2->mPlugInInterface.Lookup   = AULookup;
-    auv2->mPlugInInterface.reserved = NULL;
+    auv2->mPlugInInterface.Open   = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
+    auv2->mPlugInInterface.Close  = (OSStatus(*)(void*))ComponentBase_AP_Close;
+    auv2->mPlugInInterface.Lookup = AULookup;
 
     auv2->desc = *inDesc;
 

@@ -193,15 +193,16 @@ bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, c
     cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
     CPLUG_LOG_ASSERT_RETURN(param_index < CPLUG_NUM_PARAMS, false);
 
-    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CLAPPlugin*    clap     = (CLAPPlugin*)plugin->plugin_data;
+    const uint32_t param_id = cplug_getParameterID(clap->userPlugin, param_index);
 
-    param_info->id = param_index;
-    snprintf(param_info->name, sizeof(param_info->name), "%s", cplug_getParameterName(clap->userPlugin, param_index));
+    param_info->id = param_id;
+    snprintf(param_info->name, sizeof(param_info->name), "%s", cplug_getParameterName(clap->userPlugin, param_id));
     param_info->module[0]     = 0;
-    param_info->default_value = cplug_getDefaultParameterValue(clap->userPlugin, param_index);
-    cplug_getParameterRange(clap->userPlugin, param_index, &param_info->min_value, &param_info->max_value);
+    param_info->default_value = cplug_getDefaultParameterValue(clap->userPlugin, param_id);
+    cplug_getParameterRange(clap->userPlugin, param_id, &param_info->min_value, &param_info->max_value);
 
-    uint32_t flags    = cplug_getParameterFlags(clap->userPlugin, param_index);
+    uint32_t flags    = cplug_getParameterFlags(clap->userPlugin, param_id);
     param_info->flags = 0;
     if (flags & CPLUG_FLAG_PARAMETER_IS_READ_ONLY)
         param_info->flags |= CLAP_PARAM_IS_READONLY;
@@ -495,7 +496,7 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         event.header.size = sizeof(event);
         event.header.type = paramEvent->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN ? CLAP_EVENT_PARAM_GESTURE_BEGIN
                                                                                : CLAP_EVENT_PARAM_GESTURE_END;
-        event.param_id    = paramEvent->parameter.idx;
+        event.param_id    = paramEvent->parameter.id;
         return process->out_events->try_push(process->out_events, &event.header);
     }
     case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
@@ -504,7 +505,7 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         memset(&event, 0, sizeof(event));
         event.header.size = sizeof(event);
         event.header.type = CLAP_EVENT_PARAM_VALUE;
-        event.param_id    = paramEvent->parameter.idx;
+        event.param_id    = paramEvent->parameter.id;
         event.value       = paramEvent->parameter.value;
         return process->out_events->try_push(process->out_events, &event.header);
     }
@@ -551,7 +552,7 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         const clap_event_param_value_t* ev = (const clap_event_param_value_t*)hdr;
 
         event->parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
-        event->parameter.idx   = ev->param_id;
+        event->parameter.id    = ev->param_id;
         event->parameter.value = ev->value;
         break;
     }
@@ -596,8 +597,9 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
     // cplug_log("CLAPPlugin_process => %p", process);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    struct ClapProcessContextTranslator translator = {0};
-    translator.cplugContext.numFrames              = process->frames_count;
+    struct ClapProcessContextTranslator translator;
+    memset(&translator, 0, sizeof(translator));
+    translator.cplugContext.numFrames = process->frames_count;
 
     if (process->transport)
     {

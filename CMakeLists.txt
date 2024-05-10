@@ -1,11 +1,11 @@
 # This file is for building the example project ONLY. It's not meant to be a module included as a subdirectory.
 # If you're interested using CMake to build your plugins, read the code here, then copy/paste and modify it in
 # your own projects. It's easy!
-cmake_minimum_required(VERSION 3.7)
+cmake_minimum_required(VERSION 3.14)
 project(cplug_example VERSION 1.0.0)
 
 set(CMAKE_C_STANDARD 99)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 98)
 
 if (APPLE)
     enable_language(OBJC)
@@ -17,9 +17,10 @@ include_directories(src)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     set(CMAKE_CXX_STANDARD 20) # required for c++ clap build
-    add_compile_options(
-        /FI ${CMAKE_SOURCE_DIR}/example/config.h
-    )
+endif()
+
+if (CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_compile_options(/FI ${CMAKE_SOURCE_DIR}/example/config.h)
 else()
     add_compile_options(
         -Werror=return-type
@@ -33,9 +34,6 @@ else()
 
         -include${CMAKE_SOURCE_DIR}/example/config.h
     )
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        add_compile_options(-Werror=excess-initializers)
-    endif()
 endif()
 
 # ██╗   ██╗███████╗████████╗██████╗ 

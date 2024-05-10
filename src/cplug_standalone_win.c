@@ -1306,7 +1306,8 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
         cplug_assert(remainingBlockFrames < blockSize); // check overflow
     }
 
-    WindowsProcessContext ctx       = {0};
+    WindowsProcessContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
     ctx.cplugContext.numFrames      = _gAudio.BlockSize;
     ctx.cplugContext.enqueueEvent   = CPWIN_Audio_enqueueEvent;
     ctx.cplugContext.dequeueEvent   = CPWIN_Audio_dequeueEvent;

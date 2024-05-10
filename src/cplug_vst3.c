@@ -10,10 +10,6 @@
 #include <vst3_c_api.h>
 #include <wchar.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define tuid_match(a, b) memcmp(a, b, sizeof(Steinberg_TUID)) == 0
 #ifndef ARRSIZE
 #define ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -589,7 +585,7 @@ VST3View_onKeyUp(void* const self, const char16_t key_char, const int16_t key_co
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
-    cplug_log("VST3View_getSize");
+    cplug_log("VST3View_getSize %p", rect);
 
     uint32_t width, height;
     cplug_getSize(((VST3View*)self)->userGUI, &width, &height);
@@ -781,12 +777,14 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
 
     memset(info, 0, sizeof(*info));
     CPLUG_LOG_ASSERT_RETURN(index >= 0 && index < CPLUG_NUM_PARAMS, Steinberg_kInvalidArgument);
-    info->id = index;
+    uint32_t paramId = cplug_getParameterID(vst3->userPlugin, index);
+    CPLUG_LOG_ASSERT(paramId < cplug_midiControllerOffset);
+    info->id = paramId;
 
     // set up flags
     double min, max;
-    cplug_getParameterRange(vst3->userPlugin, index, &min, &max);
-    const uint32_t hints = cplug_getParameterFlags(vst3->userPlugin, index);
+    cplug_getParameterRange(vst3->userPlugin, paramId, &min, &max);
+    const uint32_t hints = cplug_getParameterFlags(vst3->userPlugin, paramId);
 
     if (hints & CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE)
         info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kCanAutomate;
@@ -802,98 +800,93 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
     else if (hints & CPLUG_FLAG_PARAMETER_IS_INTEGER)
         info->stepCount = (int)(max - min);
 
-    double defaultValue          = cplug_getDefaultParameterValue(vst3->userPlugin, index);
-    info->defaultNormalizedValue = cplug_normaliseParameterValue(vst3->userPlugin, index, defaultValue);
-    _cplug_utf8To16(info->title, cplug_getParameterName(vst3->userPlugin, index), 128);
+    double defaultValue          = cplug_getDefaultParameterValue(vst3->userPlugin, paramId);
+    info->defaultNormalizedValue = cplug_normaliseParameterValue(vst3->userPlugin, paramId, defaultValue);
+    _cplug_utf8To16(info->title, cplug_getParameterName(vst3->userPlugin, paramId), 128);
     // Who cares?
-    _cplug_utf8To16(info->shortTitle, cplug_getParameterName(vst3->userPlugin, index), 128);
+    _cplug_utf8To16(info->shortTitle, cplug_getParameterName(vst3->userPlugin, paramId), 128);
     return Steinberg_kResultOk;
 }
 
-static Steinberg_tresult SMTG_STDMETHODCALLTYPE
-VST3Controller_getParamStringByValue(void* self, uint32_t index, double normalised, Steinberg_Vst_String128 output)
+static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByValue(
+    void*                   self,
+    Steinberg_Vst_ParamID   paramId,
+    double                  normalised,
+    Steinberg_Vst_String128 output)
 {
     // NOTE very noisy, called many times
-    // cplug_log("VST3Controller_getParamStringByValue => %p %u %f %p", self, index, normalised, output);
+    // cplug_log("VST3Controller_getParamStringByValue => %p %u %f %p", self, paramId, normalised, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     // Bitwig 5 has been spotted failing this assertion
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
-    CPLUG_LOG_ASSERT_RETURN(index < CPLUG_NUM_PARAMS, Steinberg_kInvalidArgument);
 
     char   buf[128];
-    double denormalised = cplug_denormaliseParameterValue(vst3->userPlugin, index, normalised);
-    cplug_parameterValueToString(vst3->userPlugin, index, buf, 128, denormalised);
+    double denormalised = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
+    cplug_parameterValueToString(vst3->userPlugin, paramId, buf, 128, denormalised);
     _cplug_utf8To16(output, buf, sizeof(buf));
 
     return Steinberg_kResultOk;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
-VST3Controller_getParamValueByString(void* self, uint32_t index, char16_t* input, double* output)
+VST3Controller_getParamValueByString(void* self, Steinberg_Vst_ParamID paramId, char16_t* input, double* output)
 {
     // cplug_log("VST3Controller_getParamValueByString => %p %u %p %p", self, rindex, input, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
-    CPLUG_LOG_ASSERT_RETURN(index < CPLUG_NUM_PARAMS, Steinberg_kInvalidArgument);
-
     char as_utf8[128];
     _cplug_utf16To8(as_utf8, input, 128);
 
-    double denormalised = cplug_parameterStringToValue(vst3->userPlugin, index, as_utf8);
-    *output             = cplug_normaliseParameterValue(vst3->userPlugin, index, denormalised);
+    double denormalised = cplug_parameterStringToValue(vst3->userPlugin, paramId, as_utf8);
+    *output             = cplug_normaliseParameterValue(vst3->userPlugin, paramId, denormalised);
 
     return Steinberg_kResultOk;
 }
 
 static double SMTG_STDMETHODCALLTYPE
-VST3Controller_normalizedParamToPlain(void* self, uint32_t index, double normalised)
+VST3Controller_normalizedParamToPlain(void* self, Steinberg_Vst_ParamID paramId, double normalised)
 {
     // Gets called a lot in ableton, even when you aren't touching parameters
     // cplug_log("VST3Controller_normalizedParamToPlain => %p %u %f", self, rindex, normalised);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, 0.0);
-    CPLUG_LOG_ASSERT_RETURN(index < CPLUG_NUM_PARAMS, 0.0);
-
-    return cplug_denormaliseParameterValue(vst3->userPlugin, index, normalised);
+    return cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
 }
 
-static double SMTG_STDMETHODCALLTYPE VST3Controller_plainParamToNormalised(void* self, uint32_t index, double plain)
+static double SMTG_STDMETHODCALLTYPE
+VST3Controller_plainParamToNormalised(void* self, Steinberg_Vst_ParamID paramId, double plain)
 {
     // Gets called a lot in ableton, even when you aren't touching parameters
-    // cplug_log("VST3Controller_plainParamToNormalised => %p %u %f", self, index, plain);
+    // cplug_log("VST3Controller_plainParamToNormalised => %p %u %f", self, paramId, plain);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
-
-    CPLUG_LOG_ASSERT_RETURN(index < CPLUG_NUM_PARAMS, 0.0);
-
-    return cplug_normaliseParameterValue(vst3->userPlugin, index, plain);
+    return cplug_normaliseParameterValue(vst3->userPlugin, paramId, plain);
 }
 
-static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* self, uint32_t index)
+static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* self, Steinberg_Vst_ParamID paramId)
 {
-    // cplug_log("VST3Controller_getParamNormalized => %p %u", self, index);
+    // cplug_log("VST3Controller_getParamNormalized => %p %u", self, paramId);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     // Ableton will ask you for MIDI control values. So far, returning 0 here hasn't caused any problems...
-    if (index >= cplug_midiControllerOffset)
+    if (paramId >= cplug_midiControllerOffset)
         return 0.0;
 
-    CPLUG_LOG_ASSERT_RETURN(index < CPLUG_NUM_PARAMS, 0.0);
-    double val = cplug_getParameterValue(vst3->userPlugin, index);
-    return cplug_normaliseParameterValue(vst3->userPlugin, index, val);
+    double val = cplug_getParameterValue(vst3->userPlugin, paramId);
+    return cplug_normaliseParameterValue(vst3->userPlugin, paramId, val);
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
-VST3Controller_setParamNormalized(void* const self, const uint32_t index, const double normalised)
+VST3Controller_setParamNormalized(void* const self, const Steinberg_Vst_ParamID paramId, const double normalised)
 {
     // Gets called a lot in ableton, even when you aren't touching parameters
-    // cplug_log("VST3Controller_setParamNormalized => %p %u %f", self, index, normalised);
+    // cplug_log("VST3Controller_setParamNormalized => %p %u %f", self, paramId, normalised);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
 
-    if (index >= cplug_midiControllerOffset)
+    if (paramId >= cplug_midiControllerOffset)
     {
-        uint8_t channel = (index - cplug_midiControllerOffset) / 16;
-        uint8_t control = (index - cplug_midiControllerOffset) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+        uint8_t channel = (paramId - cplug_midiControllerOffset) / 16;
+        uint8_t control = (paramId - cplug_midiControllerOffset) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
 
         if (vst3->midiContollerQueueSize < ARRSIZE(vst3->midiContollerQueue))
         {
@@ -926,9 +919,8 @@ VST3Controller_setParamNormalized(void* const self, const uint32_t index, const 
         return Steinberg_kResultOk;
     }
 
-    CPLUG_LOG_ASSERT_RETURN(index < CPLUG_NUM_PARAMS, 0.0);
-    double denormalisedVal = cplug_denormaliseParameterValue(vst3->userPlugin, index, normalised);
-    cplug_setParameterValue(vst3->userPlugin, index, denormalisedVal);
+    double denormalisedVal = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
+    cplug_setParameterValue(vst3->userPlugin, paramId, denormalisedVal);
 
     return Steinberg_kResultOk;
 }
@@ -1265,12 +1257,12 @@ bool VST3ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const C
         Steinberg_int32                        idx   = 0;
         struct Steinberg_Vst_IParamValueQueue* queue = vst3ctx->data->outputParameterChanges->lpVtbl->addParameterData(
             vst3ctx->data->outputParameterChanges,
-            &event->parameter.idx,
+            &event->parameter.id,
             &idx);
         CPLUG_LOG_ASSERT_RETURN(queue != NULL, false);
 
         double normalised =
-            cplug_normaliseParameterValue(vst3ctx->vst3->userPlugin, event->parameter.idx, event->parameter.value);
+            cplug_normaliseParameterValue(vst3ctx->vst3->userPlugin, event->parameter.id, event->parameter.value);
         Steinberg_tresult result = queue->lpVtbl->addPoint(queue, frameIdx, normalised, &idx);
         return result == Steinberg_kResultOk;
     }
@@ -1412,7 +1404,7 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
             else
             {
                 event->parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
-                event->parameter.idx   = paramId;
+                event->parameter.id    = paramId;
                 event->parameter.value = cplug_denormaliseParameterValue(translator->vst3->userPlugin, paramId, value);
             }
 
@@ -1458,8 +1450,9 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
         data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32,
         Steinberg_kInvalidArgument);
 
-    VST3ProcessContextTranslator translator = {0};
-    translator.cplugContext.numFrames       = data->numSamples;
+    VST3ProcessContextTranslator translator;
+    memset(&translator, 0, sizeof(translator));
+    translator.cplugContext.numFrames = data->numSamples;
 
     if (data->processContext != NULL)
     {
@@ -2158,7 +2151,3 @@ bool VST3_EXIT(void)
     cplug_libraryUnload();
     return true;
 }
-
-#ifdef __cplusplus
-}
-#endif

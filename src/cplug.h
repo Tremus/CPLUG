@@ -32,7 +32,6 @@ extern "C" {
 #ifndef CPLUG_EVENT_QUEUE_SIZE
 #define CPLUG_EVENT_QUEUE_SIZE 256
 #endif
-#define CPLUG_EVENT_QUEUE_MASK (CPLUG_EVENT_QUEUE_SIZE - 1)
 
 // How sample accurate do you need your events?
 #ifndef CPLUG_EVENT_FRAME_QUANTIZE
@@ -79,7 +78,7 @@ typedef union CplugEvent
     struct
     {
         uint32_t type;
-        uint32_t idx;
+        uint32_t id;
         double   value;
     } parameter;
 
@@ -144,23 +143,24 @@ enum
     CPLUG_FLAG_PARAMETER_IS_BYPASS      = 1 << 5
 };
 
-CPLUG_API uint32_t cplug_getParameterFlags(void*, uint32_t index);
+CPLUG_API uint32_t cplug_getParameterID(void*, uint32_t paramIndex);
+CPLUG_API uint32_t cplug_getParameterFlags(void*, uint32_t paramId);
 
-CPLUG_API void cplug_getParameterRange(void*, uint32_t index, double* min, double* max);
+CPLUG_API void cplug_getParameterRange(void*, uint32_t paramId, double* min, double* max);
 
 // NOTE: AUv2 supports a max length of 52 bytes, VST3 128, CLAP 256
-CPLUG_API const char* cplug_getParameterName(void*, uint32_t index);
+CPLUG_API const char* cplug_getParameterName(void*, uint32_t paramId);
 
-CPLUG_API double cplug_getParameterValue(void*, uint32_t index);
-CPLUG_API double cplug_getDefaultParameterValue(void*, uint32_t index);
+CPLUG_API double cplug_getParameterValue(void*, uint32_t paramId);
+CPLUG_API double cplug_getDefaultParameterValue(void*, uint32_t paramId);
 // [hopefully audio thread] VST3 & AU only
-CPLUG_API void cplug_setParameterValue(void*, uint32_t index, double value);
+CPLUG_API void cplug_setParameterValue(void*, uint32_t paramId, double value);
 // VST3 only
-CPLUG_API double cplug_denormaliseParameterValue(void*, uint32_t index, double value);
-CPLUG_API double cplug_normaliseParameterValue(void*, uint32_t index, double value);
+CPLUG_API double cplug_denormaliseParameterValue(void*, uint32_t paramId, double value);
+CPLUG_API double cplug_normaliseParameterValue(void*, uint32_t paramId, double value);
 
-CPLUG_API double cplug_parameterStringToValue(void*, uint32_t index, const char*);
-CPLUG_API void   cplug_parameterValueToString(void*, uint32_t index, char* buf, size_t bufsize, double value);
+CPLUG_API double cplug_parameterStringToValue(void*, uint32_t paramId, const char*);
+CPLUG_API void   cplug_parameterValueToString(void*, uint32_t paramId, char* buf, size_t bufsize, double value);
 
 // Returns -1 on error and 'numBytesToWrite' on success
 typedef int64_t (*cplug_writeProc)(const void* stateCtx, void* writePos, size_t numBytesToWrite);
