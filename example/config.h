@@ -5,7 +5,7 @@
 #define CPLUG_COMPANY_EMAIL  ""
 #define CPLUG_PLUGIN_NAME    "CPLUG Example"
 #define CPLUG_PLUGIN_URI     "http://github.com/Tremus/CPLUG"
-#define CPLUG_PLUGIN_VERSION "1.0.0"
+#define CPLUG_PLUGIN_VERSION "1.0.1"
 
 #define CPLUG_IS_INSTRUMENT 1
 
@@ -31,6 +31,6 @@ static const unsigned kAudioUnitProperty_UserPlugin = 'plug';
 #define CPLUG_CLAP_DESCRIPTION "Example plugin"
 #define CPLUG_CLAP_FEATURES    CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO
 
-#define CPLUG_NUM_PARAMS 4
+#define CPLUG_NUM_PARAMS 5
 
 #endif // PLUGIN_CONFIG_H

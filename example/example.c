@@ -36,6 +36,7 @@
 #define CPLUG_EVENT_QUEUE_MASK (CPLUG_EVENT_QUEUE_SIZE - 1)
 
 static const uint32_t PARAM_IDS[] = {
+    '\0new',
     'pf32',
     'pi32',
     'bool',
@@ -99,6 +100,10 @@ void* cplug_createPlugin()
     uint32_t  idx;
 
     // Init params
+    // '\0new'
+    idx                          = get_param_index(plugin, '\0new');
+    plugin->paramInfo[idx].flags = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE;
+    plugin->paramInfo[idx].max   = 1.0f;
     // 'pf32'
     idx                                 = get_param_index(plugin, 'pf32');
     plugin->paramInfo[idx].flags        = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE;
@@ -176,6 +181,7 @@ uint32_t cplug_getParameterID(void* ptr, uint32_t paramIndex) { return PARAM_IDS
 const char* cplug_getParameterName(void* ptr, uint32_t paramId)
 {
     static const char* param_names[] = {
+        "Parameter New",
         "Parameter Float",
         "Parameter Int",
         "Parameter Bool",

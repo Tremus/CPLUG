@@ -2,7 +2,7 @@
 # If you're interested using CMake to build your plugins, read the code here, then copy/paste and modify it in
 # your own projects. It's easy!
 cmake_minimum_required(VERSION 3.14)
-project(cplug_example VERSION 1.0.0)
+project(cplug_example VERSION 1.0.1)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 98)
