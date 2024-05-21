@@ -230,7 +230,7 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 #define static_assert _Static_assert
 #endif
 
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__clang__)
 #define unlikely(x) __builtin_expect(x, 0)
 #else
 #define unlikely(x) x
