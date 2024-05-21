@@ -100,8 +100,6 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
 // someone please tell me what is up with these..
 static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint32_t channelCount)
 {
-    CPLUG_LOG_ASSERT_RETURN(channelCount != 0, 0);
-
     switch (channelCount)
     {
     // regular mono
@@ -150,7 +148,7 @@ static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint3
             Steinberg_Vst_kSpeakerSl | Steinberg_Vst_kSpeakerSr | Steinberg_Vst_kSpeakerLc | Steinberg_Vst_kSpeakerRc |
             Steinberg_Vst_kSpeakerC | Steinberg_Vst_kSpeakerCs | Steinberg_Vst_kSpeakerLfe);
     default:
-        cplug_log("[ERROR]: _cplug_channelCountToVST3Speaker: Unsupported number of channels %u", channelCount);
+        cplug_log("[WARNING]: _cplug_channelCountToVST3Speaker: Unsupported number of channels %u", channelCount);
         return 0;
     }
 }
@@ -414,14 +412,14 @@ VST3ViewContentScale_queryInterface(void* const self, const Steinberg_TUID iid, 
 
     if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPlugViewContentScaleSupport_iid))
     {
-        cplug_log("query_interface_view_content_scale => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_log("VST3ViewContentScale_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&scale->refcounter, 1);
         *iface = self;
         return Steinberg_kResultOk;
     }
 
     cplug_log(
-        "query_interface_view_content_scale => %p %s %p | WARNING UNSUPPORTED",
+        "VST3ViewContentScale_queryInterface => %p %s %p | WARNING UNSUPPORTED",
         self,
         _cplug_tuid2str(iid),
         iface);
@@ -473,7 +471,7 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
 
     if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPlugView_iid))
     {
-        cplug_log("query_interface_view => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_log("VST3View_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->refcounter, 1);
         *iface = self;
         return Steinberg_kResultOk;
@@ -482,14 +480,14 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
 #ifdef _WIN32
     if (tuid_match(Steinberg_IPlugViewContentScaleSupport_iid, iid))
     {
-        cplug_log("query_interface_view => %p %s %p | OK convert", self, _cplug_tuid2str(iid), iface);
+        cplug_log("VST3View_queryInterface => %p %s %p | OK convert", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->scale.refcounter, 1);
         *iface = &view->scale;
         return Steinberg_kResultOk;
     }
 #endif
 
-    cplug_log("query_interface_view => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
+    cplug_log("VST3View_queryInterface => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
 
     *iface = NULL;
     return Steinberg_kNoInterface;
@@ -567,19 +565,21 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_removed(void* const sel
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onWheel(void* const self, const float distance)
 {
-    return Steinberg_kNotImplemented;
+    return Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_onKeyDown(void* const self, const char16_t key_char, const int16_t key_code, const int16_t modifiers)
 {
-    return Steinberg_kNotImplemented;
+    cplug_log("VST3View_onKeyDown => %p %hu %hu %hu", self, key_char, key_code, modifiers);
+    return Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_onKeyUp(void* const self, const char16_t key_char, const int16_t key_code, const int16_t modifiers)
 {
-    return Steinberg_kNotImplemented;
+    cplug_log("VST3View_onKeyUp => %p %hu %hu %hu", self, key_char, key_code, modifiers);
+    return Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -599,19 +599,24 @@ VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
     cplug_log("VST3View_onSize => %p {%d,%d,%d,%d}", self, rect->top, rect->left, rect->right, rect->bottom);
-    return ! cplug_setSize(((VST3View*)self)->userGUI, rect->right - rect->left, rect->bottom - rect->top);
+    int width  = rect->right - rect->left;
+    int height = rect->bottom - rect->top;
+    CPLUG_LOG_ASSERT_RETURN(width >= 0, Steinberg_kInvalidArgument);
+    CPLUG_LOG_ASSERT_RETURN(height >= 0, Steinberg_kInvalidArgument);
+    return ! cplug_setSize(((VST3View*)self)->userGUI, width, height);
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onFocus(void* const self, const Steinberg_TBool state)
 {
+    cplug_log("VST3View_onFocus => %p %hhu", state);
     // TODO: Ableton seems to lose track of who has focus. Not sure if this is an Ableton bug or our fault.
-    return Steinberg_kNotImplemented;
+    return Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_setFrame(void* const self, Steinberg_IPlugFrame* const frame)
 {
     cplug_log("VST3View_setFrame => %p %p", self, frame);
-    return Steinberg_kNotImplemented;
+    return Steinberg_kResultTrue;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_canResize(void* const self) { return ! CPLUG_GUI_RESIZABLE; }
@@ -1103,7 +1108,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements
     cplug_log("VST3Processor_setBusArrangements => %p %p %i %p %i", self, inputs, num_inputs, outputs, num_outputs);
     VST3Plugin* const vst3 = _cplug_pointerShiftProcessor((VST3Processor*)self);
 
-    bool intput_ok = true;
+    bool input_ok = true;
 #if CPLUG_NUM_INPUT_BUSSES
     CPLUG_LOG_ASSERT_RETURN(num_inputs >= 0, Steinberg_kInvalidArgument);
     for (int i = 0; i < num_inputs && i < CPLUG_NUM_INPUT_BUSSES; i++)
@@ -1113,7 +1118,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements
         Steinberg_Vst_Speaker accepted_speaker  = _cplug_channelCountToVST3Speaker(num_channels);
         // cplug_log("bus input(%d) requesting %d accepting %d", i, requested_speaker, accepted_speaker);
 
-        intput_ok = intput_ok && (requested_speaker == 0 || requested_speaker == accepted_speaker);
+        input_ok = input_ok && (requested_speaker == 0 || requested_speaker == accepted_speaker);
     }
 #endif
 
@@ -1123,7 +1128,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements
     for (int i = 0; i < num_outputs && i < CPLUG_NUM_OUTPUT_BUSSES; i++)
     {
         uint32_t              num_channels      = cplug_getOutputBusChannelCount(vst3->userPlugin, i);
-        Steinberg_Vst_Speaker requested_speaker = inputs[i];
+        Steinberg_Vst_Speaker requested_speaker = outputs[i];
         Steinberg_Vst_Speaker accepted_speaker  = _cplug_channelCountToVST3Speaker(num_channels);
         // cplug_log("bus output(%d) requesting %d accepting %d", i, requested_speaker, accepted_speaker);
 
@@ -1131,7 +1136,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements
     }
 #endif
 
-    return (intput_ok && output_ok) ? Steinberg_kResultTrue : Steinberg_kResultFalse;
+    return (input_ok && output_ok) ? Steinberg_kResultTrue : Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_getBusArrangement(
@@ -1151,27 +1156,15 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_getBusArrangement(
     CPLUG_LOG_ASSERT_RETURN(
         busDirection == Steinberg_Vst_BusDirections_kInput || busDirection == Steinberg_Vst_BusDirections_kOutput,
         Steinberg_kInvalidArgument);
-    CPLUG_LOG_ASSERT_RETURN(busIndex >= 0, Steinberg_kInvalidArgument);
     CPLUG_LOG_ASSERT_RETURN(speaker != NULL, Steinberg_kInvalidArgument);
 
-#if CPLUG_NUM_INPUT_BUSSES > 0
+    uint32_t num_channels = 0;
     if (busDirection == Steinberg_Vst_BusDirections_kInput)
-    {
-        uint32_t num_channels = cplug_getInputBusChannelCount(vst3->userPlugin, busIndex);
-        *speaker              = _cplug_channelCountToVST3Speaker(num_channels);
-        return Steinberg_kResultOk;
-    }
-#endif
-#if CPLUG_NUM_OUTPUT_BUSSES > 0
-    if (busDirection == Steinberg_Vst_BusDirections_kOutput)
-    {
-        uint32_t num_channels = cplug_getOutputBusChannelCount(vst3->userPlugin, busIndex);
-        *speaker              = _cplug_channelCountToVST3Speaker(num_channels);
-        return Steinberg_kResultOk;
-    }
-#endif
-    *speaker = 0;
-    return Steinberg_kResultFalse;
+        num_channels = cplug_getInputBusChannelCount(vst3->userPlugin, busIndex);
+    else // if (busDirection == Steinberg_Vst_BusDirections_kOutput)
+        num_channels = cplug_getOutputBusChannelCount(vst3->userPlugin, busIndex);
+    *speaker = _cplug_channelCountToVST3Speaker(num_channels);
+    return *speaker == 0 ? Steinberg_kResultFalse : Steinberg_kResultOk;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
