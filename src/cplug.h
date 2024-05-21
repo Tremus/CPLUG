@@ -38,10 +38,20 @@ extern "C" {
 #define CPLUG_EVENT_FRAME_QUANTIZE 64
 #endif
 
+typedef union CplugEvent           CplugEvent;
+typedef struct CplugHostContext    CplugHostContext;
+typedef struct CplugProcessContext CplugProcessContext;
+
 CPLUG_API void cplug_libraryLoad();
 CPLUG_API void cplug_libraryUnload();
 
-CPLUG_API void* cplug_createPlugin();
+struct CplugHostContext
+{
+    // VST3 only, UI thread only.
+    void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
+};
+
+CPLUG_API void* cplug_createPlugin(CplugHostContext* ctx);
 CPLUG_API void  cplug_destroyPlugin(void*);
 
 CPLUG_API uint32_t cplug_getInputBusChannelCount(void*, uint32_t bus_idx);
@@ -65,9 +75,9 @@ enum
     CPLUG_EVENT_MIDI,
 };
 
-typedef union CplugEvent
+union CplugEvent
 {
-    uint32_t type;
+    uint32_t type; // CPLUG_EVENT_XXX
 
     struct
     {
@@ -98,7 +108,7 @@ typedef union CplugEvent
             uint32_t bytesAsInt;
         };
     } midi;
-} CplugEvent;
+};
 
 enum
 {
@@ -110,11 +120,11 @@ enum
     CPLUG_FLAG_TRANSPORT_HAS_PLAYHEAD_BEATS = 1 << 5,
 };
 
-typedef struct CplugProcessContext
+struct CplugProcessContext
 {
     uint32_t numFrames;
 
-    uint32_t flags;
+    uint32_t flags; // CPLUG_FLAG_TRANSPORT_XXX
     double   bpm;
     double   playheadBeats;
     double   loopStartBeats;
@@ -122,12 +132,12 @@ typedef struct CplugProcessContext
     uint32_t timeSigNumerator;
     uint32_t timeSigDenominator;
 
-    bool (*enqueueEvent)(struct CplugProcessContext* ctx, const CplugEvent*, uint32_t frameIdx);
-    bool (*dequeueEvent)(struct CplugProcessContext* ctx, CplugEvent*, uint32_t frameIdx);
+    bool (*enqueueEvent)(CplugProcessContext* ctx, const CplugEvent*, uint32_t frameIdx);
+    bool (*dequeueEvent)(CplugProcessContext* ctx, CplugEvent*, uint32_t frameIdx);
 
-    float** (*getAudioInput)(const struct CplugProcessContext* ctx, uint32_t busIdx);
-    float** (*getAudioOutput)(const struct CplugProcessContext* ctx, uint32_t busIdx);
-} CplugProcessContext;
+    float** (*getAudioInput)(const CplugProcessContext* ctx, uint32_t busIdx);
+    float** (*getAudioOutput)(const CplugProcessContext* ctx, uint32_t busIdx);
+};
 
 CPLUG_API void cplug_process(void* userPlugin, CplugProcessContext* ctx);
 
@@ -144,7 +154,7 @@ enum
 };
 
 CPLUG_API uint32_t cplug_getParameterID(void*, uint32_t paramIndex);
-CPLUG_API uint32_t cplug_getParameterFlags(void*, uint32_t paramId);
+CPLUG_API uint32_t cplug_getParameterFlags(void*, uint32_t paramId); // CPLUG_FLAG_PARAMETER_XXX
 
 CPLUG_API void cplug_getParameterRange(void*, uint32_t paramId, double* min, double* max);
 

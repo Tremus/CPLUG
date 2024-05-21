@@ -301,7 +301,8 @@ typedef struct VST3Factory
 
 typedef struct VST3Plugin
 {
-    void* userPlugin; // Pointer to your plugin lives here
+    CplugHostContext hostContext;
+    void*            userPlugin; // Pointer to your plugin lives here
 
     VST3Component  component;
     VST3Controller controller;
@@ -328,6 +329,38 @@ static VST3Plugin* _cplug_pointerShiftProcessor(VST3Processor* ptr)
 static VST3Plugin* _cplug_pointerShiftComponent(VST3Component* ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, component));
+}
+
+// General notes on syncing parameters with a host:
+// If your plugin has hundreds of parameters, Ableton 10 likely won't show them in their interface.
+// Instead they suggest you use their 'Configure' mode and start changing parameters within your plugins interface. The
+// parameters you changed should be detected and new controls will be added to their interface. The catch here (which I
+// haven't seen documented anywhere else) is that you must update your parameters using IComponentHandler which is UI
+// thread only. Ableton doesn't share this problem with in their Audio Unit v2 implementation...?
+// Sending parameter updates through the audio thread doesn't sync with FL Studio.
+// In Reaper & Bitwig, only sending param updates over the audio thread won't produce syncing problems.
+// This method is the most reliable way to send param changes and sync them with the DAW
+static void _cplug_sendParamEvent(struct CplugHostContext* ctx, const CplugEvent* event)
+{
+    CPLUG_LOG_ASSERT(
+        event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN || event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE ||
+        event->type == CPLUG_EVENT_PARAM_CHANGE_END);
+    _Static_assert(offsetof(VST3Plugin, hostContext) == 0, "Required offset for c-cast below");
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+
+    Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
+    if (handler)
+    {
+        if (event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN)
+            handler->lpVtbl->beginEdit(handler, event->parameter.id);
+        else if (event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE)
+        {
+            double norm = cplug_normaliseParameterValue(vst3->userPlugin, event->parameter.id, event->parameter.value);
+            handler->lpVtbl->performEdit(handler, event->parameter.id, norm);
+        }
+        else if (event->type == CPLUG_EVENT_PARAM_CHANGE_END)
+            handler->lpVtbl->endEdit(handler, event->parameter.id);
+    }
 }
 
 // Guard against plugin hosts that lose track of their own refs to your plugin
@@ -1601,7 +1634,7 @@ VST3Component_initialize(void* const self, Steinberg_FUnknown* const context)
 
     cplug_log("VST3Component_initialize => %p %p | hostApplication %p", self, context, vst3->host);
 
-    vst3->userPlugin = cplug_createPlugin();
+    vst3->userPlugin = cplug_createPlugin(&vst3->hostContext);
 
     return Steinberg_kResultOk;
 }
@@ -1944,8 +1977,9 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
     {
         VST3Plugin* vst3 = (VST3Plugin*)malloc(sizeof(VST3Plugin));
         memset(vst3, 0, sizeof(*vst3));
-        vst3->component.lpVtbl     = &vst3->component.base;
-        vst3->component.refcounter = 1;
+        vst3->hostContext.sendParamEvent = _cplug_sendParamEvent;
+        vst3->component.lpVtbl           = &vst3->component.base;
+        vst3->component.refcounter       = 1;
         // Steinberg_FUnknown
         vst3->component.base.queryInterface = VST3Component_queryInterface;
         vst3->component.base.addRef         = VST3Component_addRef;
