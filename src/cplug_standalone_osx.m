@@ -83,12 +83,13 @@ struct STAND_Plugin
 #ifdef HOTRELOAD_LIB_PATH
     void* library;
 #endif
-    void* userPlugin;
-    void* userGUI;
+    CplugHostContext hostContext;
+    void*            userPlugin;
+    void*            userGUI;
 
     void (*libraryLoad)();
     void (*libraryUnload)();
-    void* (*createPlugin)();
+    void* (*createPlugin)(CplugHostContext*);
     void (*destroyPlugin)(void* userPlugin);
     uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
     void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
@@ -105,6 +106,8 @@ struct STAND_Plugin
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
 } g_plugin;
+
+void STAND_sendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
 
 #ifdef HOTRELOAD_BUILD_COMMAND
 struct STAND_PluginStateContext
@@ -219,7 +222,8 @@ OSStatus STAND_audioDeviceChangeListener(
     STAND_openLibraryWithSymbols();
 
     g_plugin.libraryLoad();
-    g_plugin.userPlugin = g_plugin.createPlugin();
+    g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
+    g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
     cplug_assert(g_plugin.userPlugin != NULL);
 
     // Init MIDI
@@ -1247,7 +1251,8 @@ void STAND_filesystemEventCallback(
             {
                 STAND_openLibraryWithSymbols();
                 g_plugin.libraryLoad();
-                g_plugin.userPlugin = g_plugin.createPlugin();
+                g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
+                g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
                 cplug_assert(g_plugin.userPlugin != NULL);
                 g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
 
