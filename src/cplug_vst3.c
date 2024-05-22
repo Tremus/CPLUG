@@ -340,7 +340,7 @@ static VST3Plugin* _cplug_pointerShiftComponent(VST3Component* ptr)
 // Sending parameter updates through the audio thread doesn't sync with FL Studio.
 // In Reaper & Bitwig, only sending param updates over the audio thread won't produce syncing problems.
 // This method is the most reliable way to send param changes and sync them with the DAW
-static void _cplug_sendParamEvent(struct CplugHostContext* ctx, const CplugEvent* event)
+static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event)
 {
     CPLUG_LOG_ASSERT(
         event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN || event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE ||
@@ -349,6 +349,7 @@ static void _cplug_sendParamEvent(struct CplugHostContext* ctx, const CplugEvent
     VST3Plugin* vst3 = (VST3Plugin*)ctx;
 
     Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
+    CPLUG_LOG_ASSERT(handler == handler);
     if (handler)
     {
         if (event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN)
@@ -967,8 +968,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_setComponentHandler(void* self, Steinberg_Vst_IComponentHandler* handler)
 {
     cplug_log("VST3Controller_setComponentHandler => %p %p", self, handler);
-    /* NOTE: Ableton 10 & FL Studio has been spotted trying to pass NULL here.
-             Good thing we don't use it... */
+    // NOTE: Ableton 10 & FL Studio has been spotted trying to pass NULL here.
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     if (vst3->controller.componentHandler)
@@ -1090,7 +1090,7 @@ VST3Processor_queryInterface(void* const self, const Steinberg_TUID iid, void** 
 
     if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
     {
-        cplug_log("query_interface_audio_processor => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_log("VST3Processor_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&processor->refcounter, 1);
         *iface = self;
         return Steinberg_kResultOk;
@@ -1098,12 +1098,12 @@ VST3Processor_queryInterface(void* const self, const Steinberg_TUID iid, void** 
 
     if (tuid_match(iid, Steinberg_Vst_IProcessContextRequirements_iid))
     {
-        cplug_log("query_interface_audio_processor => %p %s %p | OK convert static", self, _cplug_tuid2str(iid), iface);
+        cplug_log("VST3Processor_queryInterface => %p %s %p | OK convert static", self, _cplug_tuid2str(iid), iface);
         *iface = &g_vst3ProcessContext;
         return Steinberg_kResultOk;
     }
 
-    cplug_log("query_interface_audio_processor => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
+    cplug_log("VST3Processor_queryInterface => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
 
     *iface = NULL;
     return Steinberg_kNoInterface;

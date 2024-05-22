@@ -164,6 +164,8 @@ typedef struct AUv2Plugin
     // This duplicate state, but required
     AudioComponentDescription desc;
 
+    CplugHostContext hostContext;
+
     void* userPlugin;
     // Despite the name, this is actually used for getting transport state, position, and BPM.
     HostCallbackInfo mHostCallbackInfo;
@@ -184,6 +186,40 @@ typedef struct AUv2Plugin
     UInt32     numEvents;
     CplugEvent events[CPLUG_EVENT_QUEUE_SIZE];
 } AUv2Plugin;
+
+static OSStatus AUv2SendParamEvent(AUv2Plugin* auv2, const CplugEvent* event)
+{
+    CPLUG_LOG_ASSERT(
+        event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN || event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE ||
+        event->type == CPLUG_EVENT_PARAM_CHANGE_END);
+
+    OSStatus       status = noErr;
+    AudioUnitEvent auevent;
+
+    switch (event->type)
+    {
+    case CPLUG_EVENT_PARAM_CHANGE_BEGIN:
+        auevent.mEventType = kAudioUnitEvent_BeginParameterChangeGesture;
+        break;
+    case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
+        auevent.mEventType = kAudioUnitEvent_ParameterValueChange;
+        break;
+    case CPLUG_EVENT_PARAM_CHANGE_END:
+        auevent.mEventType = kAudioUnitEvent_EndParameterChangeGesture;
+        break;
+    default:
+        return 1;
+    }
+
+    auevent.mArgument.mParameter.mAudioUnit   = auv2->compInstance;
+    auevent.mArgument.mParameter.mParameterID = event->parameter.id;
+    auevent.mArgument.mParameter.mScope       = kAudioUnitScope_Global;
+    auevent.mArgument.mParameter.mElement     = 0;
+
+    status = AUEventListenerNotify(NULL, NULL, &auevent);
+    CPLUG_LOG_ASSERT(status == noErr);
+    return status;
+}
 
 int64_t AUv2WriteProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
@@ -1002,32 +1038,7 @@ bool AUv2ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const C
 {
     // cplug_log("AUv2ProcessContextTranslator_enqueueEvent => %u", event->type);
     AUv2ProcessContextTranslator* translator = (AUv2ProcessContextTranslator*)ctx;
-    OSStatus                      status     = noErr;
-    AudioUnitEvent                auevent;
-
-    switch (event->type)
-    {
-    case CPLUG_EVENT_PARAM_CHANGE_BEGIN:
-        auevent.mEventType = kAudioUnitEvent_BeginParameterChangeGesture;
-        break;
-    case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
-        auevent.mEventType = kAudioUnitEvent_ParameterValueChange;
-        break;
-    case CPLUG_EVENT_PARAM_CHANGE_END:
-        auevent.mEventType = kAudioUnitEvent_EndParameterChangeGesture;
-        break;
-    default:
-        return false;
-    }
-
-    auevent.mArgument.mParameter.mAudioUnit   = translator->auv2->compInstance;
-    auevent.mArgument.mParameter.mParameterID = event->parameter.id;
-    auevent.mArgument.mParameter.mScope       = kAudioUnitScope_Global;
-    auevent.mArgument.mParameter.mElement     = 0;
-
-    status = AUEventListenerNotify(NULL, NULL, &auevent);
-    CPLUG_LOG_ASSERT(status == noErr);
-    return status == noErr;
+    return noErr == AUv2SendParamEvent(translator->auv2, event);
 }
 
 bool AUv2ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
@@ -1260,11 +1271,17 @@ static AudioComponentMethod AULookup(SInt16 selector)
     return NULL;
 }
 
+static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event)
+{
+    AUv2Plugin* auv2 = (AUv2Plugin*)((char*)ctx - offsetof(AUv2Plugin, hostContext));
+    AUv2SendParamEvent(auv2, event);
+}
+
 OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInstance)
 {
     cplug_log("ComponentBase_AP_Open");
     auv2->compInstance = compInstance;
-    auv2->userPlugin   = cplug_createPlugin();
+    auv2->userPlugin   = cplug_createPlugin(&auv2->hostContext);
     return auv2->userPlugin != NULL ? noErr : kAudioUnitErr_FailedInitialization;
 }
 
@@ -1298,10 +1315,12 @@ __attribute__((visibility("default"))) void* GetPluginFactory(const AudioCompone
         cplug_libraryLoad();
 
     AUv2Plugin* auv2 = (AUv2Plugin*)(calloc(1, sizeof(AUv2Plugin)));
+    _Static_assert(offsetof(AUv2Plugin, mPlugInInterface) == 0, "Required by the AU format to be first");
 
-    auv2->mPlugInInterface.Open   = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
-    auv2->mPlugInInterface.Close  = (OSStatus(*)(void*))ComponentBase_AP_Close;
-    auv2->mPlugInInterface.Lookup = AULookup;
+    auv2->mPlugInInterface.Open      = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
+    auv2->mPlugInInterface.Close     = (OSStatus(*)(void*))ComponentBase_AP_Close;
+    auv2->mPlugInInterface.Lookup    = AULookup;
+    auv2->hostContext.sendParamEvent = _cplug_sendParamEvent;
 
     auv2->desc = *inDesc;
 

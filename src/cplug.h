@@ -47,7 +47,7 @@ CPLUG_API void cplug_libraryUnload();
 
 struct CplugHostContext
 {
-    // VST3 only, UI thread only.
+    // VST3 & AUv2 only, UI thread only.
     void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
 };
 
