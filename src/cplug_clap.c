@@ -8,8 +8,9 @@
 
 typedef struct CLAPPlugin
 {
-    clap_plugin_t clapPlugin;
-    void*         userPlugin;
+    clap_plugin_t    clapPlugin;
+    void*            userPlugin;
+    CplugHostContext hostContext;
 #if CPLUG_WANT_GUI
     void* userGUI;
 #endif
@@ -422,12 +423,14 @@ static const clap_plugin_gui_t s_clap_gui = {
 // clap_plugin //
 /////////////////
 
+static void _cplug_dummySendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
+
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
     cplug_log("CLAPPlugin_init");
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    clap->userPlugin = cplug_createPlugin();
+    clap->userPlugin = cplug_createPlugin(&clap->hostContext);
 
     // Fetch host's extensions here
     // Make sure to check that the interface functions are not null pointers
@@ -732,6 +735,7 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     clap->clapPlugin.process          = CLAPPlugin_process;
     clap->clapPlugin.get_extension    = CLAPPlugin_get_extension;
     clap->clapPlugin.on_main_thread   = CLAPPlugin_on_main_thread;
+    clap->hostContext.sendParamEvent  = _cplug_dummySendParamEvent;
 
     clap->host = host;
 
