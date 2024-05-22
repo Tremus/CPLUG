@@ -56,12 +56,14 @@ struct CPWIN_Plugin
 #ifdef HOTRELOAD_LIB_PATH
     HMODULE Library;
 #endif
+    CplugHostContext HostContext;
+
     void* UserPlugin;
     void* UserGUI;
 
     void (*libraryLoad)();
     void (*libraryUnload)();
-    void* (*createPlugin)();
+    void* (*createPlugin)(CplugHostContext*);
     void (*destroyPlugin)(void* userPlugin);
     uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
     void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
@@ -80,6 +82,7 @@ struct CPWIN_Plugin
 } _gCPLUG;
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
+void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
 
 #ifdef HOTRELOAD_WATCH_DIR
 struct CPWIN_PluginStateContext
@@ -296,7 +299,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     CPWIN_LoadPlugin();
     _gCPLUG.libraryLoad();
-    _gCPLUG.UserPlugin = _gCPLUG.createPlugin();
+    _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
+    _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
     cplug_assert(_gCPLUG.UserPlugin != NULL);
 
     ///////////////
@@ -631,7 +635,8 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             {
                 CPWIN_LoadPlugin();
                 _gCPLUG.libraryLoad();
-                _gCPLUG.UserPlugin = _gCPLUG.createPlugin();
+                _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
+                _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
                 cplug_assert(_gCPLUG.UserPlugin != NULL);
                 _gCPLUG.loadState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_ReadStateProc);
 
