@@ -525,7 +525,8 @@ static OSStatus AUMethodGetProperty(
         CFRelease(subtypeRef);
         CFRelease(manufacturerRef);
         CFRelease(presetNameRef);
-        CFRelease(presetDataRef);
+        if (presetDataRef)
+            CFRelease(presetDataRef);
 
         *(CFPropertyListRef*)outData = dict;
         break;
