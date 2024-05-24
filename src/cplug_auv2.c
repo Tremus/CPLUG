@@ -835,8 +835,6 @@ static OSStatus AUMethodSetProperty(
             break;
         }
         CPLUG_LOG_ASSERT_RETURN(desc->mChannelsPerFrame <= nChannels, kAudioUnitErr_FormatNotSupported);
-
-        cplug_setSampleRateAndBlockSize(auv2->userPlugin, desc->mSampleRate, auv2->mMaxFramesPerSlice);
         break;
     }
     case kAudioUnitProperty_MaximumFramesPerSlice:
@@ -844,6 +842,7 @@ static OSStatus AUMethodSetProperty(
         auv2->mMaxFramesPerSlice = *(UInt32*)inData;
         if (auv2->maxFramesListenerProc)
             auv2->maxFramesListenerProc(auv2->maxFramesListenerData, (AudioUnit)auv2, inID, inScope, inElement);
+        cplug_setSampleRateAndBlockSize(auv2->userPlugin, auv2->sampleRate, auv2->mMaxFramesPerSlice);
         break;
 
     case kAudioUnitProperty_SetRenderCallback:
