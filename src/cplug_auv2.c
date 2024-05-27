@@ -720,8 +720,13 @@ static OSStatus AUMethodGetProperty(
     {
         AudioUnitParameterValueFromString* vfs = (AudioUnitParameterValueFromString*)outData;
 
-        const char* str = CFStringGetCStringPtr(vfs->inString, kCFStringEncodingUTF8);
-        vfs->outValue   = cplug_parameterStringToValue(auv2->userPlugin, vfs->inParamID, str);
+        // pluginval segfaults if you access the pointer from CFStringGetCStringPtr(..., kCFStringEncodingUTF8)
+        char    buf[128];
+        Boolean ok = CFStringGetCString(vfs->inString, buf, sizeof(buf), kCFStringEncodingUTF8);
+        if (ok)
+            vfs->outValue = cplug_parameterStringToValue(auv2->userPlugin, vfs->inParamID, buf);
+        else
+            result = kAudioUnitErr_InvalidParameter;
         break;
     }
 
@@ -955,13 +960,12 @@ static OSStatus AUMethodGetParameterValue(
     AudioUnitElement         elem,
     AudioUnitParameterValue* value)
 {
-    cplug_log("AUMethodGetParameterValue => %u %s %u %p", param, _cplugScope2Str(scope), elem, value);
+    // cplug_log("AUMethodGetParameterValue => %u %s %u %p", param, _cplugScope2Str(scope), elem, value);
     CPLUG_LOG_ASSERT_RETURN(auv2->userPlugin != NULL, kAudioUnitErr_Uninitialized);
     *value = (AudioUnitParameterValue)cplug_getParameterValue(auv2->userPlugin, param);
     return noErr;
 }
 
-// this is a (potentially) realtime method; no lock
 static OSStatus AUMethodSetParameterValue(
     AUv2Plugin*             auv2,
     AudioUnitParameterID    param,
@@ -970,7 +974,8 @@ static OSStatus AUMethodSetParameterValue(
     AudioUnitParameterValue value,
     UInt32                  bufferOffset)
 {
-    cplug_log("AUMethodSetParameterValue => %u %s %u %f %u", param, _cplugScope2Str(scope), elem, value, bufferOffset);
+    // cplug_log("AUMethodSetParameterValue => %u %s %u %f %u", param, _cplugScope2Str(scope), elem, value,
+    // bufferOffset);
     CPLUG_LOG_ASSERT_RETURN(isfinite(value), kAudioUnitErr_InvalidParameter);
     CPLUG_LOG_ASSERT_RETURN(auv2->userPlugin != NULL, kAudioUnitErr_Uninitialized);
 
@@ -1320,9 +1325,8 @@ __attribute__((visibility("default"))) void* GetPluginFactory(const AudioCompone
     auv2->mPlugInInterface.Open      = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
     auv2->mPlugInInterface.Close     = (OSStatus(*)(void*))ComponentBase_AP_Close;
     auv2->mPlugInInterface.Lookup    = AULookup;
+    auv2->desc                       = *inDesc;
     auv2->hostContext.sendParamEvent = _cplug_sendParamEvent;
-
-    auv2->desc = *inDesc;
 
     auv2->mMaxFramesPerSlice = kAUDefaultMaxFramesPerSlice;
     auv2->sampleRate         = kAUDefaultSampleRate;
