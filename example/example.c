@@ -63,6 +63,8 @@ typedef struct ParamInfo
 
 typedef struct MyPlugin
 {
+    CplugHostContext* hostContext;
+
     ParamInfo paramInfo[CPLUG_NUM_PARAMS];
 
     float    sampleRate;
@@ -93,11 +95,12 @@ void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramIdx, 
 void cplug_libraryLoad(){};
 void cplug_libraryUnload(){};
 
-void* cplug_createPlugin()
+void* cplug_createPlugin(CplugHostContext* ctx)
 {
-    MyPlugin* plugin = (MyPlugin*)calloc(1, sizeof(MyPlugin));
-    uint32_t  idx;
+    MyPlugin* plugin    = (MyPlugin*)calloc(1, sizeof(MyPlugin));
+    plugin->hostContext = ctx;
 
+    uint32_t idx;
     // Init params
     // 'pf32'
     idx                                 = get_param_index(plugin, 'pf32');

@@ -20,7 +20,7 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 endif()
 
 if (CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    add_compile_options(/FI ${CMAKE_SOURCE_DIR}/example/config.h)
+    add_compile_options(/FI ${CMAKE_CURRENT_SOURCE_DIR}/example/config.h)
 else()
     add_compile_options(
         -Werror=return-type
@@ -32,7 +32,7 @@ else()
         -Wno-nullability-completeness
         -Wno-writable-strings
 
-        -include${CMAKE_SOURCE_DIR}/example/config.h
+        -include${CMAKE_CURRENT_SOURCE_DIR}/example/config.h
     )
 endif()
 
@@ -77,7 +77,7 @@ elseif (APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         MACOSX_BUNDLE_GUI_IDENTIFIER com.cplug.example.vst3
         MACOSX_BUNDLE_COPYRIGHT CPLUG
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/vst3.plist.in
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/example/vst3.plist.in
     )
     file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.vst3/Contents/PkgInfo)
     file(WRITE ${CMAKE_BINARY_DIR}/cplug_example.vst3/Contents/PkgInfo "BNDL????")
@@ -129,7 +129,7 @@ set_target_properties(cplug_example_auv2 PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "CPLUG Example"
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_COPYRIGHT CPLUG
-    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/auv2.plist.in
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/example/auv2.plist.in
     )
 file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.component/Contents/PkgInfo)
 file(WRITE ${CMAKE_BINARY_DIR}/cplug_example.component/Contents/PkgInfo "BNDL????")
@@ -171,7 +171,7 @@ if (APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_LONG_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_COPYRIGHT CPLUG
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/clap.plist.in
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/example/clap.plist.in
         )
     file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.clap/Contents/PkgInfo)
     file(WRITE ${CMAKE_BINARY_DIR}/cplug_example.clap/Contents/PkgInfo "BNDL????")
@@ -232,7 +232,7 @@ elseif (APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         MACOSX_BUNDLE_COPYRIGHT CPLUG
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/example/app.plist.in
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/example/app.plist.in
     )
     file(TOUCH_NOCREATE ${CMAKE_BINARY_DIR}/cplug_example.app/Contents/PkgInfo)
     file(WRITE ${CMAKE_BINARY_DIR}/cplug_example.app/Contents/PkgInfo "APPL????")
