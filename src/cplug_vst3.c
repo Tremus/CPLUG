@@ -1395,9 +1395,9 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
         queue->lpVtbl->getPoint(queue, pointIdx, &sampleOffset, &value);
         sampleOffset -= sampleOffset & (CPLUG_EVENT_FRAME_QUANTIZE - 1);
 
-        Steinberg_Vst_ParamID paramId = queue->lpVtbl->getParameterId(queue);
         if (sampleOffset == frameIdx)
         {
+            Steinberg_Vst_ParamID paramId = queue->lpVtbl->getParameterId(queue);
             if (paramId > 0xffffff00) // probably MIDI Controller
             {
                 event->midi.type  = CPLUG_EVENT_MIDI;
@@ -1437,10 +1437,11 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
             return true;
         }
 
-        if (sampleOffset < translator->nextEventFrame)
+        if (sampleOffset > frameIdx && sampleOffset < translator->nextEventFrame)
             translator->nextEventFrame = sampleOffset;
     }
 
+    CPLUG_LOG_ASSERT(translator->nextEventFrame > 0);
     translator->paramIdx = 0;
 
     event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
