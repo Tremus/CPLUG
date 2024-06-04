@@ -224,8 +224,7 @@ bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, c
 
 bool CLAPExtParams_get_value(const clap_plugin_t* plugin, clap_id param_id, double* out_value)
 {
-    cplug_log("CLAPExtParams_get_value => %u %p", param_id, out_value);
-    CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
+    // cplug_log("CLAPExtParams_get_value => %u %p", param_id, out_value);
     *out_value = cplug_getParameterValue(((CLAPPlugin*)plugin->plugin_data)->userPlugin, param_id);
     return true;
 }
@@ -238,8 +237,6 @@ bool CLAPExtParams_value_to_text(
     uint32_t             out_buffer_capacity)
 {
     // cplug_log("CLAPExtParams_value_to_text => %u %f %p %u", param_id, value, out_buffer, out_buffer_capacity);
-    CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
-
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
     cplug_parameterValueToString(clap->userPlugin, param_id, out_buffer, out_buffer_capacity, value);
     return true;
@@ -251,8 +248,7 @@ bool CLAPExtParams_text_to_value(
     const char*          param_value_text,
     double*              out_value)
 {
-    cplug_log("CLAPExtParams_text_to_value => %u %p %p", param_id, param_value_text, out_value);
-    CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
+    // cplug_log("CLAPExtParams_text_to_value => %u %p %p", param_id, param_value_text, out_value);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
     *out_value       = cplug_parameterStringToValue(clap->userPlugin, param_id, param_value_text);
     return true;
@@ -423,7 +419,7 @@ static const clap_plugin_gui_t s_clap_gui = {
 // clap_plugin //
 /////////////////
 
-static void _cplug_dummySendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
+static void _cplug_dummySendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
 
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
