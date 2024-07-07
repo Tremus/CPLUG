@@ -15,7 +15,9 @@
 #define ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
 #endif
 
-static const uint32_t cplug_midiControllerOffset = 0xffffffff - (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber);
+// VST3 Param IDs are signed 32bit integers.
+// DAWs like FL Studio are strict on this. Any ID with a negative sign risks being rejected
+static const uint32_t cplug_midiParamIDOffset = 0x7fffffff - (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber);
 
 #define CALL_SMTG_INLINE_UID(args) SMTG_INLINE_UID args
 static const Steinberg_TUID cplug_tuid_component  = CALL_SMTG_INLINE_UID((CPLUG_VST3_TUID_COMPONENT));
@@ -256,11 +258,12 @@ Structs */
 
 // NOTE: You're not allowed to simply receive MIDI data
 // https://steinbergmedia.github.io/vst3_doc/vstinterfaces/classSteinberg_1_1Vst_1_1IMidiMapping.html
-struct VST3MidiMapping
+typedef struct VST3MidiMapping
 {
     Steinberg_Vst_IMidiMappingVtbl* lpVtbl;
     Steinberg_Vst_IMidiMappingVtbl  base;
-} g_vst3MidiMapping;
+    cplug_atomic_i32                refcounter;
+} VST3MidiMapping;
 
 typedef struct VST3Controller
 {
@@ -305,9 +308,10 @@ typedef struct VST3Plugin
     CplugHostContext hostContext;
     void*            userPlugin; // Pointer to your plugin lives here
 
-    VST3Component  component;
-    VST3Controller controller;
-    VST3Processor  processor;
+    VST3Component   component;
+    VST3Controller  controller;
+    VST3MidiMapping midiMapping;
+    VST3Processor   processor;
     // We don't use this, but it's here in case you need it...
     Steinberg_Vst_IHostApplication* host;
 
@@ -319,15 +323,15 @@ typedef struct VST3Plugin
 } VST3Plugin;
 
 // Naughty pointer shifting for VST3 classes
-static VST3Plugin* _cplug_pointerShiftController(VST3Controller* ptr)
+static inline VST3Plugin* _cplug_pointerShiftController(VST3Controller* ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, controller));
 }
-static VST3Plugin* _cplug_pointerShiftProcessor(VST3Processor* ptr)
+static inline VST3Plugin* _cplug_pointerShiftProcessor(VST3Processor* ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, processor));
 }
-static VST3Plugin* _cplug_pointerShiftComponent(VST3Component* ptr)
+static inline VST3Plugin* _cplug_pointerShiftComponent(VST3Component* ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, component));
 }
@@ -350,7 +354,7 @@ static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event
     VST3Plugin* vst3 = (VST3Plugin*)ctx;
 
     Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
-    CPLUG_LOG_ASSERT(handler == handler);
+    CPLUG_LOG_ASSERT(handler != NULL);
     if (handler)
     {
         if (event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN)
@@ -388,6 +392,7 @@ static int _cplug_tryDeleteVST3(VST3Plugin* vst3)
     total     += cplug_atomic_load_i32(&vst3->component.refcounter);
     total     += cplug_atomic_load_i32(&vst3->controller.refcounter);
     total     += cplug_atomic_load_i32(&vst3->processor.refcounter);
+    total     += cplug_atomic_load_i32(&vst3->midiMapping.refcounter);
 
     if (total != 0)
         return 0;
@@ -693,9 +698,30 @@ VST3MidiMapping_queryInterface(void* thisInterface, const Steinberg_TUID iid, vo
     return Steinberg_kNoInterface;
 }
 
-Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3MidiMapping_addRef(void* thisInterface) { return 1; }
+static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_addRef(void* const thisInterface)
+{
+    VST3MidiMapping* const midiMapping = (VST3MidiMapping*)thisInterface;
+    const int              refcount    = cplug_atomic_fetch_add_i32(&midiMapping->refcounter, 1) + 1;
+    cplug_log("VST3MidiMapping_addRef => %p | refcount %i", thisInterface, refcount);
+    return refcount;
+}
 
-Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3MidiMapping_release(void* thisInterface) { return 0; }
+static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_release(void* const thisInterface)
+{
+    VST3Plugin* vst3     = (VST3Plugin*)((char*)(thisInterface)-offsetof(VST3Plugin, midiMapping));
+    const int   refcount = cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, -1) - 1;
+
+    if (refcount)
+    {
+        cplug_log("VST3MidiMapping_release => %p | refcount %d", thisInterface, refcount);
+        return refcount;
+    }
+
+    _cplug_tryDeleteVST3(vst3);
+
+    return 0;
+}
+
 // Steinberg_Vst_IMidiMapping
 Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3MidiMapping_getMidiControllerAssignment(
     void*                    thisInterface,
@@ -709,9 +735,9 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3MidiMapping_getMidiControllerAssign
     // midiControllerNumber, id);
     CPLUG_LOG_ASSERT_RETURN(busIndex == 0, Steinberg_kResultFalse);
     CPLUG_LOG_ASSERT_RETURN(
-        midiControllerNumber < Steinberg_Vst_ControllerNumbers_kCountCtrlNumber,
+        midiControllerNumber >= 0 && midiControllerNumber < Steinberg_Vst_ControllerNumbers_kCountCtrlNumber,
         Steinberg_kResultFalse);
-    *id = cplug_midiControllerOffset + channel * 16 + midiControllerNumber;
+    *id = cplug_midiParamIDOffset + channel * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber + midiControllerNumber;
     return Steinberg_kResultTrue;
 }
 
@@ -721,19 +747,21 @@ Source: "pluginterfaces/vst/ivsteditcontroller.h", line 398 */
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_queryInterface(void* const self, const Steinberg_TUID iid, void** const iface)
 {
-    VST3Controller* const controller = (VST3Controller*)self;
+    VST3Plugin* vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPluginBase_iid) ||
         tuid_match(iid, Steinberg_Vst_IEditController_iid))
     {
         cplug_log("VST3Controller_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
-        cplug_atomic_fetch_add_i32(&controller->refcounter, 1);
+        cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, 1);
         *iface = self;
         return Steinberg_kResultOk;
     }
     if (tuid_match(iid, Steinberg_Vst_IMidiMapping_iid))
     {
-        *iface = &g_vst3MidiMapping;
+        cplug_log("VST3Controller_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, 1);
+        *iface = &vst3->midiMapping;
         return Steinberg_kResultOk;
     }
 
@@ -764,7 +792,8 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_release(void* const self)
     if (vst3->controller.componentHandler)
         vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
 
-    _cplug_tryDeleteVST3(vst3);
+    cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from IMidiMapping extension");
+    vst3->midiMapping.lpVtbl->release(&vst3->midiMapping);
 
     return 0;
 }
@@ -818,7 +847,7 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
     memset(info, 0, sizeof(*info));
     CPLUG_LOG_ASSERT_RETURN(index >= 0 && index < CPLUG_NUM_PARAMS, Steinberg_kInvalidArgument);
     uint32_t paramId = cplug_getParameterID(vst3->userPlugin, index);
-    CPLUG_LOG_ASSERT(paramId < cplug_midiControllerOffset);
+    CPLUG_LOG_ASSERT(paramId < cplug_midiParamIDOffset);
     info->id = paramId;
 
     // set up flags
@@ -908,7 +937,7 @@ static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* sel
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     // Ableton will ask you for MIDI control values. So far, returning 0 here hasn't caused any problems...
-    if (paramId >= cplug_midiControllerOffset)
+    if (paramId >= cplug_midiParamIDOffset)
         return 0.0;
 
     double val = cplug_getParameterValue(vst3->userPlugin, paramId);
@@ -923,10 +952,10 @@ VST3Controller_setParamNormalized(void* const self, const Steinberg_Vst_ParamID 
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
 
-    if (paramId >= cplug_midiControllerOffset)
+    if (paramId >= cplug_midiParamIDOffset)
     {
-        uint8_t channel = (paramId - cplug_midiControllerOffset) / 16;
-        uint8_t control = (paramId - cplug_midiControllerOffset) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+        uint8_t channel = (paramId - cplug_midiParamIDOffset) / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+        uint8_t control = (paramId - cplug_midiParamIDOffset) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
 
         if (vst3->midiContollerQueueSize < ARRSIZE(vst3->midiContollerQueue))
         {
@@ -1401,31 +1430,33 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
         if (sampleOffset == frameIdx)
         {
             Steinberg_Vst_ParamID paramId = queue->lpVtbl->getParameterId(queue);
-            if (paramId > 0xffffff00) // probably MIDI Controller
+            if (paramId >= cplug_midiParamIDOffset) // probably MIDI Controller
             {
                 event->midi.type  = CPLUG_EVENT_MIDI;
                 event->midi.frame = sampleOffset;
 
-                Steinberg_Vst_ControllerNumbers midiControllerNumber =
-                    (Steinberg_Vst_ControllerNumbers)(0xffffffff - paramId);
+                uint8_t channel =
+                    (paramId - cplug_midiParamIDOffset) / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+                uint8_t control =
+                    (paramId - cplug_midiParamIDOffset) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
 
-                switch (midiControllerNumber)
+                switch (control)
                 {
                 case Steinberg_Vst_ControllerNumbers_kAfterTouch:
-                    event->midi.status = 0xd0;
+                    event->midi.status = 0xd0 | channel;
                     event->midi.data1  = (uint8_t)(value * 127.0);
                     break;
                 case Steinberg_Vst_ControllerNumbers_kPitchBend:
                 {
                     uint16_t pb        = (uint16_t)(value * 16383);
-                    event->midi.status = 0xe0;
+                    event->midi.status = 0xe0 | channel;
                     event->midi.data1  = pb & 127;
                     event->midi.data2  = (pb >> 7) & 127;
                     break;
                 }
                 default:
-                    event->midi.status = 0xb0;
-                    event->midi.data1  = midiControllerNumber;
+                    event->midi.status = 0xb0 | channel;
+                    event->midi.data1  = control;
                     event->midi.data2  = (uint8_t)(value * 127.0);
                     break;
                 }
@@ -1466,7 +1497,7 @@ float** VST3ProcessContextTranslator_getAudioOutput(const CplugProcessContext* c
 {
     // cplug_log("VST3ProcessContextTranslator_getAudioOutput => %p %u", ctx, busIdx);
     VST3ProcessContextTranslator* vst3ctx = (VST3ProcessContextTranslator*)ctx;
-    CPLUG_LOG_ASSERT(busIdx < vst3ctx->data->numOutputs);
+    CPLUG_LOG_ASSERT_RETURN(busIdx < vst3ctx->data->numOutputs, NULL);
     return vst3ctx->data->outputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
 }
 
@@ -1764,7 +1795,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getBusInfo(
 
         info->mediaType    = media_type;
         info->direction    = bus_direction;
-        info->channelCount = 1;
+        info->channelCount = 16;
         _cplug_utf8To16(info->name, "MIDI Input", 128);
         info->busType = Steinberg_Vst_BusTypes_kMain;
         info->flags   = Steinberg_Vst_BusInfo_BusFlags_kDefaultActive;
@@ -1778,7 +1809,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getBusInfo(
 
         info->mediaType    = media_type;
         info->direction    = bus_direction;
-        info->channelCount = 1;
+        info->channelCount = 16;
         _cplug_utf8To16(info->name, "MIDI Output", 128);
         info->busType = Steinberg_Vst_BusTypes_kMain;
         info->flags   = Steinberg_Vst_BusInfo_BusFlags_kDefaultActive;
@@ -1798,11 +1829,11 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getRoutingInfo(
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_activateBus(
-    void* const           self,
-    const int32_t         media_type,
-    const int32_t         bus_direction,
-    const int32_t         bus_idx,
-    const Steinberg_TBool state)
+    void* const                      self,
+    const Steinberg_Vst_MediaType    media_type,
+    const Steinberg_Vst_BusDirection bus_direction,
+    const Steinberg_int32            bus_idx,
+    const Steinberg_TBool            state)
 {
     // NOTE this is called a bunch of times
     cplug_log(
@@ -1938,9 +1969,9 @@ VST3Factory_getFactoryInfo(void* self, struct Steinberg_PFactoryInfo* const info
     memset(info, 0, sizeof(*info));
 
     info->flags = 0x10; // unicode
-    snprintf(info->vendor, sizeof(info->vendor), "%s", CPLUG_COMPANY_NAME);
-    snprintf(info->url, sizeof(info->url), "%s", CPLUG_PLUGIN_URI);
-    snprintf(info->email, sizeof(info->email), "%s", CPLUG_COMPANY_EMAIL);
+    strncpy(info->vendor, CPLUG_COMPANY_NAME, sizeof(info->vendor) - 1);
+    strncpy(info->url, CPLUG_PLUGIN_URI, sizeof(info->url) - 1);
+    strncpy(info->email, CPLUG_COMPANY_EMAIL, sizeof(info->email) - 1);
     return Steinberg_kResultOk;
 }
 
@@ -1960,8 +1991,8 @@ VST3Factory_getClassInfo(void* self, const int32_t idx, struct Steinberg_PClassI
     memcpy(info->cid, cplug_tuid_component, 16);
     info->cardinality = Steinberg_PClassInfo_ClassCardinality_kManyInstances;
     // Setting this to anything other than "Audio Module Class" will fail Ableton 10s validation
-    snprintf(info->category, sizeof(info->category), "%s", "Audio Module Class");
-    snprintf(info->name, sizeof(info->name), "%s", CPLUG_PLUGIN_NAME);
+    strncpy(info->category, "Audio Module Class", sizeof(info->category) - 1);
+    strncpy(info->name, CPLUG_PLUGIN_NAME, sizeof(info->name) - 1);
 
     return Steinberg_kResultOk;
 }
@@ -2025,6 +2056,15 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         vst3->controller.base.setComponentHandler    = VST3Controller_setComponentHandler;
         vst3->controller.base.createView             = VST3Controller_createView;
 
+        vst3->midiMapping.lpVtbl     = &vst3->midiMapping.base;
+        vst3->midiMapping.refcounter = 1;
+        // Steinberg_FUnknown
+        vst3->midiMapping.base.queryInterface = VST3MidiMapping_queryInterface;
+        vst3->midiMapping.base.addRef         = VST3MidiMapping_addRef;
+        vst3->midiMapping.base.release        = VST3MidiMapping_release;
+        // Steinberg_Vst_IMidiMapping
+        vst3->midiMapping.base.getMidiControllerAssignment = VST3MidiMapping_getMidiControllerAssignment;
+
         vst3->processor.lpVtbl     = &vst3->processor.base;
         vst3->processor.refcounter = 1;
         // Steinberg_FUnknown
@@ -2057,13 +2097,13 @@ VST3Factory_getClassInfo2(void* self, const int32_t idx, struct Steinberg_PClass
 
     memcpy(info->cid, cplug_tuid_component, 16);
     info->cardinality = Steinberg_PClassInfo_ClassCardinality_kManyInstances;
-    snprintf(info->category, sizeof(info->category), "%s", "Audio Module Class");
-    snprintf(info->subCategories, sizeof(info->subCategories), "%s", CPLUG_VST3_CATEGORIES);
-    snprintf(info->name, sizeof(info->name), "%s", CPLUG_PLUGIN_NAME);
+    strncpy(info->category, "Audio Module Class", sizeof(info->category) - 1);
+    strncpy(info->subCategories, CPLUG_VST3_CATEGORIES, sizeof(info->subCategories) - 1);
+    strncpy(info->name, CPLUG_PLUGIN_NAME, sizeof(info->name) - 1);
     info->classFlags = Steinberg_Vst_ComponentFlags_kSimpleModeSupported;
-    snprintf(info->vendor, sizeof(info->vendor), "%s", CPLUG_COMPANY_NAME);
-    snprintf(info->version, sizeof(info->version), "%s", CPLUG_PLUGIN_VERSION);
-    snprintf(info->sdkVersion, sizeof(info->sdkVersion), Steinberg_Vst_SDKVersionString);
+    strncpy(info->vendor, CPLUG_COMPANY_NAME, sizeof(info->vendor) - 1);
+    strncpy(info->version, CPLUG_PLUGIN_VERSION, sizeof(info->version) - 1);
+    strncpy(info->sdkVersion, Steinberg_Vst_SDKVersionString, sizeof(info->sdkVersion) - 1);
 
     return Steinberg_kResultOk;
 }
@@ -2077,8 +2117,8 @@ VST3Factory_getClassInfoUnicode(void* self, const int32_t idx, struct Steinberg_
 
     memcpy(info->cid, cplug_tuid_component, 16);
     info->cardinality = Steinberg_PClassInfo_ClassCardinality_kManyInstances;
-    snprintf(info->category, sizeof(info->category), "%s", "Audio Module Class");
-    snprintf(info->subCategories, sizeof(info->subCategories), "%s", CPLUG_VST3_CATEGORIES);
+    strncpy(info->category, "Audio Module Class", sizeof(info->category)-1);
+    strncpy(info->subCategories, CPLUG_VST3_CATEGORIES, sizeof(info->subCategories)-1);
     _cplug_utf8To16(info->name, CPLUG_PLUGIN_NAME, 64);
     info->classFlags = Steinberg_Vst_ComponentFlags_kSimpleModeSupported;
     _cplug_utf8To16(info->vendor, CPLUG_COMPANY_NAME, 64);
@@ -2157,12 +2197,6 @@ bool VST3_ENTRY(VST3_ENTRY_ARGS)
 {
     cplug_log("Bundle entry");
     cplug_libraryLoad();
-
-    g_vst3MidiMapping.lpVtbl                           = &g_vst3MidiMapping.base;
-    g_vst3MidiMapping.base.queryInterface              = VST3MidiMapping_queryInterface;
-    g_vst3MidiMapping.base.addRef                      = VST3MidiMapping_addRef;
-    g_vst3MidiMapping.base.release                     = VST3MidiMapping_release;
-    g_vst3MidiMapping.base.getMidiControllerAssignment = VST3MidiMapping_getMidiControllerAssignment;
 
     g_vst3ProcessContext.lpVtbl              = &g_vst3ProcessContext.base;
     g_vst3ProcessContext.base.queryInterface = VST3ProcessContextRequirements_queryInterface;

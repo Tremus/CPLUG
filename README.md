@@ -27,7 +27,7 @@ The source files are configurable using macros you define. A full list of these 
 | cplug_auv2.c           | < 1,400       | Audio Unit v2 wrapper | None                      |
 | cplug_standalone_osx.m | < 1,400       | Standalone            | None                      |
 | cplug_standalone_win.c | < 1,600       | Standalone            | None                      |
-| cplug_vst3.c           | < 2,200       | VST3 wrapper          | `#include <vst3_c_api.h>` |
+| cplug_vst3.c           | < 2,300       | VST3 wrapper          | `#include <vst3_c_api.h>` |
 
 Copies of the CLAP API and VST3 C API are included in the `src` folder. They're both single files.
 
