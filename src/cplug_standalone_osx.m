@@ -107,7 +107,7 @@ struct STAND_Plugin
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
 } g_plugin;
 
-void STAND_sendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
+void STAND_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
 
 #ifdef HOTRELOAD_BUILD_COMMAND
 struct STAND_PluginStateContext
@@ -278,6 +278,14 @@ OSStatus STAND_audioDeviceChangeListener(
 #if CPLUG_GUI_RESIZABLE
     [g_window setStyleMask:[g_window styleMask] | NSWindowStyleMaskResizable];
 #endif
+    [g_window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenNone];
+    NSButton* window_button = [g_window standardWindowButton:NSWindowZoomButton];
+    if (window_button)
+        [window_button setHidden:YES];
+    window_button = [g_window standardWindowButton:NSWindowFullScreenButton];
+    if (window_button)
+        [window_button setHidden:YES];
+
     [g_window setContentView:[[NSView alloc] init]];
     [g_window setDelegate:[[WindowDelegate alloc] init]];
 
