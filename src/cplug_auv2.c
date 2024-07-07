@@ -234,8 +234,8 @@ int64_t AUv2WriteProc(const void* stateCtx, void* writePos, size_t numBytesToWri
 
 struct AUv2ReadStateContext
 {
-    uint8_t* readPos;
-    size_t   bytesRemaining;
+    const UInt8* readPos;
+    size_t       bytesRemaining;
 };
 
 int64_t AUv2ReadProc(const void* stateCtx, void* readPos, size_t maxBytesToRead)
@@ -795,14 +795,16 @@ static OSStatus AUMethodSetProperty(
         CPLUG_LOG_ASSERT_RETURN(inDataSize == sizeof(CFPropertyListRef*), kAudioUnitErr_InvalidPropertyValue);
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
 
-        CFPropertyListRef* propList      = (CFPropertyListRef*)inData;
-        CFStringRef        presetDataKey = CFStringCreateWithCString(0, kAUPresetDataKey, 0);
-        CFMutableDataRef   presetData    = (CFMutableDataRef)CFDictionaryGetValue(*propList, presetDataKey);
-        if (presetData)
+        CFDictionaryRef dict          = *((CFDictionaryRef*)inData);
+        CFStringRef     presetDataKey = CFStringCreateWithCString(0, kAUPresetDataKey, 0);
+
+        const void* data = CFDictionaryGetValue(dict, presetDataKey);
+        CPLUG_LOG_ASSERT(data != NULL);
+        if (data)
         {
-            struct AUv2ReadStateContext readCtx;
-            readCtx.readPos        = CFDataGetMutableBytePtr(presetData);
-            readCtx.bytesRemaining = CFDataGetLength(presetData);
+            struct AUv2ReadStateContext readCtx = {
+                .readPos        = CFDataGetBytePtr(data),
+                .bytesRemaining = CFDataGetLength(data)};
 
             cplug_loadState(auv2->userPlugin, &readCtx, AUv2ReadProc);
         }
