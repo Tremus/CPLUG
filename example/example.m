@@ -3,6 +3,8 @@
 #if CPLUG_WANT_GUI
 #import <Cocoa/Cocoa.h>
 
+void timer_cb(CFRunLoopTimerRef timer, void* info);
+
 @interface MyGUIWrapper : NSView
 {
 @public
@@ -29,6 +31,26 @@
     [super viewDidMoveToWindow];
 }
 #endif // CPLUG_GUI_RESIZABLE
+
+- (void)viewDidMoveToSuperview
+{
+    NSView* parent = [self superview];
+    if (parent)
+    {
+        CFRunLoopTimerContext context = {0};
+        context.info                  = self;
+        double interval               = 0.016; // 16ms
+
+        timerRef =
+            CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + interval, interval, 0, 0, timer_cb, &context);
+        my_assert(timerRef != NULL);
+
+        CFRunLoopAddTimer(CFRunLoopGetCurrent(), timerRef, kCFRunLoopCommonModes);
+
+        [self setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    }
+    [super viewDidMoveToSuperview];
+}
 
 - (void)removeFromSuperview
 {
@@ -146,16 +168,6 @@ void* cplug_createGUI(void* userPlugin)
     gui->img    = (uint32_t*)realloc(gui->img, gui->width * gui->height * sizeof(*gui->img));
 
     memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
-
-    CFRunLoopTimerContext context = {};
-    context.info                  = wrapper;
-    double interval               = 0.01; // 10ms
-
-    wrapper->timerRef =
-        CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + interval, interval, 0, 0, timer_cb, &context);
-    assert(wrapper->timerRef != NULL);
-
-    CFRunLoopAddTimer(CFRunLoopGetCurrent(), wrapper->timerRef, kCFRunLoopCommonModes);
 
     return wrapper;
 }
