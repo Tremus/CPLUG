@@ -1318,54 +1318,56 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
         return true;
     }
 
-    Steinberg_Vst_IEventList* inEvents = translator->data->inputEvents;
-    CPLUG_LOG_ASSERT(inEvents != NULL);
-
-    int numMidiEvents = inEvents->lpVtbl->getEventCount(inEvents);
-    if (translator->midiEventIdx < numMidiEvents)
+    // Studio One has been spotted sending a NULL IEventList
+    Steinberg_Vst_IEventList* const inEvents = translator->data->inputEvents;
+    if (inEvents)
     {
-        struct Steinberg_Vst_Event vst3Midi;
-        inEvents->lpVtbl->getEvent(inEvents, translator->midiEventIdx, &vst3Midi);
-
-        vst3Midi.sampleOffset -= vst3Midi.sampleOffset & (CPLUG_EVENT_FRAME_QUANTIZE - 1);
-
-        if (vst3Midi.sampleOffset == frameIdx)
+        int numMidiEvents = inEvents->lpVtbl->getEventCount(inEvents);
+        if (translator->midiEventIdx < numMidiEvents)
         {
-            translator->midiEventIdx++;
+            struct Steinberg_Vst_Event vst3Midi;
+            inEvents->lpVtbl->getEvent(inEvents, translator->midiEventIdx, &vst3Midi);
 
-            event->type       = CPLUG_EVENT_MIDI;
-            event->midi.frame = vst3Midi.sampleOffset;
-            switch (vst3Midi.type)
+            vst3Midi.sampleOffset -= vst3Midi.sampleOffset & (CPLUG_EVENT_FRAME_QUANTIZE - 1);
+
+            if (vst3Midi.sampleOffset == frameIdx)
             {
-            case Steinberg_Vst_Event_EventTypes_kNoteOnEvent:
-                event->midi.status = 0x90 | vst3Midi.Steinberg_Vst_Event_noteOn.channel;
-                event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
-                event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOn.velocity * 127.0f);
-                break;
-            case Steinberg_Vst_Event_EventTypes_kNoteOffEvent:
-                event->midi.status = 0x80 | vst3Midi.Steinberg_Vst_Event_noteOff.channel;
-                event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.pitch;
-                event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOff.velocity * 127.0f);
-                break;
-            case Steinberg_Vst_Event_EventTypes_kPolyPressureEvent:
-                event->midi.status = 0xA0 | vst3Midi.Steinberg_Vst_Event_polyPressure.channel;
-                event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.pitch;
-                event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_polyPressure.pressure * 127.0f);
-                break;
-            case Steinberg_Vst_Event_EventTypes_kDataEvent: // TODO: support SYSEX
-            case Steinberg_Vst_Event_EventTypes_kNoteExpressionValueEvent:
-            case Steinberg_Vst_Event_EventTypes_kNoteExpressionTextEvent:
-            case Steinberg_Vst_Event_EventTypes_kChordEvent:
-            case Steinberg_Vst_Event_EventTypes_kScaleEvent:
-            case Steinberg_Vst_Event_EventTypes_kLegacyMIDICCOutEvent:
-                cplug_log("Unhandled MIDI event: %hu", vst3Midi.type);
-                break;
-            }
-            return true;
-        }
+                translator->midiEventIdx++;
 
-        if (vst3Midi.sampleOffset < translator->nextEventFrame)
-            translator->nextEventFrame = vst3Midi.sampleOffset;
+                event->type       = CPLUG_EVENT_MIDI;
+                event->midi.frame = vst3Midi.sampleOffset;
+                switch (vst3Midi.type)
+                {
+                case Steinberg_Vst_Event_EventTypes_kNoteOnEvent:
+                    event->midi.status = 0x90 | vst3Midi.Steinberg_Vst_Event_noteOn.channel;
+                    event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
+                    event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOn.velocity * 127.0f);
+                    break;
+                case Steinberg_Vst_Event_EventTypes_kNoteOffEvent:
+                    event->midi.status = 0x80 | vst3Midi.Steinberg_Vst_Event_noteOff.channel;
+                    event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.pitch;
+                    event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOff.velocity * 127.0f);
+                    break;
+                case Steinberg_Vst_Event_EventTypes_kPolyPressureEvent:
+                    event->midi.status = 0xA0 | vst3Midi.Steinberg_Vst_Event_polyPressure.channel;
+                    event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.pitch;
+                    event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_polyPressure.pressure * 127.0f);
+                    break;
+                case Steinberg_Vst_Event_EventTypes_kDataEvent: // TODO: support SYSEX
+                case Steinberg_Vst_Event_EventTypes_kNoteExpressionValueEvent:
+                case Steinberg_Vst_Event_EventTypes_kNoteExpressionTextEvent:
+                case Steinberg_Vst_Event_EventTypes_kChordEvent:
+                case Steinberg_Vst_Event_EventTypes_kScaleEvent:
+                case Steinberg_Vst_Event_EventTypes_kLegacyMIDICCOutEvent:
+                    cplug_log("Unhandled MIDI event: %hu", vst3Midi.type);
+                    break;
+                }
+                return true;
+            }
+
+            if (vst3Midi.sampleOffset < translator->nextEventFrame)
+                translator->nextEventFrame = vst3Midi.sampleOffset;
+        }
     }
 
     Steinberg_Vst_IParameterChanges* inParams = translator->data->inputParameterChanges;
