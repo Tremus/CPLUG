@@ -23,12 +23,17 @@ static const Steinberg_TUID cplug_tuid_controller = CALL_SMTG_INLINE_UID((CPLUG_
 
 const char* _cplug_tuid2str(const Steinberg_TUID iid)
 {
+    static const Steinberg_TUID IReaperUIEmbedInterface_iid =
+        SMTG_INLINE_UID(0x049BF9E7, 0xBC74EAD0, 0xC4101E86, 0x7F725981);
+
     static const struct
     {
         const Steinberg_TUID* iid;
         const char*           name;
     } _known_iids[] = {
         // Supported
+        {&cplug_tuid_component, "{cplug_tuid_component}"},
+        {&cplug_tuid_controller, "{cplug_tuid_controller}"},
         {&Steinberg_Vst_IAudioProcessor_iid, "{Steinberg_Vst_IAudioProcessor_iid}"},
         {&Steinberg_Vst_IAttributeList_iid, "{Steinberg_Vst_IComponent_iid}"},
         {&Steinberg_IBStream_iid, "{Steinberg_IBStream_iid}"},
@@ -46,6 +51,8 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
         {&Steinberg_IPlugView_iid, "{Steinberg_IPlugView_iid}"},
         {&Steinberg_IPlugViewContentScaleSupport_iid, "{Steinberg_IPlugViewContentScaleSupport_iid}"},
         {&Steinberg_Vst_IProcessContextRequirements_iid, "{Steinberg_Vst_IProcessContextRequirements_iid}"},
+        {&Steinberg_Vst_IMidiMapping_iid, "{Steinberg_Vst_IMidiMapping_iid}"},
+        {&Steinberg_IPlugFrame_iid, "{Steinberg_IPlugFrame_iid}"},
         // edit-controller
         {&Steinberg_Vst_IComponentHandler2_iid, "{Steinberg_Vst_IComponentHandler2_iid}"},
         {&Steinberg_Vst_IEditController2_iid, "{Steinberg_Vst_IEditController2_iid}"},
@@ -54,13 +61,12 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
         {&Steinberg_Vst_INoteExpressionController_iid, "{Steinberg_Vst_INoteExpressionController_iid}"},
         {&Steinberg_Vst_IKeyswitchController_iid, "{Steinberg_Vst_IKeyswitchController_iid}"},
         {&Steinberg_Vst_IMidiLearn_iid, "{Steinberg_Vst_IMidiLearn_iid}"},
-        // units
+        // misc
         {&Steinberg_Vst_IProgramListData_iid, "{Steinberg_Vst_IProgramListData_iid}"},
         {&Steinberg_Vst_IUnitData_iid, "{Steinberg_Vst_IUnitData_iid}"},
         {&Steinberg_Vst_IUnitHandler_iid, "{Steinberg_Vst_IUnitHandler_iid}"},
         {&Steinberg_Vst_IUnitHandler2_iid, "{Steinberg_Vst_IUnitHandler2_iid}"},
         {&Steinberg_Vst_IUnitInfo_iid, "{Steinberg_Vst_IUnitInfo_iid}"},
-        // misc
         {&Steinberg_Vst_IAudioPresentationLatency_iid, "{Steinberg_Vst_IAudioPresentationLatency_iid}"},
         {&Steinberg_Vst_IAutomationState_iid, "{Steinberg_Vst_IAutomationState_iid}"},
         {&Steinberg_Vst_ChannelContext_IInfoListener_iid, "{Steinberg_Vst_ChannelContext_IInfoListener_iid}"},
@@ -68,17 +74,12 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
         {&Steinberg_Vst_IPrefetchableSupport_iid, "{Steinberg_Vst_IPrefetchableSupport_iid}"},
         {&Steinberg_Vst_IXmlRepresentationController_iid, "{Steinberg_Vst_IXmlRepresentationController_iid}"},
         {&Steinberg_Vst_IMessage_iid, "{Steinberg_Vst_IMessage_iid}"},
-        {&Steinberg_Vst_IMidiMapping_iid, "{Steinberg_Vst_IMidiMapping_iid}"},
         {&Steinberg_Vst_IParamValueQueue_iid, "{Steinberg_Vst_IParamValueQueue_iid}"},
         {&Steinberg_Vst_IParameterChanges_iid, "{Steinberg_Vst_IParameterChanges_iid}"},
-        {&Steinberg_IPlugFrame_iid, "{Steinberg_IPlugFrame_iid}"},
         {&Steinberg_Vst_IParameterFinder_iid, "{Steinberg_Vst_IParameterFinder_iid}"},
+        // 3rd party
+        {&IReaperUIEmbedInterface_iid, "{IReaperUIEmbedInterface_iid}"},
     };
-
-    if (tuid_match(iid, cplug_tuid_component))
-        return "{cplug_tuid_component}";
-    if (tuid_match(iid, cplug_tuid_controller))
-        return "{cplug_tuid_controller}";
 
     for (size_t i = 0; i < ARRSIZE(_known_iids); ++i)
     {
@@ -1477,9 +1478,8 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
         data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32,
         Steinberg_kInvalidArgument);
 
-    VST3ProcessContextTranslator translator;
-    memset(&translator, 0, sizeof(translator));
-    translator.cplugContext.numFrames = data->numSamples;
+    VST3ProcessContextTranslator translator = {0};
+    translator.cplugContext.numFrames       = data->numSamples;
 
     if (data->processContext != NULL)
     {
