@@ -246,14 +246,14 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 #define unlikely(x) x
 #endif
 
-#if defined(NDEBUG)
+#ifndef cplug_log
+#ifdef NDEBUG
 #define cplug_log(...)
 #else
 #include <stdarg.h>
 #include <stdio.h>
-
 // When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
-static inline void cplug_log(const char* const fmt, ...)
+static inline void cplug_printf(const char* const fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
@@ -261,13 +261,13 @@ static inline void cplug_log(const char* const fmt, ...)
     fprintf(stderr, "\n");
     va_end(args);
 }
+#define cplug_log cplug_printf
 #endif // NDEBUG
+#endif // cplug_log
 
 #define CPLUG_LOG_ASSERT(cond)                                                                                         \
     if (unlikely(! (cond)))                                                                                            \
-    {                                                                                                                  \
-        cplug_log("assertion failure: \"%s\" in file %s, line %i", #cond, __FILE__, __LINE__);                         \
-    }
+        cplug_log("assertion failure: \"%s\" in file %s, line %i", #cond, __FILE__, __LINE__);
 
 #define CPLUG_LOG_ASSERT_RETURN(cond, ret)                                                                             \
     CPLUG_LOG_ASSERT(cond)                                                                                             \
