@@ -174,6 +174,10 @@ typedef struct AUv2Plugin
     CFStringRef inputBusNames[CPLUG_NUM_INPUT_BUSSES];
     CFStringRef outputBusNames[CPLUG_NUM_OUTPUT_BUSSES];
 
+    // Logic in Rosetta mode breaks if you don't have this
+    // Rosetta Logic doesn't seem to support the feature...
+    UInt32 supportsInPlaceProcessing;
+
     // auval make you retain this state. In theory it's to support remote I/O, which we don't, but auval test you on it
     // https://developer-mdn.apple.com/library/archive/qa/qa1777/_index.html
     UInt32                        mMaxFramesPerSlice;
@@ -293,6 +297,8 @@ OSStatus AUMethodGetPropertyInfo(
 
     case kAudioUnitProperty_StreamFormat:
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioStreamBasicDescription));
+        // Stream format must be writable in Rosetta Logic Pro
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
     case kAudioUnitProperty_ElementCount:
@@ -653,7 +659,7 @@ static OSStatus AUMethodGetProperty(
         break;
 
     case kAudioUnitProperty_InPlaceProcessing:
-        *(UInt32*)outData = 1;
+        *(UInt32*)outData = auv2->supportsInPlaceProcessing;
         *ioDataSize       = sizeof(UInt32);
         break;
 
@@ -871,7 +877,8 @@ static OSStatus AUMethodSetProperty(
         memcpy(&auv2->mHostCallbackInfo, inData, sizeof(auv2->mHostCallbackInfo));
         break;
 
-    case kAudioUnitProperty_ClassInfoFromDocument:
+    case kAudioUnitProperty_InPlaceProcessing:
+        auv2->supportsInPlaceProcessing = *(UInt32*)inData;
         break;
 
     default:
@@ -1099,28 +1106,26 @@ static OSStatus AUMethodProcessAudio(
     AudioUnitRenderActionFlags* ioActionFlags,
     const AudioTimeStamp*       inTimeStamp,
     UInt32                      inOutputBusNumber,
-    UInt32                      inNumberFrames,
+    UInt32                      inNumFrames,
     AudioBufferList*            ioData)
 {
-    // cplug_log(
-    //     "AUMethodProcessAudio => %u %p %u %u %p",
-    //     *ioActionFlags,
-    //     inTimeStamp,
-    //     inOutputBusNumber,
-    //     inNumberFrames,
-    //     ioData);
-    // The very smart people at Apple test you on this
-    CPLUG_LOG_ASSERT_RETURN(inNumberFrames <= auv2->mMaxFramesPerSlice, kAudioUnitErr_TooManyFramesToProcess);
+    // Rosetta mode Logic may set ioActionFlags to NULL
+    AudioUnitRenderActionFlags flags = 0;
+    if (ioActionFlags)
+        flags = *ioActionFlags;
+    // cplug_log("AUMethodProcessAudio => %u %p %u %u %p", flags, inTimeStamp, inOutputBusNumber, inNumFrames, ioData);
 
-    if (*ioActionFlags == 0 || (*ioActionFlags & kAudioUnitRenderAction_DoNotCheckRenderArgs))
+    // The very smart people at Apple test you on this
+    CPLUG_LOG_ASSERT_RETURN(inNumFrames <= auv2->mMaxFramesPerSlice, kAudioUnitErr_TooManyFramesToProcess);
+
+    if (flags == 0 || (flags & kAudioUnitRenderAction_DoNotCheckRenderArgs))
     {
-        AUv2ProcessContextTranslator translator;
-        memset(&translator, 0, sizeof(translator));
+        AUv2ProcessContextTranslator translator = {0};
 
         CplugProcessContext* ctx    = &translator.cplugContext;
         HostCallbackInfo*    hostcb = &auv2->mHostCallbackInfo;
 
-        ctx->numFrames = inNumberFrames;
+        ctx->numFrames = inNumFrames;
 
         if (hostcb->beatAndTempoProc)
         {
@@ -1334,7 +1339,8 @@ __attribute__((visibility("default"))) void* GetPluginFactory(const AudioCompone
     auv2->desc                       = *inDesc;
     auv2->hostContext.sendParamEvent = _cplug_sendParamEvent;
 
-    auv2->mMaxFramesPerSlice = kAUDefaultMaxFramesPerSlice;
-    auv2->sampleRate         = kAUDefaultSampleRate;
+    auv2->supportsInPlaceProcessing = 1;
+    auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;
+    auv2->sampleRate                = kAUDefaultSampleRate;
     return auv2;
 }
