@@ -68,6 +68,7 @@ CPLUG_API void cplug_setSampleRateAndBlockSize(void*, double sampleRate, uint32_
 
 enum
 {
+    CPLUG_EVENT_UNHANDLED_EVENT, // Empty event for unimplemented features. Do nothing
     CPLUG_EVENT_PROCESS_AUDIO,
     CPLUG_EVENT_PARAM_CHANGE_BEGIN,
     CPLUG_EVENT_PARAM_CHANGE_UPDATE,

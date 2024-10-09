@@ -371,6 +371,8 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
     {
         switch (event.type)
         {
+        case CPLUG_EVENT_UNHANDLED_EVENT:
+            break;
         case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
         {
             cplug_setParameterValue(plugin, event.parameter.id, event.parameter.value);

@@ -112,10 +112,11 @@ CLAPExtNotePorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input,
     CPLUG_LOG_ASSERT_RETURN(index == 0, false);
 
     info->id = 0;
-    snprintf(info->name, sizeof(info->name), "%s", "MIDI Input");
     // NOTE: Bitwig 5.0 doesn't support the plain MIDI dialect, only CLAP. Bitwig 5.1 supports them all
-    info->supported_dialects = CLAP_NOTE_DIALECT_MIDI;
+    // FL Studio also doesn't support the plain MIDI dialect, but presumably will in future
+    info->supported_dialects = CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_CLAP;
     info->preferred_dialect  = CLAP_NOTE_DIALECT_MIDI;
+    snprintf(info->name, sizeof(info->name), "%s", "MIDI Input");
     return true;
 }
 
@@ -317,6 +318,7 @@ void CLAPExtGUI_destroy(const clap_plugin_t* plugin)
     // NOTE: FL Studio v24.1.1 has been caught calling clap_plugin_gui::destroy() twice
     // The functions below may immediately trigger an additional call to clap_plugin_gui::destroy(), so we need to be
     // evasive with our pointers here.
+
     // Reaper doesn't call ::hide() in their shutdown process
     if (clap->userGUI != NULL)
         cplug_setVisible(clap->userGUI, false);
@@ -452,9 +454,9 @@ static bool CLAPPlugin_init(const struct clap_plugin* plugin)
     clap->host_state   = (const clap_host_state_t*)clap->host->get_extension(clap->host, CLAP_EXT_STATE);
     clap->host_params  = (const clap_host_params_t*)clap->host->get_extension(clap->host, CLAP_EXT_PARAMS);
 
-    assert(clap->host_latency != NULL);
-    assert(clap->host_state != NULL);
-    assert(clap->host_params != NULL);
+    CPLUG_LOG_ASSERT(clap->host_latency != NULL);
+    CPLUG_LOG_ASSERT(clap->host_state != NULL);
+    CPLUG_LOG_ASSERT(clap->host_params != NULL);
     return true;
 }
 
@@ -549,21 +551,71 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
     }
 
     const clap_event_header_t* hdr = process->in_events->get(process->in_events, translator->eventIdx);
-    if (hdr->time != frameIdx)
+
+    uint32_t event_time  = hdr->time;
+    event_time          -= event_time & (CPLUG_EVENT_FRAME_QUANTIZE - 1);
+
+    if (event_time != frameIdx)
     {
         event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
-        event->processAudio.endFrame = hdr->time;
+        event->processAudio.endFrame = event_time;
         return true;
     }
 
     switch (hdr->type)
     {
     case CLAP_EVENT_NOTE_ON:
-    case CLAP_EVENT_NOTE_OFF:
-    case CLAP_EVENT_NOTE_CHOKE:
-    case CLAP_EVENT_NOTE_END:
-        cplug_log("WARNING: Unsupported MIDI format. If you're using Bitwig v5.0, please update to >= v5.1");
+    {
+        const clap_event_note_t* ev = (const clap_event_note_t*)hdr;
+
+        event->midi.type     = CPLUG_EVENT_MIDI;
+        event->midi.bytes[0] = 0x90; // Note on
+        if (ev->channel >= 0 && ev->channel < 16)
+            event->midi.bytes[0] |= ev->channel;
+
+        event->midi.bytes[1] = ev->key;
+        event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
+        event->midi.bytes[3] = 0;
+        event->midi.frame    = event_time;
         break;
+    }
+    case CLAP_EVENT_NOTE_OFF:
+    {
+        const clap_event_note_t* ev = (const clap_event_note_t*)hdr;
+
+        event->midi.type     = CPLUG_EVENT_MIDI;
+        event->midi.bytes[0] = 0x80; // Note off
+        if (ev->channel >= 0 && ev->channel < 16)
+            event->midi.bytes[0] |= ev->channel;
+
+        event->midi.bytes[1] = ev->key;
+        event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
+        event->midi.bytes[3] = 0;
+        event->midi.frame    = event_time;
+        break;
+    }
+    case CLAP_EVENT_NOTE_EXPRESSION:
+    {
+        const clap_event_note_expression_t* ev = (const clap_event_note_expression_t*)hdr;
+
+        if (ev->expression_id == CLAP_NOTE_EXPRESSION_PRESSURE)
+        {
+            event->midi.type     = CPLUG_EVENT_MIDI;
+            event->midi.bytes[0] = 0xa0; // Polyphonic aftertouch
+            if (ev->channel >= 0 && ev->channel < 16)
+                event->midi.bytes[0] |= ev->channel;
+
+            event->midi.bytes[1] = ev->key;
+            event->midi.bytes[2] = (int8_t)(ev->value * 127);
+            event->midi.bytes[3] = 0;
+            event->midi.frame    = event_time;
+        }
+        else
+        {
+            event->type = CPLUG_EVENT_UNHANDLED_EVENT;
+        }
+        break;
+    }
     case CLAP_EVENT_PARAM_VALUE:
     {
         const clap_event_param_value_t* ev = (const clap_event_param_value_t*)hdr;
@@ -582,11 +634,14 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         event->midi.bytes[1] = ev->data[1];
         event->midi.bytes[2] = ev->data[2];
         event->midi.bytes[3] = 0;
-        event->midi.frame    = ev->header.time;
+        event->midi.frame    = event_time;
         break;
     }
+    case CLAP_EVENT_NOTE_CHOKE:
+    case CLAP_EVENT_NOTE_END:
     default:
         cplug_log("ClapProcessContext_dequeueEvent: Unhandled event type: %hu", hdr->type);
+        event->type = CPLUG_EVENT_UNHANDLED_EVENT;
         break;
     }
 
