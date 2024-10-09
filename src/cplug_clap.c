@@ -642,7 +642,7 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
             double loopStartBeats = (double)process->transport->loop_start_beats / (double)CLAP_BEATTIME_FACTOR;
             double loopEndBeats   = (double)process->transport->loop_end_beats / (double)CLAP_BEATTIME_FACTOR;
             translator.cplugContext.loopStartBeats = loopStartBeats;
-            translator.cplugContext.loopStartBeats = loopEndBeats;
+            translator.cplugContext.loopEndBeats   = loopEndBeats;
         }
         if (process->transport->flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE)
         {
