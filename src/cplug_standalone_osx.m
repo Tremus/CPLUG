@@ -642,21 +642,22 @@ void STAND_menuRefreshAudioOutputItems()
         status = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &outputConfig);
         cplug_assert(status == noErr);
 
-        int numChannels = outputConfig.mBuffers[0].mNumberChannels;
+        const int numChannels = outputConfig.mBuffers[0].mNumberChannels;
 
-        if (numChannels != g_audioNumChannels)
+        // Only support devices with even number of outputs.
+        // Devices with 2/4/6/... channels presumably have 1/2/3/... stereo outputs
+        if ((numChannels % 2) != 0)
             continue;
 
-        CFStringRef nameRef = 0;
+        CFStringRef name = 0;
         propertySize        = sizeof(CFStringRef);
         addr.mSelector      = kAudioDevicePropertyDeviceNameCFString;
-        status              = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &nameRef);
+        status              = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &name);
         cplug_assert(status == noErr);
-        cplug_assert(nameRef != 0);
+        cplug_assert(name != 0);
 
-        const char* name = CFStringGetCStringPtr(nameRef, 0);
 
-        NSMenuItem* item = [menu addItemWithTitle:@(name) action:@selector(handleClickAudioOutput:) keyEquivalent:@""];
+        NSMenuItem* item = [menu addItemWithTitle:(NSString*)name action:@selector(handleClickAudioOutput:) keyEquivalent:@""];
         item.target      = [NSApp delegate];
         [item setTag:deviceID];
         [item setState:deviceID == g_audioOutputDeviceID];
@@ -897,9 +898,15 @@ OSStatus STAND_audioIOProc(
 
     // copy from non-interleaved to interleaved
     float* output = (float*)outOutputData->mBuffers->mData;
-    for (int i = 0; i < g_audioBlockSize; i++)
-        for (int ch = 0; ch < g_audioNumChannels; ch++)
-            *output++ = translator.output[ch][i];
+    for (int sample_idx = 0; sample_idx < g_audioBlockSize; sample_idx++)
+    {
+        // g_audioNumChannels may be a multiple of 2/4/6/... depending on the number of stereo outputs on the device
+        for (int ch = 0; ch < g_audioNumChannels; ch += 2)
+        {
+            *output++ = translator.output[0][sample_idx];
+            *output++ = translator.output[1][sample_idx];
+        }
+    }
 
     if (__atomic_load_n(&g_audioStopFlag, __ATOMIC_SEQ_CST))
     {
@@ -942,7 +949,8 @@ void STAND_audioStart()
     propSize = sizeof(list);
     status   = AudioObjectGetPropertyData(g_audioOutputDeviceID, &addr, 0, NULL, &propSize, &list);
     cplug_assert(status == noErr);
-    cplug_assert(list.mBuffers[0].mNumberChannels == g_audioNumChannels);
+    cplug_assert((list.mBuffers[0].mNumberChannels % 2) == 0);
+    g_audioNumChannels = list.mBuffers[0].mNumberChannels;
 
     addr.mSelector = kAudioDevicePropertyBufferFrameSize;
     propSize       = sizeof(UInt32);
