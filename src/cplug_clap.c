@@ -191,7 +191,7 @@ uint32_t CLAPExtParams_count(const clap_plugin_t* plugin)
 
 bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, clap_param_info_t* param_info)
 {
-    cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
+    // cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
     CPLUG_LOG_ASSERT_RETURN(param_index < CPLUG_NUM_PARAMS, false);
 
     CLAPPlugin*    clap     = (CLAPPlugin*)plugin->plugin_data;
@@ -312,11 +312,22 @@ bool CLAPExtGUI_create(const clap_plugin_t* plugin, const char* api, bool is_flo
 
 void CLAPExtGUI_destroy(const clap_plugin_t* plugin)
 {
-    cplug_log("CLAPExtGUI_destroy");
+    cplug_log("CLAPExtGUI_destroy %p", plugin);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
-    cplug_setParent(clap->userGUI, NULL);
-    cplug_destroyGUI(clap->userGUI);
-    clap->userGUI = NULL;
+    // NOTE: FL Studio v24.1.1 has been caught calling clap_plugin_gui::destroy() twice
+    // The functions below may immediately trigger an additional call to clap_plugin_gui::destroy(), so we need to be
+    // evasive with our pointers here.
+    // Reaper doesn't call ::hide() in their shutdown process
+    if (clap->userGUI != NULL)
+        cplug_setVisible(clap->userGUI, false);
+    if (clap->userGUI != NULL)
+        cplug_setParent(clap->userGUI, NULL);
+    if (clap->userGUI != NULL)
+    {
+        void* gui     = clap->userGUI;
+        clap->userGUI = NULL;
+        cplug_destroyGUI(gui);
+    }
 }
 
 static bool CLAPExtGUI_set_scale(const clap_plugin_t* plugin, double scale)
@@ -367,7 +378,9 @@ static bool CLAPExtGUI_set_size(const clap_plugin_t* plugin, uint32_t width, uin
 static bool CLAPExtGUI_set_parent(const clap_plugin_t* plugin, const clap_window_t* window)
 {
     cplug_log("CLAPExtGUI_set_parent => %p", window);
-    cplug_setParent(((CLAPPlugin*)plugin->plugin_data)->userGUI, window->ptr);
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    if (clap->userGUI)
+        cplug_setParent(clap->userGUI, window->ptr);
     return true;
 }
 
@@ -392,7 +405,12 @@ static bool CLAPExtGUI_show(const clap_plugin_t* plugin)
 static bool CLAPExtGUI_hide(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtGUI_hide");
-    cplug_setVisible(((CLAPPlugin*)plugin->plugin_data)->userGUI, false);
+    // FL Studio v24.1.1 has been caught calling clap_plugin_gui::destroy() twice
+    // ::hide() is consistently called right before ::destroy().
+    // This means the GUI may not exist the second time ::hide() is called
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    if (clap->userGUI)
+        cplug_setVisible(clap->userGUI, false);
     return true;
 }
 
