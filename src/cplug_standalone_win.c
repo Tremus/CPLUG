@@ -1080,6 +1080,7 @@ void CPWIN_Menu_RefreshAudioOutputs()
 
             pProperties->lpVtbl->Release(pProperties);
             pDevice->lpVtbl->Release(pDevice);
+            CoTaskMemFree(deviceID);
         }
     }
 
@@ -1473,9 +1474,11 @@ void CPWIN_Audio_SetDevice(int deviceIdx)
     }
 
     WCHAR* audioDeviceID = NULL;
+    // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid
     _gAudio.pIMMDevice->lpVtbl->GetId(_gAudio.pIMMDevice, &audioDeviceID);
     wcscpy_s(_gAudio.DeviceIDBuffer, ARRSIZE(_gAudio.DeviceIDBuffer), audioDeviceID);
     _gAudio.DeviceIDBuffer[ARRSIZE(_gAudio.DeviceIDBuffer) - 1] = 0;
+    CoTaskMemFree(audioDeviceID);
 }
 
 void CPWIN_Audio_Start()
