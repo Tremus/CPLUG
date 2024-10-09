@@ -371,7 +371,7 @@ typedef struct VST3Factory
     Steinberg_IPluginFactory3Vtbl  base;
     cplug_atomic_i32               refcounter;
     // We don't use this, but it's here in case you need it...
-    Steinberg_FUnknown* hostContext;
+    Steinberg_Vst_IHostApplication* host;
 } VST3Factory;
 
 typedef struct VST3Plugin
@@ -1787,6 +1787,9 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_terminate(void* co
     cplug_destroyPlugin(vst3->userPlugin);
     vst3->userPlugin = NULL;
 
+    if (vst3->host)
+        vst3->host->lpVtbl->release(vst3->host);
+
     return Steinberg_kResultOk;
 }
 // Steinberg_Vst_IComponent
@@ -2049,8 +2052,8 @@ uint32_t SMTG_STDMETHODCALLTYPE VST3Factory_release(void* const self)
     cplug_log("VST3Factory_release => %p | refcount is zero, deleting factory", self);
 
     // unref old context if there is one
-    if (factory->hostContext != NULL)
-        factory->hostContext->lpVtbl->release(factory->hostContext);
+    if (factory->host != NULL)
+        factory->host->lpVtbl->release(factory->host);
 
     if (_cplug_leakedVST3Arr != NULL)
     {
@@ -2239,13 +2242,16 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Factory_setHostContext(void* const 
     cplug_log("VST3Factory_setHostContext => %p %p", self, context);
     VST3Factory* const factory = (VST3Factory*)self;
 
-    if (factory->hostContext != NULL)
-        factory->hostContext->lpVtbl->release(factory->hostContext);
+    if (factory->host != NULL)
+    {
+        factory->host->lpVtbl->release(factory->host);
+        factory->host = NULL;
+    }
 
-    factory->hostContext = context;
-
-    if (context != NULL)
-        context->lpVtbl->addRef(context);
+    if (factory->host == NULL && context != NULL)
+        ((Steinberg_FUnknown*)context)
+            ->lpVtbl
+            ->queryInterface((Steinberg_FUnknown*)context, Steinberg_Vst_IHostApplication_iid, (void**)&factory->host);
 
     return Steinberg_kResultOk;
 }
@@ -2293,8 +2299,8 @@ const void* GetPluginFactory(void)
     factory->base.getClassInfoUnicode = VST3Factory_getClassInfoUnicode;
     factory->base.setHostContext      = VST3Factory_setHostContext;
 
-    factory->refcounter  = 1;
-    factory->hostContext = NULL;
+    factory->refcounter = 1;
+    factory->host       = NULL;
     return factory;
 }
 
