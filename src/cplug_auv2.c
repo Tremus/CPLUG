@@ -842,6 +842,9 @@ static OSStatus AUMethodSetProperty(
             break;
         }
         CPLUG_LOG_ASSERT_RETURN(desc->mChannelsPerFrame <= nChannels, kAudioUnitErr_FormatNotSupported);
+        // Logic expects to set the sample rate using kAudioUnitProperty_StreamFormat not kAudioUnitProperty_SampleRate
+        auv2->sampleRate = desc->mSampleRate;
+        cplug_setSampleRateAndBlockSize(auv2->userPlugin, auv2->sampleRate, auv2->mMaxFramesPerSlice);
         break;
     }
     case kAudioUnitProperty_MaximumFramesPerSlice:
