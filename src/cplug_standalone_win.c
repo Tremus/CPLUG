@@ -1,15 +1,25 @@
 /* Released into the public domain by Tré Dudman - 2024
  * For licensing and more info see https://github.com/Tremus/CPLUG */
 
+#ifndef UNICODE
+#define UNICODE
+#endif
+#ifndef _UNICODE
+#define _UNICODE
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #define CINTERFACE
 #define COBJMACROS
-#include <windows.h>
+
+#include <Windows.h>
 
 #include <audioclient.h>
 #include <cfgmgr32.h>
@@ -18,7 +28,6 @@
 #include <synchapi.h>
 
 #include <cplug.h>
-#include <stdio.h>
 
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "cfgmgr32.lib")
@@ -82,7 +91,7 @@ struct CPWIN_Plugin
 } _gCPLUG;
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
-void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
+void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
 
 #ifdef HOTRELOAD_WATCH_DIR
 struct CPWIN_PluginStateContext
@@ -144,7 +153,7 @@ struct
     HMIDIIN hInput;
     int     IsConnected;
 
-    MIDIINCAPS2A LastConnectedInput;
+    MIDIINCAPS2W LastConnectedInput;
 
     struct
     {
@@ -269,7 +278,7 @@ static inline UINT64 CPWIN_RoundUp(UINT64 v, UINT64 align)
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmdshow)
 {
     // https://stackoverflow.com/questions/171213/how-to-block-running-two-instances-of-the-same-program
-    HANDLE hMutexOneInstance = CreateMutexA(NULL, TRUE, "Single instance - " CPLUG_PLUGIN_NAME);
+    HANDLE hMutexOneInstance = CreateMutexW(NULL, TRUE, L"Single instance - " TEXT(CPLUG_PLUGIN_NAME));
     if (hMutexOneInstance == NULL || GetLastError() == ERROR_ALREADY_EXISTS)
     {
         if (hMutexOneInstance)
@@ -349,21 +358,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     MSG  msg;
     HWND hWindow;
 
-    WNDCLASSEX wc;
+    WNDCLASSEXW wc;
+    memset(&wc, 0, sizeof(wc));
     wc.cbSize        = sizeof(wc);
-    wc.style         = 0;
     wc.lpfnWndProc   = CPWIN_WindowProc;
-    wc.cbClsExtra    = 0;
-    wc.cbWndExtra    = 0;
     wc.hInstance     = hInst;
-    wc.hIcon         = LoadIconA(NULL, IDI_APPLICATION);
-    wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
+    wc.hIcon         = LoadIconW(NULL, IDI_APPLICATION);
+    wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
-    wc.lpszMenuName  = NULL;
-    wc.lpszClassName = CPLUG_PLUGIN_NAME;
-    wc.hIconSm       = LoadIconA(NULL, IDI_APPLICATION);
+    wc.lpszClassName = L"CPLUG - " TEXT(CPLUG_PLUGIN_NAME);
+    wc.hIconSm       = LoadIconW(NULL, IDI_APPLICATION);
 
-    if (! RegisterClassExA(&wc))
+    if (! RegisterClassExW(&wc))
     {
         fprintf(stderr, "Could not register window class\n");
         return 1;
@@ -381,10 +387,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     RECT rect = {0, 0, (LONG)guiWidth, (LONG)guiHeight};
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
 
-    hWindow = CreateWindowExA(
+    hWindow = CreateWindowExW(
         0L,
         wc.lpszClassName,
-        wc.lpszClassName,
+        TEXT(CPLUG_PLUGIN_NAME),
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -402,6 +408,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     if (prevDpiCtx)
         SetThreadDpiAwarenessContext(prevDpiCtx);
 
+    {
+        // https://stackoverflow.com/questions/68076251/how-to-prevent-fullscreen-halfscreen-on-windows
+        LONG style  = GetWindowLongW(hWindow, GWL_STYLE);
+        style      &= ~WS_MAXIMIZEBOX;
+        SetWindowLongW(hWindow, GWL_STYLE, style);
+    }
+
     ///////////////
     // INIT MENU //
     ///////////////
@@ -415,13 +428,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     _gMenus.hMIDIMenu           = CreatePopupMenu();
     _gMenus.hMIDIInputsSubMenu  = CreatePopupMenu();
 
-    AppendMenuA(_gMenus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hAudioMenu, "Audio");
-    AppendMenuA(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hSampleRateSubmenu, "Sample Rate");
-    AppendMenuA(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hBlockSizeSubmenu, "Block Size");
-    AppendMenuA(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hAudioOutputSubmenu, "Outputs");
+    AppendMenuW(_gMenus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hAudioMenu, L"Audio");
+    AppendMenuW(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hSampleRateSubmenu, L"Sample Rate");
+    AppendMenuW(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hBlockSizeSubmenu, L"Block Size");
+    AppendMenuW(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hAudioOutputSubmenu, L"Outputs");
 
-    AppendMenuA(_gMenus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hMIDIMenu, "MIDI");
-    AppendMenuA(_gMenus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hMIDIInputsSubMenu, "Inputs");
+    AppendMenuW(_gMenus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hMIDIMenu, L"MIDI");
+    AppendMenuW(_gMenus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hMIDIInputsSubMenu, L"Inputs");
 
     CPWIN_Menu_RefreshSampleRates();
     CPWIN_Menu_RefreshBlockSizes();
@@ -456,10 +469,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
     SetForegroundWindow(hWindow);
 
-    while (GetMessageA(&msg, NULL, 0, 0))
+    while (GetMessageW(&msg, NULL, 0, 0))
     {
         TranslateMessage(&msg);
-        DispatchMessageA(&msg);
+        DispatchMessageW(&msg);
     }
 
     OleUninitialize();
@@ -609,8 +622,8 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             UINT64 buildStart = CPWIN_GetNowNS();
             // Run build command in child process.
-            const char* cmd = HOTRELOAD_BUILD_COMMAND;
-            if (! CreateProcessA(0, (LPSTR)cmd, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
+            const LPWSTR cmd = TEXT(HOTRELOAD_BUILD_COMMAND);
+            if (! CreateProcessW(0, cmd, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
             {
                 printf("CreateProcess failed (%lu).\n", GetLastError());
                 return 1;
@@ -668,10 +681,12 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_SampleRate_96000:
         {
             CPWIN_Audio_Stop();
-            char text[8];
-            int  numCharsCopied = GetMenuStringA(_gMenus.hSampleRateSubmenu, wParam, text, sizeof(text), MF_BYCOMMAND);
+            const SIZE_T MaxChars = 8;
+            WCHAR        text[MaxChars];
+            // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
+            int numCharsCopied = GetMenuStringW(_gMenus.hSampleRateSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
-            _gAudio.SampleRate = atoi(text);
+            _gAudio.SampleRate = _wtoi(text);
             CPWIN_Audio_Start();
             CPWIN_Menu_RefreshSampleRates();
             break;
@@ -687,10 +702,11 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_BlockSize_2048:
         {
             CPWIN_Audio_Stop();
-            char text[8];
-            int  numCharsCopied = GetMenuStringA(_gMenus.hBlockSizeSubmenu, wParam, text, sizeof(text), MF_BYCOMMAND);
+            const SIZE_T MaxChars = 8;
+            WCHAR        text[MaxChars];
+            int numCharsCopied = GetMenuStringW(_gMenus.hBlockSizeSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
-            _gAudio.BlockSize = atoi(text);
+            _gAudio.BlockSize = _wtoi(text);
             CPWIN_Audio_Start();
             CPWIN_Menu_RefreshBlockSizes();
             break;
@@ -715,12 +731,12 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 else
                 {
                     // Check it was the connected device which was removed
-                    MIDIINCAPS2A caps;
+                    MIDIINCAPS2W caps;
                     UINT         i      = 0;
                     MMRESULT     result = 0;
                     for (; i < num; i++)
                     {
-                        result = midiInGetDevCapsA(i, (MIDIINCAPS*)&caps, sizeof(caps));
+                        result = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
                         if (result == MMSYSERR_NOERROR &&
                             memcmp(&caps.NameGuid, &_gMIDI.LastConnectedInput.NameGuid, sizeof(caps.NameGuid)) &&
                             memcmp(&caps.ProductGuid, &_gMIDI.LastConnectedInput.ProductGuid, sizeof(caps.ProductGuid)))
@@ -773,7 +789,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         break;
     }
     }
-    return DefWindowProcA(hWnd, uMsg, wParam, lParam);
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
 }
 
 void CPWIN_LoadPlugin()
@@ -781,7 +797,7 @@ void CPWIN_LoadPlugin()
 #ifdef HOTRELOAD_LIB_PATH
     cplug_assert(_gCPLUG.Library == NULL);
 #define CPLUG_GET_PROC_ADDR(name) GetProcAddress(_gCPLUG.Library, #name)
-    _gCPLUG.Library = LoadLibraryA(HOTRELOAD_LIB_PATH);
+    _gCPLUG.Library = LoadLibraryW(TEXT(HOTRELOAD_LIB_PATH));
     cplug_assert(_gCPLUG.Library != NULL);
 #else // not a hotrealoding build
 #define CPLUG_GET_PROC_ADDR(func) func
@@ -894,8 +910,8 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
     // Most this code was taken from here: https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8
     fprintf(stderr, "Watching folder %s\n", HOTRELOAD_WATCH_DIR);
 
-    HANDLE hDirectory = CreateFileA(
-        HOTRELOAD_WATCH_DIR,
+    HANDLE hDirectory = CreateFileW(
+        TEXT(HOTRELOAD_WATCH_DIR),
         FILE_LIST_DIRECTORY,
         FILE_SHARE_READ,
         NULL,
@@ -908,7 +924,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
         return 1;
     }
     OVERLAPPED overlapped;
-    overlapped.hEvent = CreateEventA(NULL, FALSE, 0, NULL);
+    overlapped.hEvent = CreateEventW(NULL, FALSE, 0, NULL);
 
     BYTE infobuffer[1024];
     // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
@@ -935,7 +951,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
         if (result == WAIT_TIMEOUT)
         {
             if (throttlereload != 0)
-                PostMessageA((HWND)hwnd, WM_COMMAND, IDM_Hotreload, 0);
+                PostMessageW((HWND)hwnd, WM_COMMAND, IDM_Hotreload, 0);
             throttlereload = 0;
         }
         else if (result == WAIT_OBJECT_0)
@@ -994,10 +1010,10 @@ void CPWIN_Menu_RefreshSampleRates()
     {
     }
 
-    AppendMenuA(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 44100), IDM_SampleRate_44100, "44100");
-    AppendMenuA(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 48000), IDM_SampleRate_48000, "48000");
-    AppendMenuA(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 88200), IDM_SampleRate_88200, "88200");
-    AppendMenuA(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 96000), IDM_SampleRate_96000, "96000");
+    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 44100), IDM_SampleRate_44100, L"44100");
+    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 48000), IDM_SampleRate_48000, L"48000");
+    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 88200), IDM_SampleRate_88200, L"88200");
+    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 96000), IDM_SampleRate_96000, L"96000");
 }
 
 void CPWIN_Menu_RefreshBlockSizes()
@@ -1006,15 +1022,15 @@ void CPWIN_Menu_RefreshBlockSizes()
     {
     }
 
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 128), IDM_BlockSize_128, "128");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 192), IDM_BlockSize_192, "192");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 256), IDM_BlockSize_256, "256");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 384), IDM_BlockSize_384, "384");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 448), IDM_BlockSize_448, "448");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 512), IDM_BlockSize_512, "512");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 768), IDM_BlockSize_768, "768");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 1024), IDM_BlockSize_1024, "1024");
-    AppendMenuA(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 2048), IDM_BlockSize_2048, "2048");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 128), IDM_BlockSize_128, L"128");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 192), IDM_BlockSize_192, L"192");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 256), IDM_BlockSize_256, L"256");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 384), IDM_BlockSize_384, L"384");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 448), IDM_BlockSize_448, L"448");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 512), IDM_BlockSize_512, L"512");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 768), IDM_BlockSize_768, L"768");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 1024), IDM_BlockSize_1024, L"1024");
+    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 2048), IDM_BlockSize_2048, L"2048");
 }
 
 void CPWIN_Menu_RefreshAudioOutputs()
@@ -1069,8 +1085,8 @@ void CPWIN_Menu_RefreshAudioOutputs()
 
     pCollection->lpVtbl->Release(pCollection);
 
-    AppendMenuA(_gMenus.hAudioOutputSubmenu, MF_SEPARATOR, IDM_RefreshAudioDeviceList - 1, NULL);
-    AppendMenuA(_gMenus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, "Refresh list");
+    AppendMenuW(_gMenus.hAudioOutputSubmenu, MF_SEPARATOR, IDM_RefreshAudioDeviceList - 1, NULL);
+    AppendMenuW(_gMenus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, L"Refresh list");
 }
 
 void CPWIN_Menu_RefreshMIDIInputs()
@@ -1079,13 +1095,13 @@ void CPWIN_Menu_RefreshMIDIInputs()
     {
     }
 
-    MIDIINCAPS2A caps;
+    MIDIINCAPS2W caps;
     memset(&caps, 0, sizeof(caps));
 
     int numMidiIn = midiInGetNumDevs();
     for (int i = 0; i < numMidiIn; i++)
     {
-        MMRESULT result = midiInGetDevCapsA(i, (MIDIINCAPS*)&caps, sizeof(caps));
+        MMRESULT result = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
         cplug_assert(result == MMSYSERR_NOERROR);
 
         if (result == MMSYSERR_NOERROR)
@@ -1095,7 +1111,7 @@ void CPWIN_Menu_RefreshMIDIInputs()
                 0 == memcmp(&caps.ProductGuid, &_gMIDI.LastConnectedInput.ProductGuid, sizeof(caps.ProductGuid)))
                 uFlags |= MF_CHECKED;
 
-            AppendMenuA(_gMenus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, caps.szPname);
+            AppendMenuW(_gMenus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, caps.szPname);
         }
     }
 }
@@ -1126,20 +1142,20 @@ DWORD CALLBACK CPWIN_HandleDeviceChange(
         // https://learn.microsoft.com/en-us/windows-hardware/drivers/install/device-instance-ids
         if (0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
         {
-            PostMessageA((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedMIDIDevice, 0);
-            PostMessageA((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedMIDIDevice, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
         }
         else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
-            PostMessageA((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
         break;
     case CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED:
         if (0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
         {
-            PostMessageA((HWND)hwnd, WM_COMMAND, IDM_HandleAddedMIDIDevice, 0);
-            PostMessageA((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedMIDIDevice, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
         }
         else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
-            PostMessageA((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
         break;
     default:
         break;
@@ -1185,7 +1201,7 @@ UINT CPWIN_MIDI_ConnectInput(UINT portNum)
         goto failed;
 
     memset(&_gMIDI.LastConnectedInput, 0, sizeof(_gMIDI.LastConnectedInput));
-    result = midiInGetDevCapsA(0, (MIDIINCAPS*)&_gMIDI.LastConnectedInput, sizeof(_gMIDI.LastConnectedInput));
+    result = midiInGetDevCapsW(0, (MIDIINCAPSW*)&_gMIDI.LastConnectedInput, sizeof(_gMIDI.LastConnectedInput));
     cplug_assert(result == MMSYSERR_NOERROR);
 
     for (int i = 0; i < ARRSIZE(_gMIDI.SystemBuffers); i++)
@@ -1532,7 +1548,7 @@ void CPWIN_Audio_Start()
         (void**)&_gAudio.pIAudioRenderClient);
 
     cplug_assert(_gAudio.hAudioEvent == NULL);
-    _gAudio.hAudioEvent = CreateEventA(0, 0, 0, 0);
+    _gAudio.hAudioEvent = CreateEventW(0, 0, 0, 0);
     cplug_assert(_gAudio.hAudioEvent != NULL);
     _gAudio.pIAudioClient->lpVtbl->SetEventHandle(_gAudio.pIAudioClient, _gAudio.hAudioEvent);
 
