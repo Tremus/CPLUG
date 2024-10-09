@@ -884,7 +884,8 @@ OSStatus STAND_audioIOProc(
     cplug_assert(outOutputData->mBuffers->mNumberChannels == g_audioNumChannels);
     cplug_assert(outOutputData->mBuffers->mDataByteSize == (g_audioNumChannels * g_audioBlockSize * sizeof(float)));
 
-    OSXProcessContextTranlator translator  = {0};
+    OSXProcessContextTranlator translator;
+    memset(&translator, 0, sizeof(translator));
     translator.cplugContext.numFrames      = g_audioBlockSize;
     translator.cplugContext.enqueueEvent   = OSXProcessContext_enqueueEvent;
     translator.cplugContext.dequeueEvent   = OSXProcessContext_dequeueEvent;

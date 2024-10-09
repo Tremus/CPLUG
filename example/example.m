@@ -37,7 +37,8 @@ void timer_cb(CFRunLoopTimerRef timer, void* info);
     NSView* parent = [self superview];
     if (parent)
     {
-        CFRunLoopTimerContext context = {0};
+        CFRunLoopTimerContext context;
+        memset(&context, 0, sizeof(context));
         context.info                  = self;
         double interval               = 0.016; // 16ms
 

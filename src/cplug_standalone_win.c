@@ -622,7 +622,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             UINT64 buildStart = CPWIN_GetNowNS();
             // Run build command in child process.
-            const LPWSTR cmd = TEXT(HOTRELOAD_BUILD_COMMAND);
+            const LPWSTR cmd = (LPWSTR)TEXT(HOTRELOAD_BUILD_COMMAND);
             if (! CreateProcessW(0, cmd, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
             {
                 printf("CreateProcess failed (%lu).\n", GetLastError());
@@ -1096,7 +1096,6 @@ void CPWIN_Menu_RefreshMIDIInputs()
     }
 
     MIDIINCAPS2W caps;
-    memset(&caps, 0, sizeof(caps));
 
     int numMidiIn = midiInGetNumDevs();
     for (int i = 0; i < numMidiIn; i++)

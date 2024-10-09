@@ -1111,7 +1111,8 @@ static OSStatus AUMethodProcessAudio(
 
     if (*ioActionFlags == 0 || (*ioActionFlags & kAudioUnitRenderAction_DoNotCheckRenderArgs))
     {
-        AUv2ProcessContextTranslator translator = {0};
+        AUv2ProcessContextTranslator translator;
+        memset(&translator, 0, sizeof(translator));
 
         CplugProcessContext* ctx    = &translator.cplugContext;
         HostCallbackInfo*    hostcb = &auv2->mHostCallbackInfo;

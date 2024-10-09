@@ -350,7 +350,7 @@ static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event
     CPLUG_LOG_ASSERT(
         event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN || event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE ||
         event->type == CPLUG_EVENT_PARAM_CHANGE_END);
-    _Static_assert(offsetof(VST3Plugin, hostContext) == 0, "Required offset for c-cast below");
+    static_assert(offsetof(VST3Plugin, hostContext) == 0, "Required offset for c-cast below");
     VST3Plugin* vst3 = (VST3Plugin*)ctx;
 
     Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
@@ -1511,8 +1511,9 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
         data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32,
         Steinberg_kInvalidArgument);
 
-    VST3ProcessContextTranslator translator = {0};
-    translator.cplugContext.numFrames       = data->numSamples;
+    VST3ProcessContextTranslator translator;
+    memset(&translator, 0, sizeof(translator));
+    translator.cplugContext.numFrames = data->numSamples;
 
     if (data->processContext != NULL)
     {
@@ -2117,8 +2118,8 @@ VST3Factory_getClassInfoUnicode(void* self, const int32_t idx, struct Steinberg_
 
     memcpy(info->cid, cplug_tuid_component, 16);
     info->cardinality = Steinberg_PClassInfo_ClassCardinality_kManyInstances;
-    strncpy(info->category, "Audio Module Class", sizeof(info->category)-1);
-    strncpy(info->subCategories, CPLUG_VST3_CATEGORIES, sizeof(info->subCategories)-1);
+    strncpy(info->category, "Audio Module Class", sizeof(info->category) - 1);
+    strncpy(info->subCategories, CPLUG_VST3_CATEGORIES, sizeof(info->subCategories) - 1);
     _cplug_utf8To16(info->name, CPLUG_PLUGIN_NAME, 64);
     info->classFlags = Steinberg_Vst_ComponentFlags_kSimpleModeSupported;
     _cplug_utf8To16(info->vendor, CPLUG_COMPANY_NAME, 64);
