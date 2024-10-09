@@ -17,8 +17,14 @@
 
 // VST3 Param IDs are 32bit unsigned integers, but some DAWs such as FL Studio are suspect of misinterpreting them as
 // signed integers and reject any negative integer.
-static const Steinberg_Vst_ParamID cplug_midiParamIDOffset =
-    0x7fffffff - (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber);
+static const Steinberg_Vst_ParamID cplug_midi_paramid_count = (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber);
+static const Steinberg_Vst_ParamID cplug_midi_paramid_end   = 0x7fffffff;
+static const Steinberg_Vst_ParamID cplug_midi_paramid_start = cplug_midi_paramid_end - cplug_midi_paramid_count;
+
+static inline bool cplug_is_midi_param(Steinberg_Vst_ParamID id)
+{
+    return id >= cplug_midi_paramid_start && id < cplug_midi_paramid_end;
+}
 
 #define CALL_SMTG_INLINE_UID(args) SMTG_INLINE_UID args
 static const Steinberg_TUID cplug_tuid_component  = CALL_SMTG_INLINE_UID((CPLUG_VST3_TUID_COMPONENT));
@@ -63,6 +69,7 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
         SMTG_INLINE_UID(0xde9817bf, 0xe9684b03, 0x91b80816, 0xc2a1ca5);
     static const Steinberg_TUID IWaylandHost  = SMTG_INLINE_UID(0x5E9582EE, 0x86594652, 0xB213678E, 0x7F1A705E);
     static const Steinberg_TUID IWaylandFrame = SMTG_INLINE_UID(0x809FAEC6, 0x231C4FFA, 0x98ED046C, 0x6E9E2003);
+
     static const struct
     {
         const Steinberg_TUID* iid;
@@ -800,7 +807,8 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3MidiMapping_getMidiControllerAssign
     CPLUG_LOG_ASSERT_RETURN(
         ctrlNum >= 0 && ctrlNum < Steinberg_Vst_ControllerNumbers_kCountCtrlNumber,
         Steinberg_kResultFalse);
-    *id = cplug_midiParamIDOffset + channel * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber + ctrlNum;
+    *id = cplug_midi_paramid_start + (Steinberg_Vst_ParamID)channel * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber +
+          (Steinberg_Vst_ParamID)ctrlNum;
     return Steinberg_kResultTrue;
 }
 
@@ -898,7 +906,19 @@ VST3Controller_getState(void* const self, Steinberg_IBStream* const stream)
 static int32_t SMTG_STDMETHODCALLTYPE VST3Controller_getParameterCount(void* self)
 {
     // cplug_log("VST3Controller_getParameterCount => %p", self);
+#if CPLUG_WANT_MIDI_INPUT
+    // We have to lie to some hosts like Cubase & Reaper that we have additional MidiCC params.
+    // These hosts will call getParameterInfo() for us to set our special param iDs. These hosts then send us
+    // 'parameter' updates which we convert into MIDI. If we don't lie about the parameter count and give the hosts
+    // param IDs, they seemingly fail to make a param idx <-> param id mapping, and won't send the plugin (MIDI)
+    // parameter updates. For example, this means the pitch wheel won't work, because in VST3, the pitch wheel is a
+    // parameter. This is probably the intended behaviour of a VST3 host, however some other hosts like Ableton,
+    // FLStudio, and Bitwig are much more lenient, and will send (MIDI) param updates without requiring us to fake
+    // params in getParameterCount() & getParameterInfo().
+    return CPLUG_NUM_PARAMS + cplug_midi_paramid_count;
+#else
     return CPLUG_NUM_PARAMS;
+#endif
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -907,37 +927,53 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
     // cplug_log("VST3Controller_getParameterInfo => %p %i", self, index);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
+    CPLUG_LOG_ASSERT(index >= 0 && index < CPLUG_NUM_PARAMS + cplug_midi_paramid_count);
+
     memset(info, 0, sizeof(*info));
-    CPLUG_LOG_ASSERT_RETURN(index >= 0 && index < CPLUG_NUM_PARAMS, Steinberg_kInvalidArgument);
-    uint32_t paramId = cplug_getParameterID(vst3->userPlugin, index);
-    CPLUG_LOG_ASSERT(paramId < cplug_midiParamIDOffset);
-    info->id = paramId;
 
-    // set up flags
-    double min, max;
-    cplug_getParameterRange(vst3->userPlugin, paramId, &min, &max);
-    const uint32_t hints = cplug_getParameterFlags(vst3->userPlugin, paramId);
+    if (index >= 0 && index < CPLUG_NUM_PARAMS)
+    {
+        uint32_t paramId = cplug_getParameterID(vst3->userPlugin, index);
+        CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+        info->id = paramId;
 
-    if (hints & CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE)
-        info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kCanAutomate;
-    if (hints & CPLUG_FLAG_PARAMETER_IS_READ_ONLY)
-        info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kIsReadOnly;
-    if (hints & CPLUG_FLAG_PARAMETER_IS_HIDDEN)
-        info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kIsHidden;
-    if (hints & CPLUG_FLAG_PARAMETER_IS_BYPASS)
-        info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kIsBypass;
+        // set up flags
+        double min, max;
+        cplug_getParameterRange(vst3->userPlugin, paramId, &min, &max);
+        const uint32_t hints = cplug_getParameterFlags(vst3->userPlugin, paramId);
 
-    if (hints & CPLUG_FLAG_PARAMETER_IS_BOOL)
-        info->stepCount = 1;
-    else if (hints & CPLUG_FLAG_PARAMETER_IS_INTEGER)
-        info->stepCount = (int)(max - min);
+        if (hints & CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE)
+            info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kCanAutomate;
+        if (hints & CPLUG_FLAG_PARAMETER_IS_READ_ONLY)
+            info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kIsReadOnly;
+        if (hints & CPLUG_FLAG_PARAMETER_IS_HIDDEN)
+            info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kIsHidden;
+        if (hints & CPLUG_FLAG_PARAMETER_IS_BYPASS)
+            info->flags |= Steinberg_Vst_ParameterInfo_ParameterFlags_kIsBypass;
 
-    double defaultValue          = cplug_getDefaultParameterValue(vst3->userPlugin, paramId);
-    info->defaultNormalizedValue = cplug_normaliseParameterValue(vst3->userPlugin, paramId, defaultValue);
-    _cplug_utf8To16(info->title, cplug_getParameterName(vst3->userPlugin, paramId), 128);
-    // Who cares?
-    _cplug_utf8To16(info->shortTitle, cplug_getParameterName(vst3->userPlugin, paramId), 128);
-    return Steinberg_kResultOk;
+        if (hints & CPLUG_FLAG_PARAMETER_IS_BOOL)
+            info->stepCount = 1;
+        else if (hints & CPLUG_FLAG_PARAMETER_IS_INTEGER)
+            info->stepCount = (int)(max - min);
+
+        double defaultValue          = cplug_getDefaultParameterValue(vst3->userPlugin, paramId);
+        info->defaultNormalizedValue = cplug_normaliseParameterValue(vst3->userPlugin, paramId, defaultValue);
+        _cplug_utf8To16(info->title, cplug_getParameterName(vst3->userPlugin, paramId), 128);
+        // Who cares?
+        _cplug_utf8To16(info->shortTitle, cplug_getParameterName(vst3->userPlugin, paramId), 128);
+        return Steinberg_kResultOk;
+    }
+
+#if CPLUG_WANT_MIDI_INPUT
+    if (index >= CPLUG_NUM_PARAMS && index < CPLUG_NUM_PARAMS + cplug_midi_paramid_count)
+    {
+        // Fake MidiCC param
+        uint32_t rel_idx = index - CPLUG_NUM_PARAMS;
+        info->id         = cplug_midi_paramid_start + rel_idx;
+        return Steinberg_kResultOk;
+    }
+#endif
+    return Steinberg_kInvalidArgument;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByValue(
@@ -951,6 +987,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByV
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     // Bitwig 5 has been spotted failing this assertion
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
+    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
 
     char   buf[128];
     double denormalised = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
@@ -965,6 +1002,7 @@ VST3Controller_getParamValueByString(void* self, Steinberg_Vst_ParamID paramId, 
 {
     // cplug_log("VST3Controller_getParamValueByString => %p %u %p %p", self, paramId, input, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
+    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
 
     char as_utf8[128];
     _cplug_utf16To8(as_utf8, input, 128);
@@ -982,6 +1020,7 @@ VST3Controller_normalizedParamToPlain(void* self, Steinberg_Vst_ParamID paramId,
     // cplug_log("VST3Controller_normalizedParamToPlain => %p %u %f", self, paramId, normalised);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, 0.0);
+    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
     return cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
 }
 
@@ -991,6 +1030,7 @@ VST3Controller_plainParamToNormalised(void* self, Steinberg_Vst_ParamID paramId,
     // Gets called a lot in ableton, even when you aren't touching parameters
     // cplug_log("VST3Controller_plainParamToNormalised => %p %u %f", self, paramId, plain);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
+    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
     return cplug_normaliseParameterValue(vst3->userPlugin, paramId, plain);
 }
 
@@ -999,8 +1039,9 @@ static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* sel
     // cplug_log("VST3Controller_getParamNormalized => %p %u", self, paramId);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
-    // Ableton will ask you for MIDI control values. So far, returning 0 here hasn't caused any problems...
-    if (paramId >= cplug_midiParamIDOffset)
+    // Reaper & Ableton will ask you for MIDI control values. So far, returning 0 here hasn't caused any problems...
+    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+    if (cplug_is_midi_param(paramId))
         return 0.0;
 
     double val = cplug_getParameterValue(vst3->userPlugin, paramId);
@@ -1015,10 +1056,10 @@ VST3Controller_setParamNormalized(void* const self, const Steinberg_Vst_ParamID 
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
 
-    if (paramId >= cplug_midiParamIDOffset)
+    if (cplug_is_midi_param(paramId))
     {
-        uint8_t channel = (paramId - cplug_midiParamIDOffset) / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
-        uint8_t control = (paramId - cplug_midiParamIDOffset) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+        uint8_t channel = (paramId - cplug_midi_paramid_start) / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+        uint8_t control = (paramId - cplug_midi_paramid_start) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
 
         if (vst3->midiContollerQueueSize < ARRSIZE(vst3->midiContollerQueue))
         {
@@ -1061,7 +1102,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_setComponentHandler(void* self, Steinberg_Vst_IComponentHandler* handler)
 {
     cplug_log("VST3Controller_setComponentHandler => %p %p", self, handler);
-    // NOTE: Ableton 10, FL Studio & Cubase have has been spotted trying to pass NULL here.
+    // NOTE: Ableton 10, FL Studio & Cubase have been spotted trying to pass NULL here.
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     if (vst3->controller.componentHandler)
@@ -1433,17 +1474,17 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                 switch (vst3Midi.type)
                 {
                 case Steinberg_Vst_Event_EventTypes_kNoteOnEvent:
-                    event->midi.status = 0x90 | vst3Midi.Steinberg_Vst_Event_noteOn.channel;
+                    event->midi.status = 0x90 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.channel;
                     event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOn.velocity * 127.0f);
                     break;
                 case Steinberg_Vst_Event_EventTypes_kNoteOffEvent:
-                    event->midi.status = 0x80 | vst3Midi.Steinberg_Vst_Event_noteOff.channel;
+                    event->midi.status = 0x80 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.channel;
                     event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.pitch;
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOff.velocity * 127.0f);
                     break;
                 case Steinberg_Vst_Event_EventTypes_kPolyPressureEvent:
-                    event->midi.status = 0xA0 | vst3Midi.Steinberg_Vst_Event_polyPressure.channel;
+                    event->midi.status = 0xA0 | (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.channel;
                     event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.pitch;
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_polyPressure.pressure * 127.0f);
                     break;
@@ -1495,12 +1536,12 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
         if (sampleOffset == frameIdx)
         {
             Steinberg_Vst_ParamID paramId = queue->lpVtbl->getParameterId(queue);
-            if (paramId >= cplug_midiParamIDOffset) // probably MIDI Controller
+            if (cplug_is_midi_param(paramId))
             {
                 event->midi.type  = CPLUG_EVENT_MIDI;
                 event->midi.frame = sampleOffset;
 
-                uint32_t diff    = paramId - cplug_midiParamIDOffset;
+                uint32_t diff    = paramId - cplug_midi_paramid_start;
                 uint8_t  channel = diff / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
                 uint8_t  control = diff % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
 
