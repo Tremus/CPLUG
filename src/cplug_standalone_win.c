@@ -552,13 +552,23 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
         return TRUE;
     }
-    case WM_SIZE: // Window has resized
+    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-size
+    case WM_SIZE: // Window has resized, minimised, maximised, or unminimised/unmaximised?
     {
-        RECT rect;
-        GetClientRect(hWnd, &rect);
-        uint32_t width  = rect.right - rect.left;
-        uint32_t height = rect.bottom - rect.top;
-        _gCPLUG.setSize(_gCPLUG.UserGUI, width, height);
+        UINT width  = LOWORD(lParam);
+        UINT height = HIWORD(lParam);
+
+        // When a user minimises the window (wParam == SIZE_MINIMIZED) the width & height will be 0.
+        // Sending a width or height of 0 will crash most applications
+        if (wParam != SIZE_MINIMIZED && width != 0 && height != 0)
+        {
+            _gCPLUG.setSize(_gCPLUG.UserGUI, width, height);
+            _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
+        }
+        else
+        {
+            _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
+        }
         return 0;
     }
     case WM_DPICHANGED:
