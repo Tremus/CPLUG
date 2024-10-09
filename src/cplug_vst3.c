@@ -15,9 +15,10 @@
 #define ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
 #endif
 
-// VST3 Param IDs are signed 32bit integers.
-// DAWs like FL Studio are strict on this. Any ID with a negative sign risks being rejected
-static const uint32_t cplug_midiParamIDOffset = 0x7fffffff - (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber);
+// VST3 Param IDs are 32bit unsigned integers, but some DAWs such as FL Studio are suspect of misinterpreting them as
+// signed integers and reject any negative integer.
+static const Steinberg_Vst_ParamID cplug_midiParamIDOffset =
+    0x7fffffff - (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber);
 
 #define CALL_SMTG_INLINE_UID(args) SMTG_INLINE_UID args
 static const Steinberg_TUID cplug_tuid_component  = CALL_SMTG_INLINE_UID((CPLUG_VST3_TUID_COMPONENT));
@@ -25,9 +26,43 @@ static const Steinberg_TUID cplug_tuid_controller = CALL_SMTG_INLINE_UID((CPLUG_
 
 const char* _cplug_tuid2str(const Steinberg_TUID iid)
 {
+    // https://github.com/justinfrankel/reaper-sdk
     static const Steinberg_TUID IReaperUIEmbedInterface_iid =
         SMTG_INLINE_UID(0x049BF9E7, 0xBC74EAD0, 0xC4101E86, 0x7F725981);
 
+    // https://github.com/fenderdigital/presonus-plugin-extensions
+    static const Steinberg_TUID IContextInfoProvider  = SMTG_INLINE_UID(0x483e61ea, 0x17994494, 0x8199a35a, 0xebb35e3c);
+    static const Steinberg_TUID IContextInfoProvider2 = SMTG_INLINE_UID(0x61e45968, 0x3d364f39, 0xb15e1733, 0x4944172b);
+    static const Steinberg_TUID IContextInfoProvider3 = SMTG_INLINE_UID(0x4e31fdf8, 0x6f4448d4, 0xb4ec1461, 0x68a4150f);
+    static const Steinberg_TUID IContextInfoHandler_iid =
+        SMTG_INLINE_UID(0xc3b17bc0, 0x2c174494, 0x80293402, 0xfbc4bbf8);
+    static const Steinberg_TUID IContextInfoHandler2_iid =
+        SMTG_INLINE_UID(0x31e29a7a, 0xe55043ad, 0x8b95b9b8, 0xda1fbe1e);
+    static const Steinberg_TUID IEditControllerExtra = SMTG_INLINE_UID(0x50553fd9, 0x1d2c4c24, 0xb410f484, 0xc5fb9f3f);
+    static const Steinberg_TUID ISlaveControllerHandler =
+        SMTG_INLINE_UID(0xd93894bd, 0x67454c29, 0x977ae2f5, 0xdb380434);
+    static const Steinberg_TUID IGainReductionInfo    = SMTG_INLINE_UID(0x8e3c292c, 0x95924f9d, 0xb2590b1e, 0x100e4198);
+    static const Steinberg_TUID IHostCommandHandler   = SMTG_INLINE_UID(0xF92032CD, 0x7A84407C, 0xABE6F863, 0x058EA6C2);
+    static const Steinberg_TUID ICommandList          = SMTG_INLINE_UID(0xC5A687DB, 0x82F344E9, 0xB378254A, 0x47C4D712);
+    static const Steinberg_TUID IInstrumentController = SMTG_INLINE_UID(0xd2ce9317, 0xf24942c9, 0x9742e82d, 0xb10ccc52);
+    static const Steinberg_TUID ISoundVariationInfo   = SMTG_INLINE_UID(0xe59066c0, 0x41d940bc, 0x8f88cbb9, 0xa337e20a);
+    static const Steinberg_TUID ISoundVariationController =
+        SMTG_INLINE_UID(0x3abdfc3e, 0x4b964a66, 0xafcd86f10, 0x0d554023);
+    static const Steinberg_TUID ISpeakerSupportInfo = SMTG_INLINE_UID(0x7342e0eb, 0x8f5641de, 0xa5f7c503, 0x8e2ec3ef);
+    static const Steinberg_TUID ISpeakerSupportHostInfo =
+        SMTG_INLINE_UID(0x3327e14a, 0x055e4d27, 0x9a0f6b4a, 0x36316e7b);
+    static const Steinberg_TUID IPlugInViewEmbedding = SMTG_INLINE_UID(0xda57e6d1, 0x1f3242d1, 0xad9c1a82, 0xfdb95695);
+    static const Steinberg_TUID IBitmapAccessor      = SMTG_INLINE_UID(0x1c4b3ab0, 0x76384cb2, 0x8adafd1b, 0xdd198055);
+    static const Steinberg_TUID IPlugViewCoordinateUnitSupport =
+        SMTG_INLINE_UID(0xeae3ebb, 0xb301468a, 0xa127bd34, 0x8fab0824);
+    static const Steinberg_TUID IPlugViewRendering  = SMTG_INLINE_UID(0x215519ce, 0xb4de449f, 0x9572b7f2, 0x4a004a8f);
+    static const Steinberg_TUID IPlugRenderingFrame = SMTG_INLINE_UID(0x68956019, 0x4b964921, 0x9c249f6a, 0xbcff47c6);
+    static const Steinberg_TUID IPlugViewMouseInput = SMTG_INLINE_UID(0xc13c4ea4, 0x868e4af7, 0x9614d52c, 0x7cd07b47);
+    static const Steinberg_TUID IPlugInViewScaling  = SMTG_INLINE_UID(0x65ed9690, 0x8ac44525, 0x8aadef7a, 0x72ea703f);
+    static const Steinberg_TUID IPlugInViewSystemScalingSupport =
+        SMTG_INLINE_UID(0xde9817bf, 0xe9684b03, 0x91b80816, 0xc2a1ca5);
+    static const Steinberg_TUID IWaylandHost  = SMTG_INLINE_UID(0x5E9582EE, 0x86594652, 0xB213678E, 0x7F1A705E);
+    static const Steinberg_TUID IWaylandFrame = SMTG_INLINE_UID(0x809FAEC6, 0x231C4FFA, 0x98ED046C, 0x6E9E2003);
     static const struct
     {
         const Steinberg_TUID* iid;
@@ -81,7 +116,34 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
         {&Steinberg_Vst_IParameterFinder_iid, "{Steinberg_Vst_IParameterFinder_iid}"},
         // 3rd party
         {&IReaperUIEmbedInterface_iid, "{IReaperUIEmbedInterface_iid}"},
-    };
+        {&IContextInfoProvider, "{IContextInfoProvider}"},
+        {&IContextInfoProvider2, "{IContextInfoProvider2}"},
+        {&IContextInfoProvider3, "{IContextInfoProvider3}"},
+        {&IContextInfoHandler_iid, "{IContextInfoHandler_iid}"},
+        {&IContextInfoHandler2_iid, "{IContextInfoHandler2_iid}"},
+        {&IEditControllerExtra, "{IEditControllerExtra}"},
+        {&ISlaveControllerHandler, "{ISlaveControllerHandler}"},
+        {&IGainReductionInfo, "{IGainReductionInfo}"},
+        {&IHostCommandHandler, "{IHostCommandHandler}"},
+        {&ICommandList, "{ICommandList}"},
+        {&IInstrumentController, "{IInstrumentController}"},
+        {&ISoundVariationInfo, "{ISoundVariationInfo}"},
+        {&ISoundVariationController, "{ISoundVariationController}"},
+        {&ISpeakerSupportInfo, "{ISpeakerSupportInfo}"},
+        {&ISpeakerSupportHostInfo, "{ISpeakerSupportHostInfo}"},
+        {&IPlugInViewEmbedding, "{IPlugInViewEmbedding}"},
+        {&IBitmapAccessor, "{IBitmapAccessor}"},
+        {&IPlugViewCoordinateUnitSupport, "{IPlugViewCoordinateUnitSupport}"},
+        {&IPlugViewRendering, "{IPlugViewRendering}"},
+        {&IPlugRenderingFrame, "{IPlugRenderingFrame}"},
+        {&IPlugViewMouseInput, "{IPlugViewMouseInput}"},
+        {&IPlugInViewScaling, "{IPlugInViewScaling}"},
+        {&IPlugInViewSystemScalingSupport, "{IPlugInViewSystemScalingSupport}"},
+        {&IWaylandHost, "{IWaylandHost}"},
+        {&IWaylandFrame, "{IWaylandFrame}"}};
+    // More:
+    // https://github.com/justinfrankel/reaper-sdk
+    // https://github.com/fenderdigital/presonus-plugin-extensions
 
     for (size_t i = 0; i < ARRSIZE(_known_iids); ++i)
     {
@@ -90,9 +152,11 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
     }
 
     // Steinberg swizzle their UIDs outside of Windows. Here we unswizzle it so we can read the same IDs
-    unsigned*      idu32      = (unsigned*)&iid[0];
+    unsigned* idu32 = (unsigned*)&iid[0];
+#ifndef _WIN32
     Steinberg_TUID unswizzled = SMTG_INLINE_UID(idu32[0], idu32[1], idu32[2], idu32[3]);
     idu32                     = (unsigned*)&unswizzled[0];
+#endif
 
     static char buf[46];
     snprintf(buf, sizeof(buf), "{0x%08X,0x%08X,0x%08X,0x%08X}", idu32[0], idu32[1], idu32[2], idu32[3]);
@@ -724,20 +788,19 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_release(void* const thisI
 
 // Steinberg_Vst_IMidiMapping
 Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3MidiMapping_getMidiControllerAssignment(
-    void*                    thisInterface,
-    Steinberg_int32          busIndex,
+    void*                    self,
+    Steinberg_int32          busIdx,
     Steinberg_int16          channel,
-    Steinberg_Vst_CtrlNumber midiControllerNumber,
+    Steinberg_Vst_CtrlNumber ctrlNum,
     Steinberg_Vst_ParamID*   id)
 {
     // This gets hammered at startup
-    // cplug_log("VST3MidiMapping_getMidiControllerAssignment => %p %d %hd %u %p", thisInterface, busIndex, channel,
-    // midiControllerNumber, id);
-    CPLUG_LOG_ASSERT_RETURN(busIndex == 0, Steinberg_kResultFalse);
+    // cplug_log("VST3MidiMapping_getMidiControllerAssignment => %p %d %hd %u %p", self, busIdx, channel, ctrlNum, id);
+    CPLUG_LOG_ASSERT_RETURN(busIdx == 0, Steinberg_kResultFalse);
     CPLUG_LOG_ASSERT_RETURN(
-        midiControllerNumber >= 0 && midiControllerNumber < Steinberg_Vst_ControllerNumbers_kCountCtrlNumber,
+        ctrlNum >= 0 && ctrlNum < Steinberg_Vst_ControllerNumbers_kCountCtrlNumber,
         Steinberg_kResultFalse);
-    *id = cplug_midiParamIDOffset + channel * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber + midiControllerNumber;
+    *id = cplug_midiParamIDOffset + channel * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber + ctrlNum;
     return Steinberg_kResultTrue;
 }
 
@@ -900,7 +963,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByV
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_getParamValueByString(void* self, Steinberg_Vst_ParamID paramId, char16_t* input, double* output)
 {
-    // cplug_log("VST3Controller_getParamValueByString => %p %u %p %p", self, rindex, input, output);
+    // cplug_log("VST3Controller_getParamValueByString => %p %u %p %p", self, paramId, input, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     char as_utf8[128];
@@ -916,7 +979,7 @@ static double SMTG_STDMETHODCALLTYPE
 VST3Controller_normalizedParamToPlain(void* self, Steinberg_Vst_ParamID paramId, double normalised)
 {
     // Gets called a lot in ableton, even when you aren't touching parameters
-    // cplug_log("VST3Controller_normalizedParamToPlain => %p %u %f", self, rindex, normalised);
+    // cplug_log("VST3Controller_normalizedParamToPlain => %p %u %f", self, paramId, normalised);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, 0.0);
     return cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
@@ -998,7 +1061,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_setComponentHandler(void* self, Steinberg_Vst_IComponentHandler* handler)
 {
     cplug_log("VST3Controller_setComponentHandler => %p %p", self, handler);
-    // NOTE: Ableton 10 & FL Studio has been spotted trying to pass NULL here.
+    // NOTE: Ableton 10, FL Studio & Cubase have has been spotted trying to pass NULL here.
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     if (vst3->controller.componentHandler)
@@ -1315,7 +1378,9 @@ bool VST3ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const C
             vst3ctx->data->outputParameterChanges,
             &event->parameter.id,
             &idx);
-        CPLUG_LOG_ASSERT_RETURN(queue != NULL, false);
+        // In Cubase 13, outputParameterChanges exists but the queue doesn't...
+        if (queue == NULL)
+            return false;
 
         double normalised =
             cplug_normaliseParameterValue(vst3ctx->vst3->userPlugin, event->parameter.id, event->parameter.value);
@@ -1435,10 +1500,9 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                 event->midi.type  = CPLUG_EVENT_MIDI;
                 event->midi.frame = sampleOffset;
 
-                uint8_t channel =
-                    (paramId - cplug_midiParamIDOffset) / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
-                uint8_t control =
-                    (paramId - cplug_midiParamIDOffset) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+                uint32_t diff    = paramId - cplug_midiParamIDOffset;
+                uint8_t  channel = diff / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+                uint8_t  control = diff % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
 
                 switch (control)
                 {
