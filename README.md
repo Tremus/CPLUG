@@ -83,5 +83,5 @@ Everything else is in the public domain, or MIT if you insist. See [LICENSE](LIC
 
 ## Credits
 
-- Filipe Coelho - Most of the VST3 wrapper and debugging code is a heavily edited version of his code from the DPF repo
+- Filipe Coelho - Most of the VST3 wrapper and debugging code is a heavily edited version of his code from the [DISTRHO Plugin Framework](https://github.com/DISTRHO/DPF)
 - Nakst - The drawing used in the example plugin was taken from the [CLAP tutorial](https://nakst.gitlab.io/tutorial/clap-part-1.html)
