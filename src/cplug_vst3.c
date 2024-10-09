@@ -714,7 +714,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onSize(void* const self
     int height = rect->bottom - rect->top;
     CPLUG_LOG_ASSERT_RETURN(width >= 0, Steinberg_kInvalidArgument);
     CPLUG_LOG_ASSERT_RETURN(height >= 0, Steinberg_kInvalidArgument);
-    return ! cplug_setSize(((VST3View*)self)->userGUI, width, height);
+    return !cplug_setSize(((VST3View*)self)->userGUI, width, height);
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onFocus(void* const self, const Steinberg_TBool state)
@@ -730,7 +730,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_setFrame(void* const se
     return Steinberg_kResultTrue;
 }
 
-static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_canResize(void* const self) { return ! CPLUG_GUI_RESIZABLE; }
+static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_canResize(void* const self) { return !CPLUG_GUI_RESIZABLE; }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_checkSizeConstraint(void* const self, struct Steinberg_ViewRect* const rect)
@@ -934,7 +934,7 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
     if (index >= 0 && index < CPLUG_NUM_PARAMS)
     {
         uint32_t paramId = cplug_getParameterID(vst3->userPlugin, index);
-        CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+        CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
         info->id = paramId;
 
         // set up flags
@@ -987,7 +987,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByV
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     // Bitwig 5 has been spotted failing this assertion
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
-    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+    CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
 
     char   buf[128];
     double denormalised = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
@@ -1002,7 +1002,7 @@ VST3Controller_getParamValueByString(void* self, Steinberg_Vst_ParamID paramId, 
 {
     // cplug_log("VST3Controller_getParamValueByString => %p %u %p %p", self, paramId, input, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
-    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+    CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
 
     char as_utf8[128];
     _cplug_utf16To8(as_utf8, input, 128);
@@ -1020,7 +1020,7 @@ VST3Controller_normalizedParamToPlain(void* self, Steinberg_Vst_ParamID paramId,
     // cplug_log("VST3Controller_normalizedParamToPlain => %p %u %f", self, paramId, normalised);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, 0.0);
-    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+    CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
     return cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
 }
 
@@ -1030,7 +1030,7 @@ VST3Controller_plainParamToNormalised(void* self, Steinberg_Vst_ParamID paramId,
     // Gets called a lot in ableton, even when you aren't touching parameters
     // cplug_log("VST3Controller_plainParamToNormalised => %p %u %f", self, paramId, plain);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
-    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+    CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
     return cplug_normaliseParameterValue(vst3->userPlugin, paramId, plain);
 }
 
@@ -1040,7 +1040,7 @@ static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* sel
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     // Reaper & Ableton will ask you for MIDI control values. So far, returning 0 here hasn't caused any problems...
-    CPLUG_LOG_ASSERT(! cplug_is_midi_param(paramId));
+    CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
     if (cplug_is_midi_param(paramId))
         return 0.0;
 

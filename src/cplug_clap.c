@@ -61,7 +61,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         return true;
     }
 
-    if (! is_input && index < CPLUG_NUM_OUTPUT_BUSSES)
+    if (!is_input && index < CPLUG_NUM_OUTPUT_BUSSES)
     {
         info->id = CPLUG_NUM_INPUT_BUSSES + index;
         snprintf(info->name, sizeof(info->name), "%s", cplug_getOutputBusName(clap->userPlugin, index));
@@ -287,7 +287,7 @@ static const clap_plugin_params_t s_clap_params = {
 bool CLAPExtGUI_is_api_supported(const clap_plugin_t* plugin, const char* api, bool is_floating)
 {
     cplug_log("CLAPExtGUI_is_api_supported => %s %u", api, (unsigned)is_floating);
-    return ! strcmp(api, CPLUG_CLAP_GUI_API) && ! is_floating;
+    return !strcmp(api, CPLUG_CLAP_GUI_API) && !is_floating;
 }
 
 bool CLAPExtGUI_get_preferred_api(const clap_plugin_t* plugin, const char** api, bool* is_floating)
@@ -669,26 +669,26 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
 static const void* CLAPPlugin_get_extension(const struct clap_plugin* plugin, const char* id)
 {
     cplug_log("CLAPPlugin_get_extension => %s", id);
-    if (! strcmp(id, CLAP_EXT_LATENCY))
+    if (!strcmp(id, CLAP_EXT_LATENCY))
         return &s_clap_latency;
-    if (! strcmp(id, CLAP_EXT_TAIL))
+    if (!strcmp(id, CLAP_EXT_TAIL))
         return &s_clap_tail;
 #if (CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES) > 0
-    if (! strcmp(id, CLAP_EXT_AUDIO_PORTS))
+    if (!strcmp(id, CLAP_EXT_AUDIO_PORTS))
         return &s_clap_audio_ports;
 #endif
 #if CPLUG_WANT_MIDI_INPUT
-    if (! strcmp(id, CLAP_EXT_NOTE_PORTS))
+    if (!strcmp(id, CLAP_EXT_NOTE_PORTS))
         return &s_clap_note_ports;
 #endif
-    if (! strcmp(id, CLAP_EXT_STATE))
+    if (!strcmp(id, CLAP_EXT_STATE))
         return &s_clap_state;
 #if CPLUG_NUM_PARAMS
-    if (! strcmp(id, CLAP_EXT_PARAMS))
+    if (!strcmp(id, CLAP_EXT_PARAMS))
         return &s_clap_params;
 #endif
 #if CPLUG_WANT_GUI
-    if (! strcmp(id, CLAP_EXT_GUI))
+    if (!strcmp(id, CLAP_EXT_GUI))
         return &s_clap_gui;
 #endif
     return NULL;
@@ -782,7 +782,7 @@ static void CLAPEntry_deinit(void)
 static const void* CLAPEntry_get_factory(const char* factory_id)
 {
     cplug_log("CLAPEntry_get_factory => %s", factory_id);
-    if (! strcmp(factory_id, CLAP_PLUGIN_FACTORY_ID))
+    if (!strcmp(factory_id, CLAP_PLUGIN_FACTORY_ID))
         return &s_plugin_factory;
     return NULL;
 }

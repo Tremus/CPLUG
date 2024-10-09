@@ -38,13 +38,13 @@
 
 #define cplug_assert(cond) (cond) ? (void)0 : __debugbreak()
 
-#if ! defined(CPLUG_MIDI_BUFFER_COUNT) || ! defined(CPLUG_MIDI_BUFFER_SIZE) || ! defined(CPLUG_MIDI_RINGBUFFER_SIZE)
+#if !defined(CPLUG_MIDI_BUFFER_COUNT) || !defined(CPLUG_MIDI_BUFFER_SIZE) || !defined(CPLUG_MIDI_RINGBUFFER_SIZE)
 #define CPLUG_MIDI_BUFFER_COUNT    4
 #define CPLUG_MIDI_BUFFER_SIZE     1024
 #define CPLUG_MIDI_RINGBUFFER_SIZE 128
 #endif
 
-#if ! defined(CPLUG_DEFAULT_BLOCK_SIZE) || ! defined(CPLUG_DEFAULT_SAMPLE_RATE)
+#if !defined(CPLUG_DEFAULT_BLOCK_SIZE) || !defined(CPLUG_DEFAULT_SAMPLE_RATE)
 // WARNING: using 44100 is currently glitchy, don't know why. It's not a default for now
 #define CPLUG_DEFAULT_SAMPLE_RATE 48000
 #define CPLUG_DEFAULT_BLOCK_SIZE  512
@@ -345,7 +345,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         CLSCTX_ALL,
         (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_IID_IMMDeviceEnumerator),
         (void**)&_gAudio.pIMMDeviceEnumerator);
-    cplug_assert(! FAILED(hr));
+    cplug_assert(!FAILED(hr));
 
     CPWIN_Audio_SetDevice(-1); // -1 == default device
     CPWIN_Audio_Start();
@@ -369,7 +369,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     wc.lpszClassName = L"CPLUG - " TEXT(CPLUG_PLUGIN_NAME);
     wc.hIconSm       = LoadIconW(NULL, IDI_APPLICATION);
 
-    if (! RegisterClassExW(&wc))
+    if (!RegisterClassExW(&wc))
     {
         fprintf(stderr, "Could not register window class\n");
         return 1;
@@ -633,7 +633,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             UINT64 buildStart = CPWIN_GetNowNS();
             // Run build command in child process.
             const LPWSTR cmd = (LPWSTR)TEXT(HOTRELOAD_BUILD_COMMAND);
-            if (! CreateProcessW(0, cmd, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
+            if (!CreateProcessW(0, cmd, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
             {
                 printf("CreateProcess failed (%lu).\n", GetLastError());
                 return 1;
@@ -947,7 +947,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
         NULL,
         &overlapped,
         NULL);
-    if (! success)
+    if (!success)
     {
         fprintf(stderr, "Failed to queue info buffer\n");
         return 1;
@@ -999,7 +999,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
                 &overlapped,
                 NULL);
 
-            if (! success)
+            if (!success)
             {
                 fprintf(stderr, "Failed to queue info buffer\n");
                 return 1;
@@ -1072,7 +1072,7 @@ void CPWIN_Menu_RefreshAudioOutputs()
 
             IPropertyStore* pProperties = NULL;
             HRESULT         hr          = pDevice->lpVtbl->OpenPropertyStore(pDevice, STGM_READ, &pProperties);
-            cplug_assert(! FAILED(hr));
+            cplug_assert(!FAILED(hr));
 
             PROPVARIANT varName;
             pProperties->lpVtbl->GetValue(pProperties, CPLUG_WTF_IS_A_REFERENCE(_PKEY_Device_FriendlyName), &varName);
@@ -1396,7 +1396,7 @@ DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
 
     _gAudio.pIAudioClient->lpVtbl->Start(_gAudio.pIAudioClient);
 
-    while (! _gAudio.FlagExitAudioThread)
+    while (!_gAudio.FlagExitAudioThread)
     {
         WaitForSingleObject(_gAudio.hAudioEvent, INFINITE);
 
@@ -1480,7 +1480,7 @@ void CPWIN_Audio_SetDevice(int deviceIdx)
             eRender,
             eMultimedia,
             &_gAudio.pIMMDevice);
-        cplug_assert(! FAILED(hr));
+        cplug_assert(!FAILED(hr));
     }
 
     WCHAR* audioDeviceID = NULL;
@@ -1516,7 +1516,7 @@ void CPWIN_Audio_Start()
         CLSCTX_ALL,
         0,
         (void**)&_gAudio.pIAudioClient);
-    cplug_assert(! FAILED(hr));
+    cplug_assert(!FAILED(hr));
 
     // https://learn.microsoft.com/en-us/windows/win32/api/mmreg/ns-mmreg-waveformatextensible
     WAVEFORMATEXTENSIBLE fmtex;
@@ -1549,10 +1549,10 @@ void CPWIN_Audio_Start()
         0,
         (WAVEFORMATEX*)&fmtex,
         0);
-    cplug_assert(! FAILED(hr));
+    cplug_assert(!FAILED(hr));
 
     hr = _gAudio.pIAudioClient->lpVtbl->GetBufferSize(_gAudio.pIAudioClient, &_gAudio.ProcessBufferMaxFrames);
-    cplug_assert(! FAILED(hr));
+    cplug_assert(!FAILED(hr));
 
     _gAudio.pIAudioClient->lpVtbl->GetService(
         _gAudio.pIAudioClient,

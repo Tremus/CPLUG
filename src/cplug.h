@@ -236,7 +236,7 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
     ██████╔╝███████╗██████╔╝╚██████╔╝╚██████╔╝
     ╚═════╝ ╚══════╝╚═════╝  ╚═════╝  ╚═════╝*/
 
-#if ! defined(__cplusplus) && ! defined(_MSC_VER) && ! defined(static_assert)
+#if !defined(__cplusplus) && !defined(_MSC_VER) && !defined(static_assert)
 #define static_assert _Static_assert
 #endif
 
@@ -266,12 +266,12 @@ static inline void cplug_printf(const char* const fmt, ...)
 #endif // cplug_log
 
 #define CPLUG_LOG_ASSERT(cond)                                                                                         \
-    if (unlikely(! (cond)))                                                                                            \
+    if (unlikely(!(cond)))                                                                                             \
         cplug_log("assertion failure: \"%s\" in file %s, line %i", #cond, __FILE__, __LINE__);
 
 #define CPLUG_LOG_ASSERT_RETURN(cond, ret)                                                                             \
     CPLUG_LOG_ASSERT(cond)                                                                                             \
-    if (unlikely(! (cond)))                                                                                            \
+    if (unlikely(!(cond)))                                                                                             \
         return ret;
 
 #ifdef __cplusplus

@@ -981,7 +981,7 @@ static OSStatus AUMethodSetParameterValue(
     CPLUG_LOG_ASSERT_RETURN(isfinite(value), kAudioUnitErr_InvalidParameter);
     CPLUG_LOG_ASSERT_RETURN(auv2->userPlugin != NULL, kAudioUnitErr_Uninitialized);
 
-    if (! isfinite(value))
+    if (!isfinite(value))
         return kAudioUnitErr_InvalidParameterValue;
 
     cplug_setParameterValue(auv2->userPlugin, param, value);
