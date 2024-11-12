@@ -531,24 +531,31 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         return 0;
     case WM_SIZING: // User is resizing
     {
-        RECT*    rect   = (RECT*)lParam;
-        uint32_t width  = rect->right - rect->left;
-        uint32_t height = rect->bottom - rect->top;
+        // Note: The size of the child window is different to the size of our window.
+        // The area of (RECT*)lParam below includes the toolbar, window title, window border, etc.
+        RECT* parent = (RECT*)lParam;
+        LONG  width  = parent->right - parent->left;
+        LONG  height = parent->bottom - parent->top;
 
-        RECT adjusted = *rect;
-        AdjustWindowRect(&adjusted, WS_OVERLAPPEDWINDOW, TRUE);
+        // Calculate the size of the child window
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-adjustwindowrect
+        RECT child = *parent;
+        AdjustWindowRect(&child, WS_OVERLAPPEDWINDOW, TRUE);
+        LONG padding_x = (child.right - child.left) - width;
+        LONG padding_y = (child.bottom - child.top) - height;
 
-        uint32_t px = (adjusted.right - adjusted.left) - width;
-        uint32_t py = (adjusted.bottom - adjusted.top) - height;
+        width      -= padding_x;
+        height     -= padding_y;
+        uint32_t w  = width < 0 ? 0 : width;
+        uint32_t h  = height < 0 ? 0 : height;
+        _gCPLUG.checkSize(_gCPLUG.UserGUI, &w, &h);
+        width   = w;
+        height  = h;
+        width  += padding_x;
+        height += padding_y;
 
-        width  -= px;
-        height -= py;
-        _gCPLUG.checkSize(_gCPLUG.UserGUI, &width, &height);
-        width  += px;
-        height += py;
-
-        rect->right  = rect->left + width;
-        rect->bottom = rect->top + height;
+        parent->right  = parent->left + width;
+        parent->bottom = parent->top + height;
 
         return TRUE;
     }
