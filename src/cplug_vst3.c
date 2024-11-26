@@ -1971,7 +1971,7 @@ int64_t cplug_VST3ReadProcTranslator(const void* stateCtx, void* readPos, size_t
 {
     Steinberg_IBStream* const stream    = (Steinberg_IBStream* const)stateCtx;
     Steinberg_int32           bytesRead = 0;
-    Steinberg_tresult         result    = stream->lpVtbl->read(stream, readPos, maxBytesToRead, &bytesRead);
+    Steinberg_tresult         result    = stream->lpVtbl->read(stream, readPos, (int)maxBytesToRead, &bytesRead);
     if (result != Steinberg_kResultOk)
         return -1;
     return bytesRead;
@@ -1991,7 +1991,7 @@ int64_t cplug_VST3WriteProcTranslator(const void* stateCtx, void* writePos, size
 {
     Steinberg_IBStream* const stream       = (Steinberg_IBStream* const)stateCtx;
     Steinberg_int32           bytesWritten = 0;
-    Steinberg_tresult         result       = stream->lpVtbl->write(stream, writePos, numBytesToWrite, &bytesWritten);
+    Steinberg_tresult         result = stream->lpVtbl->write(stream, writePos, (int)numBytesToWrite, &bytesWritten);
     if (result != Steinberg_kResultOk)
         return -1;
     return bytesWritten;

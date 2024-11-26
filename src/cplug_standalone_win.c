@@ -56,6 +56,8 @@
 #define CPLUG_WTF_IS_A_REFERENCE(obj) &obj
 #endif
 
+#define CPLUG_MENU_MAX_CHARS 8
+
 ////////////
 // Plugin //
 ////////////
@@ -478,7 +480,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     OleUninitialize();
     ReleaseMutex(hMutexOneInstance);
     CloseHandle(hMutexOneInstance);
-    return msg.wParam;
+    return (int)msg.wParam;
 }
 
 LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -698,10 +700,10 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_SampleRate_96000:
         {
             CPWIN_Audio_Stop();
-            const SIZE_T MaxChars = 8;
-            WCHAR        text[MaxChars];
+            WCHAR text[CPLUG_MENU_MAX_CHARS];
             // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
-            int numCharsCopied = GetMenuStringW(_gMenus.hSampleRateSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
+            int numCharsCopied =
+                GetMenuStringW(_gMenus.hSampleRateSubmenu, (UINT)wParam, text, CPLUG_MENU_MAX_CHARS, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             _gAudio.SampleRate = _wtoi(text);
             CPWIN_Audio_Start();
@@ -719,9 +721,9 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_BlockSize_2048:
         {
             CPWIN_Audio_Stop();
-            const SIZE_T MaxChars = 8;
-            WCHAR        text[MaxChars];
-            int numCharsCopied = GetMenuStringW(_gMenus.hBlockSizeSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
+            WCHAR text[CPLUG_MENU_MAX_CHARS];
+            int   numCharsCopied =
+                GetMenuStringW(_gMenus.hBlockSizeSubmenu, (UINT)wParam, text, CPLUG_MENU_MAX_CHARS, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             _gAudio.BlockSize = _wtoi(text);
             CPWIN_Audio_Start();
@@ -787,7 +789,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         {
             if (wParam >= IDM_OFFSET_AUDIO_DEVICES && wParam < IDM_RefreshAudioDeviceList)
             {
-                UINT idx = wParam - IDM_OFFSET_AUDIO_DEVICES;
+                int idx = (int)(wParam - IDM_OFFSET_AUDIO_DEVICES);
                 CPWIN_Audio_Stop();
                 CPWIN_Audio_SetDevice(idx);
                 CPWIN_Audio_Start();
@@ -795,7 +797,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             }
             if (wParam >= IDM_OFFSET_MIDI_DEVICES && wParam < IDM_RefreshMIDIDeviceList)
             {
-                UINT idx = wParam - IDM_OFFSET_MIDI_DEVICES;
+                int idx = (int)(wParam - IDM_OFFSET_MIDI_DEVICES);
                 CPWIN_MIDI_DisconnectInput();
                 CPWIN_MIDI_ConnectInput(idx);
                 CPWIN_Menu_RefreshMIDIInputs();
@@ -1192,7 +1194,7 @@ void CALLBACK CPWIN_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
 
         /* take first 3 bytes. remember, the rest are junk, including possibly the ones we're taking */
         midi.bytesAsInt  = dwParam1 & 0xffffff;
-        midi.timestampMs = dwParam2;
+        midi.timestampMs = (UINT)dwParam2;
 
         writePos = _InterlockedCompareExchange(&_gMIDI.RingBuffer.writePos, 0, 0);
 

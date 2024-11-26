@@ -19,8 +19,8 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     set(CMAKE_CXX_STANDARD 20) # required for c++ clap build
 endif()
 
-if (CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    add_compile_options(/FI ${CMAKE_CURRENT_SOURCE_DIR}/example/config.h)
+if (CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC" OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_compile_options(/W3 /FI ${CMAKE_CURRENT_SOURCE_DIR}/example/config.h)
     set(WINDOWS_EXPORT_ALL_SYMBOLS FALSE)
 else()
     add_compile_options(
