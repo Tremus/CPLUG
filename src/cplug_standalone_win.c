@@ -876,7 +876,7 @@ int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t
     if (ctx->Data == NULL)
     {
         const SIZE_T largePageSize  = GetLargePageMinimum();
-        SIZE_T       bigreserve     = CPWIN_RoundUp(numBytesToWrite, largePageSize);
+        SIZE_T       bigreserve     = (SIZE_T)CPWIN_RoundUp(numBytesToWrite, largePageSize);
         bigreserve                 *= 8;
         ctx->Data                   = (BYTE*)VirtualAlloc(NULL, bigreserve, MEM_RESERVE, PAGE_READWRITE);
         cplug_assert(ctx->Data != NULL);
@@ -1353,7 +1353,7 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
     ctx.cplugContext.getAudioOutput = CPWIN_Audio_getAudioOutput;
 
     SIZE_T processBufferOffset = sizeof(float) * _gAudio.NumChannels * _gAudio.ProcessBufferMaxFrames;
-    processBufferOffset        = CPWIN_RoundUp(processBufferOffset, 32);
+    processBufferOffset        = (SIZE_T)CPWIN_RoundUp(processBufferOffset, 32);
     ctx.output[0]              = (float*)(_gAudio.ProcessBuffer + processBufferOffset);
     ctx.output[1]              = ctx.output[0] + _gAudio.BlockSize;
 
@@ -1366,15 +1366,15 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
         UINT32 framesToCopy = remainingBlockFrames < _gAudio.BlockSize ? remainingBlockFrames : _gAudio.BlockSize;
         SIZE_T bytesToCopy  = sizeof(float) * _gAudio.NumChannels * framesToCopy;
 
-        int    i                 = 0;
+        UINT32 i                 = 0;
         float* outputInterleaved = (float*)outBuffer;
         for (; i < framesToCopy; i++)
-            for (int ch = 0; ch < _gAudio.NumChannels; ch++)
+            for (UINT32 ch = 0; ch < _gAudio.NumChannels; ch++)
                 *outputInterleaved++ = ctx.output[ch][i];
 
         float* remainingInterleaved = (float*)_gAudio.ProcessBuffer;
         for (; i < _gAudio.BlockSize; i++)
-            for (int ch = 0; ch < _gAudio.NumChannels; ch++)
+            for (UINT32 ch = 0; ch < _gAudio.NumChannels; ch++)
                 *remainingInterleaved++ = ctx.output[ch][i];
         _gAudio.ProcessBufferNumOverprocessedFrames = _gAudio.BlockSize - framesToCopy;
 
@@ -1472,8 +1472,8 @@ void CPWIN_Audio_SetDevice(int deviceIdx)
         UINT numDevices = 0;
         pCollection->lpVtbl->GetCount(pCollection, &numDevices);
 
-        if (deviceIdx < numDevices)
-            pCollection->lpVtbl->Item(pCollection, deviceIdx, &_gAudio.pIMMDevice);
+        if ((UINT)deviceIdx < numDevices)
+            pCollection->lpVtbl->Item(pCollection, (UINT)deviceIdx, &_gAudio.pIMMDevice);
 
         pCollection->lpVtbl->Release(pCollection);
     }
@@ -1544,7 +1544,7 @@ void CPWIN_Audio_Start()
 
     fmtex.SubFormat = _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 
-    REFERENCE_TIME reftime = (double)_gAudio.BlockSize / ((double)_gAudio.SampleRate * 1.e-7);
+    REFERENCE_TIME reftime = (REFERENCE_TIME)((double)_gAudio.BlockSize / ((double)_gAudio.SampleRate * 1.e-7));
 
     // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize
     hr = _gAudio.pIAudioClient->lpVtbl->Initialize(
@@ -1573,10 +1573,10 @@ void CPWIN_Audio_Start()
 
     SIZE_T req_bytes_reserve    = sizeof(float) * _gAudio.NumChannels * _gAudio.ProcessBufferMaxFrames;
     SIZE_T req_bytes_processing = sizeof(float) * _gAudio.NumChannels * _gAudio.BlockSize;
-    req_bytes_reserve           = CPWIN_RoundUp(req_bytes_reserve, 32);
-    req_bytes_processing        = CPWIN_RoundUp(req_bytes_processing, 32);
+    req_bytes_reserve           = (SIZE_T)CPWIN_RoundUp(req_bytes_reserve, 32);
+    req_bytes_processing        = (SIZE_T)CPWIN_RoundUp(req_bytes_processing, 32);
 
-    SIZE_T requiredCap = CPWIN_RoundUp(req_bytes_reserve + req_bytes_processing, 4096);
+    SIZE_T requiredCap = (SIZE_T)CPWIN_RoundUp(req_bytes_reserve + req_bytes_processing, 4096);
     if (requiredCap > _gAudio.ProcessBufferCap)
     {
         if (_gAudio.ProcessBuffer != NULL)

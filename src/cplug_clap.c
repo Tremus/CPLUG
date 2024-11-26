@@ -573,7 +573,7 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         if (ev->channel >= 0 && ev->channel < 16)
             event->midi.bytes[0] |= ev->channel;
 
-        event->midi.bytes[1] = ev->key;
+        event->midi.bytes[1] = (uint8_t)ev->key;
         event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
         event->midi.bytes[3] = 0;
         event->midi.frame    = event_time;
@@ -588,7 +588,7 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         if (ev->channel >= 0 && ev->channel < 16)
             event->midi.bytes[0] |= ev->channel;
 
-        event->midi.bytes[1] = ev->key;
+        event->midi.bytes[1] = (uint8_t)ev->key;
         event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
         event->midi.bytes[3] = 0;
         event->midi.frame    = event_time;
@@ -605,7 +605,7 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
             if (ev->channel >= 0 && ev->channel < 16)
                 event->midi.bytes[0] |= ev->channel;
 
-            event->midi.bytes[1] = ev->key;
+            event->midi.bytes[1] = (uint8_t)ev->key;
             event->midi.bytes[2] = (int8_t)(ev->value * 127);
             event->midi.bytes[3] = 0;
             event->midi.frame    = event_time;

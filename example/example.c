@@ -354,7 +354,7 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
         if (event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE)
         {
             uint32_t idx                  = get_param_index(ptr, event->parameter.id);
-            plugin->paramValuesAudio[idx] = event->parameter.value;
+            plugin->paramValuesAudio[idx] = (float)event->parameter.value;
         }
 
         ctx->enqueueEvent(ctx, event, 0);
@@ -366,7 +366,7 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
 
     // "Sample accurate" process loop
     CplugEvent event;
-    int        frame = 0;
+    uint32_t   frame = 0;
     while (ctx->dequeueEvent(ctx, &event, frame))
     {
         switch (event.type)
@@ -557,7 +557,7 @@ static void drawGUI(MyGUI* gui)
     double v = cplug_getParameterValue(gui->plugin, 'pf32');
     v        = cplug_normaliseParameterValue(gui->plugin, 'pf32', v);
 
-    drawRect(gui, 10, 40, 10 + 30 * (1.0 - v), 40, 0x000000, 0x000000);
+    drawRect(gui, 10, 40, 10 + (uint32_t)(30.0 * (1.0 - v)), 40, 0x000000, 0x000000);
 }
 
 static void handleMouseDown(MyGUI* gui, int x, int y)
@@ -599,7 +599,7 @@ static void handleMouseMove(MyGUI* gui, int x, int y)
 
         double nextValDenormalised = cplug_denormaliseParameterValue(gui->plugin, gui->dragParamId, nextValNormalised);
         uint32_t paramIdx          = get_param_index(gui->plugin, gui->dragParamId);
-        gui->plugin->paramValuesMain[paramIdx] = nextValDenormalised;
+        gui->plugin->paramValuesMain[paramIdx] = (float)nextValDenormalised;
         sendParamEventFromMain(gui->plugin, CPLUG_EVENT_PARAM_CHANGE_UPDATE, gui->dragParamId, nextValDenormalised);
     }
 }
@@ -623,7 +623,7 @@ bool tickGUI(MyGUI* gui)
         case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
         {
             uint32_t idx                 = get_param_index(gui->plugin, event->parameter.id);
-            plugin->paramValuesMain[idx] = event->parameter.value;
+            plugin->paramValuesMain[idx] = (float)event->parameter.value;
             break;
         }
         default:
@@ -658,7 +658,7 @@ LRESULT CALLBACK MyWinProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         drawGUI(gui);
         PAINTSTRUCT paint;
         HDC         dc   = BeginPaint(hwnd, &paint);
-        BITMAPINFO  info = {{sizeof(BITMAPINFOHEADER), (LONG)gui->width, (LONG)-gui->height, 1, 32, BI_RGB}};
+        BITMAPINFO  info = {{sizeof(BITMAPINFOHEADER), (LONG)gui->width, (LONG)gui->height, 1, 32, BI_RGB}};
         StretchDIBits(
             dc,
             0,

@@ -21,6 +21,7 @@ endif()
 
 if (CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     add_compile_options(/FI ${CMAKE_CURRENT_SOURCE_DIR}/example/config.h)
+    set(WINDOWS_EXPORT_ALL_SYMBOLS FALSE)
 else()
     add_compile_options(
         -Werror=return-type
