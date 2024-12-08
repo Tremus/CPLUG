@@ -5,31 +5,31 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
-	<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+	<string>@PRODUCT_NAME@</string>
 	<key>CFBundleGetInfoString</key>
-	<string>${MACOSX_BUNDLE_INFO_STRING}</string>
+	<string>@MACOSX_BUNDLE_INFO_STRING@</string>
 	<key>CFBundleIconFile</key>
-	<string>${MACOSX_BUNDLE_ICON_FILE}</string>
+	<string>@MACOSX_BUNDLE_ICON_FILE@</string>
 	<key>CFBundleIdentifier</key>
-	<string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+	<string>@bundle_identifier@</string>
 	<key>CFBundleName</key>
-	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+	<string>@PRODUCT_NAME@</string>
 	<key>CFBundleDisplayName</key>
-    <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <string>@PRODUCT_NAME@</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleVersion</key>
-    <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+    <string>@PROJECT_VERSION@</string>
     <key>CFBundleLongVersionString</key>
-	<string>${MACOSX_BUNDLE_LONG_VERSION_STRING}</string>
+	<string>@PROJECT_VERSION@</string>
 	<key>CFBundleShortVersionString</key>
-	<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+	<string>@PROJECT_VERSION@</string>
 	<key>CFBundlePackageType</key>
-	<string>${MACOSX_BUNDLE_PACKAGE_TYPE}</string>
+	<string>@bundle_type@</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>${MACOSX_BUNDLE_COPYRIGHT}</string>
+	<string>@PRODUCT_COPYRIGHT@</string>
     <key>LSMultipleInstancesProhibited</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -40,25 +40,25 @@
 	<array>
 		<dict>
 			<key>name</key>
-			<string>${MACOSX_BUNDLE_COPYRIGHT}: ${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+			<string>@PRODUCT_COPYRIGHT@: @PRODUCT_NAME@</string>
 			<key>description</key>
-			<string>${MACOSX_BUNDLE_DESCRIPTION}</string>
+			<string>@PRODUCT_DESCRIPTION@</string>
 			<key>factoryFunction</key>
 			<string>GetAUv2PluginFactory</string>
 			<key>manufacturer</key>
-			<string>${MACOSX_BUNDLE_MANUFACTURER}</string>
+			<string>@MACOSX_BUNDLE_MANUFACTURER@</string>
 			<key>sandboxSafe</key>
 			<true/>
 			<key>subtype</key>
-			<string>${MACOSX_BUNDLE_SUBTYPE}</string>
+			<string>@MACOSX_BUNDLE_SUBTYPE@</string>
 			<key>tags</key>
 			<array>
-				${MACOSX_BUNDLE_TAGS}
+				@MACOSX_BUNDLE_TAGS@
 			</array>
 			<key>type</key>
-			<string>${MACOSX_BUNDLE_TYPE}</string>
+			<string>@MACOSX_BUNDLE_TYPE@</string>
 			<key>version</key>
-			<integer>${MACOSX_BUNDLE_VERSION_INT}</integer>
+			<integer>@MACOSX_BUNDLE_VERSION_INT@</integer>
 		</dict>
 	</array>
 </dict>
