@@ -89,6 +89,7 @@ file(WRITE "${CMAKE_BINARY_DIR}/${PRODUCT_NAME}.clap/Contents/PkgInfo" "BNDL????
 target_compile_definitions(Plugin PRIVATE
     CPLUG_AUV2_VERSION_INT=${MACOSX_BUNDLE_VERSION_INT}
     CPLUG_AUV2_BUNDLE_ID="${PLUGIN_BUNDLE_ID}"
+    CPLUG_BUILD_AUV2=1
 )
 
 add_custom_target(post_build ALL
@@ -160,7 +161,7 @@ if (WIN32 AND CMAKE_BUILD_TYPE MATCHES Debug)
     add_dependencies(StandaloneApp ${HOTRELOAD_LIB_NAME})
 elseif (APPLE)
     add_library(${HOTRELOAD_LIB_NAME} MODULE example/example.m)
-    target_link_libraries(${HOTRELOAD_LIB_NAME} PRIVATE "-framework AudioToolbox -framework Cocoa")
+    target_link_libraries(${HOTRELOAD_LIB_NAME} PRIVATE "-framework Cocoa")
 
     add_executable(StandaloneApp MACOSX_BUNDLE src/cplug_standalone_osx.m)
 

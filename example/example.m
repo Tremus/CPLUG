@@ -217,6 +217,8 @@ void cplug_setScaleFactor(void* userGUI, float scale)
     // ignore. handle in 'viewDidChangeBackingProperties'
 }
 
+// AUv2 only
+#ifdef CPLUG_BUILD_AUV2
 #include <AudioToolbox/AUCocoaUIView.h>
 #include <AudioToolbox/AudioUnit.h>
 
@@ -245,4 +247,5 @@ void cplug_setScaleFactor(void* userGUI, float scale)
 }
 
 @end
+#endif // CPLUG_BUILD_AUV2
 #endif // CPLUG_WANT_GUI
