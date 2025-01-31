@@ -75,6 +75,14 @@ function(configure_info_plist target_name bundle_identifier bundle_type bundle_e
     )
 endfunction()
 
+
+# ██████╗ ██╗     ██╗   ██╗ ██████╗ ██╗███╗   ██╗
+# ██╔══██╗██║     ██║   ██║██╔════╝ ██║████╗  ██║
+# ██████╔╝██║     ██║   ██║██║  ███╗██║██╔██╗ ██║
+# ██╔═══╝ ██║     ██║   ██║██║   ██║██║██║╚██╗██║
+# ██║     ███████╗╚██████╔╝╚██████╔╝██║██║ ╚████║
+# ╚═╝     ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝
+
 # All Plugin formats in one
 if (APPLE)
     add_library(${PRODUCT_NAME}_plugin MODULE example/example.m src/cplug_auv2.c src/cplug_clap.c src/cplug_vst3.c)

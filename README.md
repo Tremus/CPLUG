@@ -6,7 +6,7 @@ CPLUG is a simple wrapper API for the VST3, Audio Unit v2 & CLAP plugin formats.
 
 CPLUG only provides the plumbing of wrapping plugin APIs - no extras! It is intended to be compatible with other libraries of your choice (eg. [PUGL](https://github.com/lv2/pugl), [NanoVG](https://github.com/memononen/nanovg), Qt).
 
-There is an optional window library extension ([window.h](src/ext/window.h)) to help you get started with writing GUIs. More extensions may be added in future.
+There is an optional window library extension ([window.h](src/cplug_extensions/window.h)) to help you get started with writing GUIs. More extensions may be added in future.
 
 All strings are expected to be `\0` terminated & UTF8.
 
@@ -27,7 +27,7 @@ The source files are configurable using macros you define. A full list of these 
 | cplug_standalone_win.c | < 1,600       | Standalone            | None                      |
 | cplug_vst3.c           | < 2,400       | VST3 wrapper          | `#include <vst3_c_api.h>` |
 
-Copies of the CLAP API and VST3 C API are included in the `src` folder. They're both single files.
+Copies of the CLAP API and VST3 C API are included in the `src` folder for convenience. They're both single files.
 
 Tested using compilers MinGW GCC 8, VS 17.5, Clang 15 (Windows), Clang 14 (Mac), using C99 & C++11
 

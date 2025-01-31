@@ -2,14 +2,14 @@
  * For licensing and more info see https://github.com/Tremus/CPLUG */
 
 #import <Cocoa/Cocoa.h>
-#include <cplug/cplug.h>
-#include <cplug/ext/window.h>
+#include <cplug.h>
+#include <cplug_extensions/window.h>
 
 #ifdef PW_METAL
 #import <MetalKit/MetalKit.h>
 @interface CplugWindow : MTKView <NSWindowDelegate, NSDraggingDestination, NSDraggingSource>
 #else
-@interface CplugWindow : NSView <NSWindowDelegate>
+@interface CplugWindow : NSView <NSWindowDelegate, NSDraggingDestination, NSDraggingSource>
 #endif // PW_METAL
 {
 @public
