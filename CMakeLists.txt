@@ -133,11 +133,30 @@ endif()
 # ███████║   ██║   ██║  ██║██║ ╚████║██████╔╝██║  ██║███████╗╚██████╔╝██║ ╚████║███████╗
 # ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 
-set(HOTRELOAD_LIB_NAME ${PRODUCT_NAME}_hotreload)
+if (WIN32)
+    add_executable(${PRODUCT_NAME}_app WIN32 src/cplug_standalone_win.c example/example.c)
+elseif (APPLE)
+    add_executable(${PRODUCT_NAME}_app MACOSX_BUNDLE src/cplug_standalone_osx.m example/example.m)
+    target_link_libraries(${PRODUCT_NAME}_app PRIVATE "-framework Cocoa -framework CoreMIDI -framework CoreAudio -framework CoreServices")
+    configure_info_plist(${PRODUCT_NAME}_app ${APP_BUNDLE_ID} "APPL" "app")
+
+    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${PRODUCT_NAME}.app/Contents/PkgInfo")
+    file(WRITE "${CMAKE_BINARY_DIR}/${PRODUCT_NAME}.app/Contents/PkgInfo" "APPL????")
+endif()
+
+
+# ██╗  ██╗ ██████╗ ████████╗██████╗ ███████╗██╗      ██████╗  █████╗ ██████╗
+# ██║  ██║██╔═══██╗╚══██╔══╝██╔══██╗██╔════╝██║     ██╔═══██╗██╔══██╗██╔══██╗
+# ███████║██║   ██║   ██║   ██████╔╝█████╗  ██║     ██║   ██║███████║██║  ██║
+# ██╔══██║██║   ██║   ██║   ██╔══██╗██╔══╝  ██║     ██║   ██║██╔══██║██║  ██║
+# ██║  ██║╚██████╔╝   ██║   ██║  ██║███████╗███████╗╚██████╔╝██║  ██║██████╔╝
+# ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝
+
+set(HOTRELOAD_LIB_NAME ${PRODUCT_NAME}_hotreload_lib)
 
 if (WIN32 AND CMAKE_BUILD_TYPE MATCHES Debug)
     add_library(${HOTRELOAD_LIB_NAME} MODULE example/example.c)
-    add_executable(${PRODUCT_NAME}_app WIN32 src/cplug_standalone_win.c)
+    add_executable(${PRODUCT_NAME}_hotreload WIN32 src/cplug_standalone_win.c)
 
     # Windows paths are complicated
     set(HOTRELOAD_WATCH_DIR_POSIX "${PROJECT_SOURCE_DIR}/example")
@@ -147,33 +166,31 @@ if (WIN32 AND CMAKE_BUILD_TYPE MATCHES Debug)
 
     target_compile_definitions(${HOTRELOAD_LIB_NAME} PRIVATE -DCPLUG_SHARED)
 
-    target_compile_definitions(${PRODUCT_NAME}_app PRIVATE
+    target_compile_definitions(${PRODUCT_NAME}_hotreload PRIVATE
         -DHOTRELOAD_WATCH_DIR="${HOTRELOAD_WATCH_DIR}"
         -DHOTRELOAD_LIB_PATH="${HOTRELOAD_LIB_PATH}"
         -DHOTRELOAD_BUILD_COMMAND="cmake --build ${CMAKE_BINARY_DIR} --config Debug --target ${HOTRELOAD_LIB_NAME}"
         -DCPLUG_SHARED
         )
-    add_dependencies(${PRODUCT_NAME}_app ${HOTRELOAD_LIB_NAME})
-elseif (APPLE)
+    add_dependencies(${PRODUCT_NAME}_hotreload ${HOTRELOAD_LIB_NAME})
+elseif (APPLE AND CMAKE_BUILD_TYPE MATCHES Debug)
     add_library(${HOTRELOAD_LIB_NAME} MODULE example/example.m)
     target_link_libraries(${HOTRELOAD_LIB_NAME} PRIVATE "-framework Cocoa")
 
-    add_executable(${PRODUCT_NAME}_app MACOSX_BUNDLE src/cplug_standalone_osx.m)
+    add_executable(${PRODUCT_NAME}_hotreload MACOSX_BUNDLE src/cplug_standalone_osx.m)
 
-    configure_info_plist(${PRODUCT_NAME}_app ${APP_BUNDLE_ID} "APPL" "app")
+    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${PRODUCT_NAME}_hotreload.app/Contents/PkgInfo")
+    file(WRITE "${CMAKE_BINARY_DIR}/${PRODUCT_NAME}_hotreload.app/Contents/PkgInfo" "APPL????")
 
-    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${PRODUCT_NAME}.app/Contents/PkgInfo")
-    file(WRITE "${CMAKE_BINARY_DIR}/${PRODUCT_NAME}.app/Contents/PkgInfo" "APPL????")
+    target_link_libraries(${PRODUCT_NAME}_hotreload PRIVATE "-framework Cocoa -framework CoreMIDI -framework CoreAudio -framework CoreServices")
 
-    target_link_libraries(${PRODUCT_NAME}_app PRIVATE "-framework Cocoa -framework CoreMIDI -framework CoreAudio -framework CoreServices")
-
-    target_compile_definitions(${PRODUCT_NAME}_app PRIVATE
+    target_compile_definitions(${PRODUCT_NAME}_hotreload PRIVATE
         -DHOTRELOAD_WATCH_DIR="${PROJECT_SOURCE_DIR}/example"
         -DHOTRELOAD_LIB_PATH="${CMAKE_BINARY_DIR}/lib${HOTRELOAD_LIB_NAME}.so"
         -DHOTRELOAD_BUILD_COMMAND="cmake --build ${CMAKE_BINARY_DIR} --config Debug --target ${HOTRELOAD_LIB_NAME}"
         -DCPLUG_SHARED
         )
-    add_dependencies(${PRODUCT_NAME}_app ${HOTRELOAD_LIB_NAME})
+    add_dependencies(${PRODUCT_NAME}_hotreload ${HOTRELOAD_LIB_NAME})
 endif()
 
 # ████████╗███████╗███████╗████████╗
