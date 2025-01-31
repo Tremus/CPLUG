@@ -41,7 +41,7 @@
 #endif
 
 #include <cplug.h>
-#include <cplug/ext/window.h>
+#include <cplug_extensions/window.h>
 
 #if !defined(GET_X_LPARAM) && !defined(GET_Y_LPARAM)
 #define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
