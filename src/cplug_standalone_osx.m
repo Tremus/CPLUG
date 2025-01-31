@@ -10,21 +10,27 @@
 #include <mach/mach_time.h>
 #include <pthread.h>
 
-#define CPLUG_MIDI_RINGBUFFER_SIZE 128
-#define MAX_BLOCK_SIZE             2048
+enum
+{
+    CPLUG_MIDI_RINGBUFFER_SIZE = 128,
+    MAX_BLOCK_SIZE             = 2048,
 
-#define USER_SAMPLE_RATE  44100
-#define USER_BLOCK_SIZE   512
-#define USER_NUM_CHANNELS 2
+    USER_SAMPLE_RATE  = 44100,
+    USER_BLOCK_SIZE   = 512,
+    USER_NUM_CHANNELS = 2,
+};
 
 #ifndef ARRSIZE
 #define ARRSIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 #endif
 
-#define unlikely(x)  __builtin_expect(x, 0)
 #define SLEEP_MS(ms) usleep(ms * 1000)
 
+#ifdef NDEBUG
+#define cplug_assert(...)
+#else
 #define cplug_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
+#endif
 
 #pragma mark -Structs
 
@@ -849,7 +855,8 @@ bool OSXProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent*
         event->midi.bytesAsInt = msg->bytesAsInt;
 
         tail++;
-        tail %= CPLUG_MIDI_RINGBUFFER_SIZE;
+        if (tail == CPLUG_MIDI_RINGBUFFER_SIZE)
+            tail = 0;
 
         g_midiRingBuffer.readPos = tail;
         return true;

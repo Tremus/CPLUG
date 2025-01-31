@@ -223,7 +223,6 @@ static inline int cplug_atomic_load_i32(const cplug_atomic_i32* ptr)        { re
 static inline int cplug_atomic_fetch_add_i32( cplug_atomic_i32* ptr, int v) { return __atomic_fetch_add (ptr, v, __ATOMIC_SEQ_CST); }
 static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { return __atomic_fetch_and (ptr, v, __ATOMIC_SEQ_CST); }
 #endif
-// clang-format on
 
 /*  ██████╗ ███████╗██████╗ ██╗   ██╗ ██████╗
     ██╔══██╗██╔════╝██╔══██╗██║   ██║██╔════╝
@@ -237,9 +236,9 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
-#define unlikely(x) __builtin_expect(x, 0)
+#define cplug_unlikely(x) __builtin_expect(x, 0)
 #else
-#define unlikely(x) x
+#define cplug_unlikely(x) x
 #endif
 
 #ifndef cplug_log
@@ -261,14 +260,19 @@ static inline void cplug_printf(const char* const fmt, ...)
 #endif // NDEBUG
 #endif // cplug_log
 
-#define CPLUG_LOG_ASSERT(cond)                                                                                         \
-    if (unlikely(!(cond)))                                                                                             \
-        cplug_log("assertion failure: \"%s\" in file %s, line %i", #cond, __FILE__, __LINE__);
+#ifndef CPLUG_LOG_ASSERT
+#ifdef NDEBUG
+#define CPLUG_LOG_ASSERT(...)
+#else
+#define CPLUG_LOG_ASSERT(cond) if (cplug_unlikely(!(cond))) { cplug_log("FAIL ASSERT: " #cond " - %s:%d", __FILE__, __LINE__); }
+#endif // NDEBUG
+#endif // CPLUG_LOG_ASSERT
 
 #define CPLUG_LOG_ASSERT_RETURN(cond, ret)                                                                             \
     CPLUG_LOG_ASSERT(cond)                                                                                             \
-    if (unlikely(!(cond)))                                                                                             \
-        return ret;
+    if (cplug_unlikely(!(cond))) return ret;
+
+// clang-format on
 
 #ifdef __cplusplus
 }
