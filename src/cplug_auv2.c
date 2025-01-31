@@ -1322,9 +1322,9 @@ OSStatus ComponentBase_AP_Close(AUv2Plugin* auv2)
     return noErr;
 }
 
-__attribute__((visibility("default"))) void* GetPluginFactory(const AudioComponentDescription* inDesc)
+__attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioComponentDescription* inDesc)
 {
-    cplug_log("GetPluginFactory");
+    cplug_log("GetAUv2PluginFactory");
 
     int numInstances = __atomic_fetch_add(&g_auv2InstanceCount, 1, __ATOMIC_SEQ_CST);
     if (numInstances == 0)
