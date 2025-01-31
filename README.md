@@ -6,9 +6,7 @@ CPLUG is a simple wrapper API for the VST3, Audio Unit v2 & CLAP plugin formats.
 
 CPLUG only provides the plumbing of wrapping plugin APIs - no extras! It is intended to be compatible with other libraries of your choice (eg. [PUGL](https://github.com/lv2/pugl), [NanoVG](https://github.com/memononen/nanovg), Qt).
 
-CPLUG uses a CLAP style single event queue for processing.
-
-All GUI code is pushed to the user to implement how they chose.
+There is an optional window library extension ([window.h](src/ext/window.h)) to help you get started with writing GUIs. More extensions may be added in future.
 
 All strings are expected to be `\0` terminated & UTF8.
 
@@ -54,6 +52,7 @@ Most plugins don't support these features, & most users don't ask for them or kn
 
 ## Roadmap
 
+-   Extension: Parameters
 -   AUv2: Support multiple input/output busses
 -   AUv2: Support sample accurate processing AUv2
 -   Add example using PUGL & NanoVG

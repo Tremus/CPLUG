@@ -278,4 +278,4 @@ static inline void cplug_printf(const char* const fmt, ...)
 }
 #endif
 
-#endif // CPLUG_H
+#endif // !CPLUG_H
