@@ -552,8 +552,7 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
 
     const clap_event_header_t* hdr = process->in_events->get(process->in_events, translator->eventIdx);
 
-    uint32_t event_time  = hdr->time;
-    event_time          -= event_time & (CPLUG_EVENT_FRAME_QUANTIZE - 1);
+    uint32_t event_time = hdr->time;
 
     if (event_time != frameIdx)
     {

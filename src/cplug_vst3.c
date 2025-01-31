@@ -15,11 +15,21 @@
 #define ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
 #endif
 
+// Parameter automtion in some hosts can be too highly frequent. eg. Ableton sends a new automation points every 8
+// samples. In order to effeciently process parameter & audio events in order, parameter events are coalesced and
+// quantized using the value below.
+#ifndef CPLUG_EVENT_FRAME_QUANTISE
+#define CPLUG_EVENT_FRAME_QUANTISE 64
+#endif
+
 // VST3 Param IDs are 32bit unsigned integers, but some DAWs such as FL Studio are suspect of misinterpreting them as
 // signed integers and reject any negative integer.
-#define CPLUG_MIDI_PARAMID_COUNT (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber)
-#define CPLUG_MIDI_PARAMID_END   0x7fffffff
-#define CPLUG_MIDI_PARAMID_START (CPLUG_MIDI_PARAMID_END - CPLUG_MIDI_PARAMID_COUNT)
+enum
+{
+    CPLUG_MIDI_PARAMID_COUNT = (16 * Steinberg_Vst_ControllerNumbers_kCountCtrlNumber),
+    CPLUG_MIDI_PARAMID_END   = 0x7fffffff,
+    CPLUG_MIDI_PARAMID_START = CPLUG_MIDI_PARAMID_END - CPLUG_MIDI_PARAMID_COUNT,
+};
 
 static inline bool cplug_is_midi_param(Steinberg_Vst_ParamID id)
 {
@@ -1040,7 +1050,6 @@ static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* sel
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
 
     // Reaper & Ableton will ask you for MIDI control values. So far, returning 0 here hasn't caused any problems...
-    CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
     if (cplug_is_midi_param(paramId))
         return 0.0;
 
@@ -1457,13 +1466,11 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
     Steinberg_Vst_IEventList* const inEvents = translator->data->inputEvents;
     if (inEvents)
     {
-        uint32_t numMidiEvents = (uint32_t)inEvents->lpVtbl->getEventCount(inEvents);
+        int numMidiEvents = inEvents->lpVtbl->getEventCount(inEvents);
         if (translator->midiEventIdx < numMidiEvents)
         {
             struct Steinberg_Vst_Event vst3Midi;
             inEvents->lpVtbl->getEvent(inEvents, translator->midiEventIdx, &vst3Midi);
-
-            vst3Midi.sampleOffset -= vst3Midi.sampleOffset & (CPLUG_EVENT_FRAME_QUANTIZE - 1);
 
             if (vst3Midi.sampleOffset == frameIdx)
             {
@@ -1508,7 +1515,7 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
     Steinberg_Vst_IParameterChanges* inParams = translator->data->inputParameterChanges;
     CPLUG_LOG_ASSERT(inParams != NULL);
 
-    uint32_t numParams = (uint32_t)inParams->lpVtbl->getParameterCount(inParams);
+    uint32_t numParams = inParams->lpVtbl->getParameterCount(inParams);
     while (translator->paramIdx < numParams)
     {
         Steinberg_Vst_IParamValueQueue* queue = inParams->lpVtbl->getParameterData(inParams, translator->paramIdx);
@@ -1517,29 +1524,31 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
         int pointIdx  = 0;
         int numPoints = queue->lpVtbl->getPointCount(queue);
 
-        uint32_t                 sampleOffset = 0;
-        Steinberg_Vst_ParamValue value        = 0;
-        queue->lpVtbl->getPoint(queue, pointIdx, (Steinberg_int32*)&sampleOffset, &value);
+        int eventFrame  = 0;
+        int endQuantize = frameIdx + CPLUG_EVENT_FRAME_QUANTISE;
+        if (endQuantize > translator->nextEventFrame)
+            endQuantize = translator->nextEventFrame;
 
+        Steinberg_Vst_ParamValue value = 0;
+        queue->lpVtbl->getPoint(queue, pointIdx, &eventFrame, &value);
         // Skip to next frame within our quantize region
         pointIdx++;
-        while (pointIdx < numPoints && sampleOffset < (frameIdx + CPLUG_EVENT_FRAME_QUANTIZE))
+        while (pointIdx < numPoints && eventFrame < endQuantize)
         {
-            queue->lpVtbl->getPoint(queue, pointIdx, (Steinberg_int32*)&sampleOffset, &value);
+            queue->lpVtbl->getPoint(queue, pointIdx, &eventFrame, &value);
             pointIdx++;
         }
         pointIdx--;
 
-        queue->lpVtbl->getPoint(queue, pointIdx, (Steinberg_int32*)&sampleOffset, &value);
-        sampleOffset -= sampleOffset & (CPLUG_EVENT_FRAME_QUANTIZE - 1);
+        queue->lpVtbl->getPoint(queue, pointIdx, &eventFrame, &value);
 
-        if (sampleOffset == frameIdx)
+        if (eventFrame >= frameIdx && eventFrame < endQuantize)
         {
             Steinberg_Vst_ParamID paramId = queue->lpVtbl->getParameterId(queue);
             if (cplug_is_midi_param(paramId))
             {
                 event->midi.type  = CPLUG_EVENT_MIDI;
-                event->midi.frame = sampleOffset;
+                event->midi.frame = frameIdx;
 
                 uint32_t diff    = paramId - CPLUG_MIDI_PARAMID_START;
                 uint8_t  channel = diff / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
@@ -1576,8 +1585,8 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
             return true;
         }
 
-        if (sampleOffset > frameIdx && sampleOffset < translator->nextEventFrame)
-            translator->nextEventFrame = sampleOffset;
+        if (eventFrame > frameIdx && eventFrame < translator->nextEventFrame)
+            translator->nextEventFrame = eventFrame;
     }
 
     CPLUG_LOG_ASSERT(translator->nextEventFrame > 0);
@@ -1594,7 +1603,7 @@ float** VST3ProcessContextTranslator_getAudioInput(const CplugProcessContext* ct
 {
     // cplug_log("VST3ProcessContextTranslator_getAudioInput => %p %u", ctx, busIdx);
     VST3ProcessContextTranslator* vst3ctx = (VST3ProcessContextTranslator*)ctx;
-    CPLUG_LOG_ASSERT(busIdx < (uint32_t)vst3ctx->data->numInputs);
+    CPLUG_LOG_ASSERT(busIdx < vst3ctx->data->numInputs);
     return vst3ctx->data->inputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
 }
 
@@ -1602,7 +1611,7 @@ float** VST3ProcessContextTranslator_getAudioOutput(const CplugProcessContext* c
 {
     // cplug_log("VST3ProcessContextTranslator_getAudioOutput => %p %u", ctx, busIdx);
     VST3ProcessContextTranslator* vst3ctx = (VST3ProcessContextTranslator*)ctx;
-    CPLUG_LOG_ASSERT_RETURN(busIdx < (uint32_t)vst3ctx->data->numOutputs, NULL);
+    CPLUG_LOG_ASSERT_RETURN(busIdx < vst3ctx->data->numOutputs, NULL);
     return vst3ctx->data->outputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
 }
 
@@ -1989,9 +1998,10 @@ VST3Component_setState(void* const self, Steinberg_IBStream* const stream)
 
 int64_t cplug_VST3WriteProcTranslator(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
-    Steinberg_IBStream* const stream       = (Steinberg_IBStream* const)stateCtx;
-    Steinberg_int32           bytesWritten = 0;
-    Steinberg_tresult         result = stream->lpVtbl->write(stream, writePos, (int)numBytesToWrite, &bytesWritten);
+    Steinberg_IBStream* const stream = (Steinberg_IBStream* const)stateCtx;
+
+    Steinberg_int32   bytesWritten = 0;
+    Steinberg_tresult result       = stream->lpVtbl->write(stream, writePos, (int)numBytesToWrite, &bytesWritten);
     if (result != Steinberg_kResultOk)
         return -1;
     return bytesWritten;

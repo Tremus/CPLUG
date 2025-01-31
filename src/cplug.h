@@ -27,15 +27,10 @@ extern "C" {
 #endif
 #else
 #define CPLUG_API
-#endif
+#endif // CPLUG_SHARED
 
 #ifndef CPLUG_EVENT_QUEUE_SIZE
 #define CPLUG_EVENT_QUEUE_SIZE 256
-#endif
-
-// How sample accurate do you need your events?
-#ifndef CPLUG_EVENT_FRAME_QUANTIZE
-#define CPLUG_EVENT_FRAME_QUANTIZE 64
 #endif
 
 typedef union CplugEvent           CplugEvent;
