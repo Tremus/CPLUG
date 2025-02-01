@@ -27,7 +27,7 @@
 #define CPLUG_AUV2_VIEW_CLASS_STR "CPLUGExampleView"
 
 #define CPLUG_CLAP_ID          "com.cplug.example"
-#define CPLUG_CLAP_DESCRIPTION "Example plugin"
+#define CPLUG_CLAP_DESCRIPTION "Example plugin using CPLUG"
 #define CPLUG_CLAP_FEATURES    CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO
 
 #define CPLUG_NUM_PARAMS 4

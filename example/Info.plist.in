@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
-	<string>@PRODUCT_NAME@</string>
+	<string>@PROJECT_NAME@</string>
 	<key>CFBundleGetInfoString</key>
 	<string>@MACOSX_BUNDLE_INFO_STRING@</string>
 	<key>CFBundleIconFile</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>@bundle_identifier@</string>
 	<key>CFBundleName</key>
-	<string>@PRODUCT_NAME@</string>
+	<string>@PROJECT_NAME@</string>
 	<key>CFBundleDisplayName</key>
     <string>@PRODUCT_NAME@</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -42,7 +42,7 @@
 			<key>name</key>
 			<string>@PRODUCT_COPYRIGHT@: @PRODUCT_NAME@</string>
 			<key>description</key>
-			<string>@PRODUCT_DESCRIPTION@</string>
+			<string>@PROJECT_DESCRIPTION@</string>
 			<key>factoryFunction</key>
 			<string>GetAUv2PluginFactory</string>
 			<key>manufacturer</key>
