@@ -92,8 +92,8 @@ typedef struct MyPlugin
 
 void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramIdx, double value);
 
-void cplug_libraryLoad(){};
-void cplug_libraryUnload(){};
+void cplug_libraryLoad() {};
+void cplug_libraryUnload() {};
 
 void* cplug_createPlugin(CplugHostContext* ctx)
 {
@@ -551,13 +551,16 @@ static void drawGUI(MyGUI* gui)
 {
     my_assert(gui->width > 0);
     my_assert(gui->height > 0);
-    drawRect(gui, 0, gui->width, 0, gui->height, 0xC0C0C0, 0xC0C0C0);
-    drawRect(gui, 10, 40, 10, 40, 0x000000, 0xC0C0C0);
+    const uint32_t bg_col = 0xC0C0C0;
+    // const uint32_t param_col = 0x0C0C0C;
+    const uint32_t param_col = 0x000000;
+    drawRect(gui, 0, gui->width, 0, gui->height, bg_col, bg_col);
+    drawRect(gui, 10, 40, 10, 40, param_col, bg_col);
 
     double v = cplug_getParameterValue(gui->plugin, 'pf32');
     v        = cplug_normaliseParameterValue(gui->plugin, 'pf32', v);
 
-    drawRect(gui, 10, 40, 10 + (uint32_t)(30.0 * (1.0 - v)), 40, 0x000000, 0x000000);
+    drawRect(gui, 10, 40, 10 + (uint32_t)(30.0 * (1.0 - v)), 40, param_col, param_col);
 }
 
 static void handleMouseDown(MyGUI* gui, int x, int y)
@@ -657,8 +660,13 @@ LRESULT CALLBACK MyWinProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         drawGUI(gui);
         PAINTSTRUCT paint;
-        HDC         dc   = BeginPaint(hwnd, &paint);
-        BITMAPINFO  info = {{sizeof(BITMAPINFOHEADER), (LONG)gui->width, (LONG)gui->height, 1, 32, BI_RGB}};
+        HDC         dc = BeginPaint(hwnd, &paint);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader
+        // By default, Windows reads bitmaps scan lines bottom up. According to the docs, changing the sign (binary) of
+        // the height will cause the bitmap to be read to down.
+        BITMAPINFO info = {{sizeof(BITMAPINFOHEADER), (LONG)gui->width, -((LONG)gui->height), 1, 32, BI_RGB}};
+
         StretchDIBits(
             dc,
             0,
