@@ -25,7 +25,6 @@
 
 #define CPLUG_AUV2_VIEW_CLASS     CPLUGExampleView
 #define CPLUG_AUV2_VIEW_CLASS_STR "CPLUGExampleView"
-static const unsigned kAudioUnitProperty_UserPlugin = 'plug';
 
 #define CPLUG_CLAP_ID          "com.cplug.example"
 #define CPLUG_CLAP_DESCRIPTION "Example plugin"

@@ -176,6 +176,8 @@ CPLUG_API void cplug_saveState(void* userPlugin, const void* stateCtx, cplug_wri
 typedef int64_t (*cplug_readProc)(const void* stateCtx, void* readPos, size_t maxBytesToRead);
 CPLUG_API void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
 
+static const uint32_t kAudioUnitProperty_UserPlugin = 'plug';
+
 // NOTE: For AUv2, your pointer MUST be castable to NSView. AUv2 hosts expect an NSView & you simply override methods
 // This is the only CPLUG method used in AUv2 builds.
 CPLUG_API void* cplug_createGUI(void* userPlugin);
