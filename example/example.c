@@ -847,20 +847,4 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
     *height       = num * GUI_RATIO_Y;
 }
 
-bool cplug_getResizeHints(
-    void*     userGUI,
-    bool*     resizableX,
-    bool*     resizableY,
-    bool*     preserveAspectRatio,
-    uint32_t* aspectRatioX,
-    uint32_t* aspectRatioY)
-{
-    *resizableX          = true;
-    *resizableY          = true;
-    *preserveAspectRatio = true;
-    *aspectRatioX        = GUI_RATIO_X;
-    *aspectRatioY        = GUI_RATIO_Y;
-    return true;
-}
-
 #endif // CPLUG_WANT_GUI

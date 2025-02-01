@@ -192,14 +192,6 @@ CPLUG_API void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height);
 // Host is trying to resize, but giving you the chance to overwrite their size
 CPLUG_API void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height);
 CPLUG_API bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height);
-// CLAP only. Might deprecate this
-CPLUG_API bool cplug_getResizeHints(
-    void*     userGUI,
-    bool*     resizableX,
-    bool*     resizableY,
-    bool*     preserveAspectRatio,
-    uint32_t* aspectRatioX,
-    uint32_t* aspectRatioY);
 
 /*  ██╗   ██╗████████╗██╗██╗     ███████╗
     ██║   ██║╚══██╔══╝██║██║     ██╔════╝

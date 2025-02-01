@@ -355,13 +355,7 @@ static bool CLAPExtGUI_can_resize(const clap_plugin_t* plugin)
 static bool CLAPExtGUI_get_resize_hints(const clap_plugin_t* plugin, clap_gui_resize_hints_t* hints)
 {
     cplug_log("CLAPExtGUI_resize_hints => %p", hints);
-    return cplug_getResizeHints(
-        ((CLAPPlugin*)plugin->plugin_data)->userGUI,
-        &hints->can_resize_horizontally,
-        &hints->can_resize_vertically,
-        &hints->preserve_aspect_ratio,
-        &hints->aspect_ratio_width,
-        &hints->aspect_ratio_height);
+    return false;
 }
 
 static bool CLAPExtGUI_adjust_size(const clap_plugin_t* plugin, uint32_t* width, uint32_t* height)
