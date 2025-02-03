@@ -39,8 +39,8 @@ void timer_cb(CFRunLoopTimerRef timer, void* info);
     {
         CFRunLoopTimerContext context;
         memset(&context, 0, sizeof(context));
-        context.info                  = self;
-        double interval               = 0.016; // 16ms
+        context.info    = self;
+        double interval = 0.016; // 16ms
 
         timerRef =
             CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + interval, interval, 0, 0, timer_cb, &context);

@@ -20,7 +20,6 @@ typedef struct CLAPPlugin
     const clap_host_params_t*  host_params;
 } CLAPPlugin;
 
-#if CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES > 0
 /////////////////////////////
 // clap_plugin_audio_ports //
 /////////////////////////////
@@ -28,7 +27,10 @@ typedef struct CLAPPlugin
 static uint32_t CLAPExtAudioPorts_count(const clap_plugin_t* plugin, bool is_input)
 {
     cplug_log("CLAPExtAudioPorts_count => %u", (unsigned)is_input);
-    return is_input ? CPLUG_NUM_INPUT_BUSSES : CPLUG_NUM_OUTPUT_BUSSES;
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    if (is_input)
+        return cplug_getNumInputBusses(clap->userPlugin);
+    return cplug_getNumOutputBusses(clap->userPlugin);
 }
 
 static bool
@@ -37,10 +39,12 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
     cplug_log("CLAPExtAudioPorts_get => %u %p", (unsigned)is_input, info);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    if (is_input && index < CPLUG_NUM_INPUT_BUSSES)
+    uint32_t numInputs = cplug_getNumInputBusses(clap->userPlugin);
+    uint32_t numOutputs = cplug_getNumOutputBusses(clap->userPlugin);
+    if (is_input && index < numInputs)
     {
         info->id = index;
-        snprintf(info->name, sizeof(info->name), "%s", cplug_getInputBusName(clap->userPlugin, index));
+        cplug_getInputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getInputBusChannelCount(clap->userPlugin, index);
         // Maybe we will support 64bit one day (probably not)
         info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE;
@@ -54,17 +58,17 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         else
             info->port_type = NULL;
 
-        if (index < CPLUG_NUM_OUTPUT_BUSSES)
-            info->in_place_pair = CPLUG_NUM_INPUT_BUSSES + index;
+        if (index < numOutputs)
+            info->in_place_pair = numInputs + index;
         else
             info->in_place_pair = CLAP_INVALID_ID;
         return true;
     }
 
-    if (!is_input && index < CPLUG_NUM_OUTPUT_BUSSES)
+    if (!is_input && index < numOutputs)
     {
-        info->id = CPLUG_NUM_INPUT_BUSSES + index;
-        snprintf(info->name, sizeof(info->name), "%s", cplug_getOutputBusName(clap->userPlugin, index));
+        info->id = numInputs + index;
+        cplug_getOutputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getOutputBusChannelCount(clap->userPlugin, index);
         // Maybe we will support 64bit one day (probably not)
         info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE;
@@ -78,7 +82,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         else
             info->port_type = NULL;
 
-        if (index < CPLUG_NUM_INPUT_BUSSES)
+        if (index < numInputs)
             info->in_place_pair = index;
         else
             info->in_place_pair = CLAP_INVALID_ID;
@@ -92,7 +96,6 @@ static const clap_plugin_audio_ports_t s_clap_audio_ports = {
     .count = CLAPExtAudioPorts_count,
     .get   = CLAPExtAudioPorts_get,
 };
-#endif // CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES
 
 #if CPLUG_WANT_MIDI_INPUT
 ////////////////////////////
@@ -179,7 +182,6 @@ static const clap_plugin_state_t s_clap_state = {
     .load = CLAPExtState_load,
 };
 
-#if CPLUG_NUM_PARAMS
 /////////////////
 // clap_params //
 /////////////////
@@ -187,19 +189,20 @@ static const clap_plugin_state_t s_clap_state = {
 uint32_t CLAPExtParams_count(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtParams_count");
-    return CPLUG_NUM_PARAMS;
+    CLAPPlugin*    clap     = (CLAPPlugin*)plugin->plugin_data;
+    return cplug_getNumParameters(clap->userPlugin);
 }
 
 bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, clap_param_info_t* param_info)
 {
     // cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
-    CPLUG_LOG_ASSERT_RETURN(param_index < CPLUG_NUM_PARAMS, false);
-
     CLAPPlugin*    clap     = (CLAPPlugin*)plugin->plugin_data;
+    CPLUG_LOG_ASSERT_RETURN(param_index < cplug_getNumParameters(clap->userPlugin), false);
+
     const uint32_t param_id = cplug_getParameterID(clap->userPlugin, param_index);
 
     param_info->id = param_id;
-    snprintf(param_info->name, sizeof(param_info->name), "%s", cplug_getParameterName(clap->userPlugin, param_id));
+    cplug_getParameterName(clap->userPlugin, param_id, param_info->name, sizeof(param_info->name));
     param_info->module[0]     = 0;
     param_info->default_value = cplug_getDefaultParameterValue(clap->userPlugin, param_id);
     cplug_getParameterRange(clap->userPlugin, param_id, &param_info->min_value, &param_info->max_value);
@@ -270,7 +273,6 @@ static const clap_plugin_params_t s_clap_params = {
     .text_to_value = CLAPExtParams_text_to_value,
     .flush         = CLAPExtParams_flush,
 };
-#endif // CPLUG_NUM_PARAMS
 
 #if CPLUG_WANT_GUI
 //////////////
@@ -717,24 +719,26 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
 static const void* CLAPPlugin_get_extension(const struct clap_plugin* plugin, const char* id)
 {
     cplug_log("CLAPPlugin_get_extension => %s", id);
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+
+    uint32_t numInputs = cplug_getNumInputBusses(clap->userPlugin);
+    uint32_t numOutputs = cplug_getNumOutputBusses(clap->userPlugin);
+    uint32_t numParams  = cplug_getNumParameters(clap->userPlugin);
+
     if (!strcmp(id, CLAP_EXT_LATENCY))
         return &s_clap_latency;
     if (!strcmp(id, CLAP_EXT_TAIL))
         return &s_clap_tail;
-#if (CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES) > 0
-    if (!strcmp(id, CLAP_EXT_AUDIO_PORTS))
+    if (!strcmp(id, CLAP_EXT_AUDIO_PORTS) && (numInputs || numOutputs))
         return &s_clap_audio_ports;
-#endif
 #if CPLUG_WANT_MIDI_INPUT
     if (!strcmp(id, CLAP_EXT_NOTE_PORTS))
         return &s_clap_note_ports;
 #endif
     if (!strcmp(id, CLAP_EXT_STATE))
         return &s_clap_state;
-#if CPLUG_NUM_PARAMS
-    if (!strcmp(id, CLAP_EXT_PARAMS))
+    if (!strcmp(id, CLAP_EXT_PARAMS) && numParams)
         return &s_clap_params;
-#endif
 #if CPLUG_WANT_GUI
     if (!strcmp(id, CLAP_EXT_GUI))
         return &s_clap_gui;

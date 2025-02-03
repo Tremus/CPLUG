@@ -49,12 +49,16 @@ struct CplugHostContext
 CPLUG_API void* cplug_createPlugin(CplugHostContext* ctx);
 CPLUG_API void  cplug_destroyPlugin(void*);
 
+CPLUG_API uint32_t cplug_getNumInputBusses(void*);
+CPLUG_API uint32_t cplug_getNumOutputBusses(void*);
 CPLUG_API uint32_t cplug_getInputBusChannelCount(void*, uint32_t bus_idx);
 CPLUG_API uint32_t cplug_getOutputBusChannelCount(void*, uint32_t bus_idx);
 
-// NOTE: VST3 supports a max length of 128 bytes, CLAP 256, AUv2 no limit (mandatory CFString)
-CPLUG_API const char* cplug_getInputBusName(void*, uint32_t idx);
-CPLUG_API const char* cplug_getOutputBusName(void*, uint32_t idx);
+// Copy UTF8 name to this buffer, including null terminating byte.
+// NOTE: VST3 uses UTF16 strings with a max length of 128 characters. Cplug the handles UTF16<->UTF8 conversion
+//       CLAP has a max length of 256 bytes, AUv2 no limit (mandatory CFString), both are UTF8
+CPLUG_API void cplug_getInputBusName(void*, uint32_t idx, char* buf, size_t buflen);
+CPLUG_API void cplug_getOutputBusName(void*, uint32_t idx, char* buf, size_t buflen);
 
 CPLUG_API uint32_t cplug_getLatencyInSamples(void*);
 CPLUG_API uint32_t cplug_getTailInSamples(void*);
@@ -149,13 +153,14 @@ enum
     CPLUG_FLAG_PARAMETER_IS_BYPASS      = 1 << 5
 };
 
+CPLUG_API uint32_t cplug_getNumParameters(void*);
 CPLUG_API uint32_t cplug_getParameterID(void*, uint32_t paramIndex);
 CPLUG_API uint32_t cplug_getParameterFlags(void*, uint32_t paramId); // CPLUG_FLAG_PARAMETER_XXX
 
 CPLUG_API void cplug_getParameterRange(void*, uint32_t paramId, double* min, double* max);
 
 // NOTE: AUv2 supports a max length of 52 bytes, VST3 128, CLAP 256
-CPLUG_API const char* cplug_getParameterName(void*, uint32_t paramId);
+CPLUG_API void cplug_getParameterName(void*, uint32_t paramId, char* buf, size_t buflen);
 
 CPLUG_API double cplug_getParameterValue(void*, uint32_t paramId);
 CPLUG_API double cplug_getDefaultParameterValue(void*, uint32_t paramId);

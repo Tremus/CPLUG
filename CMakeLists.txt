@@ -214,6 +214,11 @@ if (APPLE)
     add_executable(test_compile_objcpp test_compile.mm)
     target_compile_definitions(test_compile_objcpp PRIVATE)
     target_link_libraries(test_compile_objcpp PRIVATE "-framework Cocoa -framework CoreMIDI -framework CoreAudio -framework AudioToolbox")
+    target_compile_definitions(test_compile_objcpp PRIVATE
+        CPLUG_AUV2_VERSION_INT=${MACOSX_BUNDLE_VERSION_INT}
+        CPLUG_AUV2_BUNDLE_ID="${PLUGIN_BUNDLE_ID}"
+        CPLUG_BUILD_AUV2=1
+    )
 else()
     add_executable(test_compile_cpp WIN32 test_compile.cpp)
 endif()

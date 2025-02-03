@@ -41,7 +41,7 @@ static const uint32_t PARAM_IDS[] = {
     'bool',
     'utf8',
 };
-static_assert(ARRLEN(PARAM_IDS) == CPLUG_NUM_PARAMS, "Size must match");
+static const uint32_t NUM_PARAMS = ARRLEN(PARAM_IDS); 
 
 // returns 'CPLUG_NUM_PARAMS' on failure
 uint32_t get_param_index(void* ptr, uint32_t paramId)
@@ -65,12 +65,12 @@ typedef struct MyPlugin
 {
     CplugHostContext* hostContext;
 
-    ParamInfo paramInfo[CPLUG_NUM_PARAMS];
+    ParamInfo paramInfo[NUM_PARAMS];
 
     float    sampleRate;
     uint32_t maxBufferSize;
 
-    float paramValuesAudio[CPLUG_NUM_PARAMS];
+    float paramValuesAudio[NUM_PARAMS];
 
     float oscPhase; // 0-1
     int   midiNote; // -1 == not playing, 0-127+ playing
@@ -78,7 +78,7 @@ typedef struct MyPlugin
 
     // GUI zone
     void* gui;
-    float paramValuesMain[CPLUG_NUM_PARAMS];
+    float paramValuesMain[NUM_PARAMS];
 
     // Single reader writer queue. Pretty sure atomics aren't required, but here anyway
     cplug_atomic_i32 mainToAudioHead;
@@ -92,8 +92,8 @@ typedef struct MyPlugin
 
 void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramIdx, double value);
 
-void cplug_libraryLoad() {};
-void cplug_libraryUnload() {};
+void cplug_libraryLoad(){};
+void cplug_libraryUnload(){};
 
 void* cplug_createPlugin(CplugHostContext* ctx)
 {
@@ -143,40 +143,25 @@ void cplug_destroyPlugin(void* ptr)
 /* --------------------------------------------------------------------------------------------------------
  * Busses */
 
-uint32_t cplug_getInputBusChannelCount(void* ptr, uint32_t idx)
-{
-    if (idx == 0)
-        return 2; // 1 bus, stereo
-    return 0;
-}
+uint32_t cplug_getNumInputBusses(void* ptr) { return 1; }
+uint32_t cplug_getNumOutputBusses(void* ptr) { return 1; }
+uint32_t cplug_getInputBusChannelCount(void* ptr, uint32_t idx) { return 2; }
+uint32_t cplug_getOutputBusChannelCount(void* ptr, uint32_t idx) { return 2; }
 
-uint32_t cplug_getOutputBusChannelCount(void* ptr, uint32_t idx)
-{
-    if (idx == 0)
-        return 2; // 1 bus, stereo
-    return 0;
-}
+void cplug_getInputBusName(void* ptr, uint32_t idx, char* buf, size_t buflen) { snprintf(buf, buflen, "Stereo Input"); }
 
-const char* cplug_getInputBusName(void* ptr, uint32_t idx)
+void cplug_getOutputBusName(void* ptr, uint32_t idx, char* buf, size_t buflen)
 {
-    if (idx == 0)
-        return "Stereo Input";
-    return "";
-}
-
-const char* cplug_getOutputBusName(void* ptr, uint32_t idx)
-{
-    if (idx == 0)
-        return "Stereo Output";
-    return "";
+    snprintf(buf, buflen, "Stereo Output");
 }
 
 /* --------------------------------------------------------------------------------------------------------
  * Parameters */
 
+uint32_t cplug_getNumParameters(void* ptr) { return ARRLEN(PARAM_IDS); }
 uint32_t cplug_getParameterID(void* ptr, uint32_t paramIndex) { return PARAM_IDS[paramIndex]; }
 
-const char* cplug_getParameterName(void* ptr, uint32_t paramId)
+void cplug_getParameterName(void* ptr, uint32_t paramId, char* buf, size_t buflen)
 {
     static const char* param_names[] = {
         "Parameter Float",
@@ -189,10 +174,10 @@ const char* cplug_getParameterName(void* ptr, uint32_t paramId)
         // שלום = 3 בייטים
         // 🐨       = 4 bytes
         "UTF8 Приве́т नमस्ते שָׁלוֹם 🐨"};
-    static_assert(ARRLEN(param_names) == CPLUG_NUM_PARAMS, "Invalid length");
+    static_assert(ARRLEN(param_names) == ARRLEN(PARAM_IDS), "Invalid length");
 
     uint32_t index = get_param_index(ptr, paramId);
-    return param_names[index];
+    snprintf(buf, buflen, "%s", param_names[index]);
 }
 
 double cplug_getParameterValue(void* ptr, uint32_t paramId)
@@ -466,8 +451,8 @@ void cplug_saveState(void* userPlugin, const void* stateCtx, cplug_writeProc wri
 {
     MyPlugin* plugin = (MyPlugin*)userPlugin;
 
-    struct ParamState state[CPLUG_NUM_PARAMS];
-    for (int i = 0; i < CPLUG_NUM_PARAMS; i++)
+    struct ParamState state[NUM_PARAMS];
+    for (int i = 0; i < NUM_PARAMS; i++)
     {
         state[i].paramId = PARAM_IDS[i];
         state[i].value   = plugin->paramValuesAudio[i];
@@ -479,7 +464,7 @@ void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_readProc read
 {
     MyPlugin* plugin = (MyPlugin*)userPlugin;
 
-    struct ParamState state[CPLUG_NUM_PARAMS * 2];
+    struct ParamState state[NUM_PARAMS * 2];
 
     // If your plugin has added/removed parameters, requesting for more data then you actually expect may be a good idea
     int64_t bytesRead = readProc(stateCtx, state, sizeof(state));
@@ -487,7 +472,7 @@ void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_readProc read
     for (int i = 0; i < bytesRead / sizeof(state[0]); i++)
     {
         uint32_t paramIdx = get_param_index(userPlugin, state[i].paramId);
-        if (paramIdx < CPLUG_NUM_PARAMS)
+        if (paramIdx < NUM_PARAMS)
         {
             plugin->paramValuesAudio[paramIdx] = state[i].value;
             plugin->paramValuesMain[paramIdx]  = state[i].value;
@@ -507,8 +492,6 @@ void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramId, d
     cplug_atomic_fetch_add_i32(&plugin->mainToAudioHead, 1);
     cplug_atomic_fetch_and_i32(&plugin->mainToAudioHead, CPLUG_EVENT_QUEUE_MASK);
 }
-
-#ifdef CPLUG_WANT_GUI
 
 #define GUI_DEFAULT_WIDTH  640
 #define GUI_DEFAULT_HEIGHT 360
@@ -846,5 +829,3 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
     *width        = num * GUI_RATIO_X;
     *height       = num * GUI_RATIO_Y;
 }
-
-#endif // CPLUG_WANT_GUI

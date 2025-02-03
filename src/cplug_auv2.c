@@ -13,9 +13,7 @@ volatile int g_auv2InstanceCount = 0;
 static const UInt32 kAUDefaultMaxFramesPerSlice = 1156;
 static const double kAUDefaultSampleRate        = 44100.0;
 
-#ifndef ARRSIZE
-#define ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
-#endif
+#define CPLUG_ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
 
 static const char* _cplugLookup2Str(SInt16 selector)
 {
@@ -53,7 +51,7 @@ static const char* _cplugLookup2Str(SInt16 selector)
         {"kAudioOutputUnitStopSelect", 0x0202},
     };
 
-    for (int i = 0; i < ARRSIZE(_auv2selectorstrings); i++)
+    for (int i = 0; i < CPLUG_ARRSIZE(_auv2selectorstrings); i++)
         if (selector == _auv2selectorstrings[i].id)
             return _auv2selectorstrings[i].str;
 
@@ -129,7 +127,7 @@ static const char* _cplugProperty2Str(AudioUnitPropertyID inID)
     };
     // clang-format on
 
-    for (int i = 0; i < ARRSIZE(_auv2propertystrings); i++)
+    for (int i = 0; i < CPLUG_ARRSIZE(_auv2propertystrings); i++)
         if (inID == _auv2propertystrings[i].id)
             return _auv2propertystrings[i].str;
 
@@ -148,7 +146,7 @@ static const char* _cplugScope2Str(AudioUnitScope inScope)
         "kAudioUnitScope_Layer",
         "kAudioUnitScope_LayerItem"};
 
-    if (inScope < ARRSIZE(_auv2scopestrings))
+    if (inScope < CPLUG_ARRSIZE(_auv2scopestrings))
         return _auv2scopestrings[inScope];
 
     return "UNKNOWN_SCOPE";
@@ -171,8 +169,10 @@ typedef struct AUv2Plugin
     HostCallbackInfo mHostCallbackInfo;
 
     // AUv2 won't let you use C strings for bus names. It's also stated we are responsible for ownership of the string
-    CFStringRef inputBusNames[CPLUG_NUM_INPUT_BUSSES];
-    CFStringRef outputBusNames[CPLUG_NUM_OUTPUT_BUSSES];
+    CFStringRef* inputBusNames;
+    size_t       numInputBusNames;
+    CFStringRef* outputBusNames;
+    size_t       numOutputBusNames;
 
     // Logic in Rosetta mode breaks if you don't have this
     // Rosetta Logic doesn't seem to support the feature...
@@ -190,6 +190,16 @@ typedef struct AUv2Plugin
     UInt32     numEvents;
     CplugEvent events[CPLUG_EVENT_QUEUE_SIZE];
 } AUv2Plugin;
+
+void AUv2ReleaseStringArray(CFStringRef* arr, size_t arrlen)
+{
+    for (size_t i = 0; i < arrlen; i++)
+    {
+        if (arr[i])
+            CFRelease(arr[i]);
+        arr[i] = NULL;
+    }
+}
 
 static OSStatus AUv2SendParamEvent(AUv2Plugin* auv2, const CplugEvent* event)
 {
@@ -232,7 +242,7 @@ int64_t AUv2WriteProc(const void* stateCtx, void* writePos, size_t numBytesToWri
     if (*dataRef == NULL)
         *dataRef = CFDataCreateMutable(NULL, numBytesToWrite);
 
-    CFDataAppendBytes(*dataRef, writePos, numBytesToWrite);
+    CFDataAppendBytes(*dataRef, (const UInt8*)writePos, numBytesToWrite);
     return numBytesToWrite;
 }
 
@@ -312,9 +322,9 @@ OSStatus AUMethodGetPropertyInfo(
         if (inScope == kAudioUnitScope_Global)
             num = 1;
         else if (inScope == kAudioUnitScope_Input)
-            num = CPLUG_NUM_INPUT_BUSSES;
+            num = cplug_getInputBusChannelCount(auv2->userPlugin, inElement);
         else if (inScope == kAudioUnitScope_Output)
-            num = CPLUG_NUM_OUTPUT_BUSSES;
+            num = cplug_getOutputBusChannelCount(auv2->userPlugin, inElement);
 
         CPLUG_LOG_ASSERT_RETURN(num != 0u, kAudioUnitErr_InvalidProperty);
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AUChannelInfo) * num);
@@ -352,7 +362,8 @@ OSStatus AUMethodGetPropertyInfo(
     {
         // Global params only, else auval starts asking for input and output parameter detials
         CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterID) * CPLUG_NUM_PARAMS);
+        uint32_t numParams = cplug_getNumParameters(auv2->userPlugin);
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterID) * numParams);
         break;
     }
 
@@ -388,9 +399,23 @@ OSStatus AUMethodGetPropertyInfo(
         CPLUG_LOG_ASSERT_RETURN(inScope != kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
         UInt32 num = 0;
         if (inScope == kAudioUnitScope_Input)
-            num = CPLUG_NUM_INPUT_BUSSES;
+        {
+            num = cplug_getNumInputBusses(auv2->userPlugin);
+            if (num != auv2->numInputBusNames)
+            {
+                AUv2ReleaseStringArray(auv2->inputBusNames, auv2->numInputBusNames);
+                auv2->inputBusNames = (CFStringRef*)realloc(auv2->inputBusNames, num * sizeof(*auv2->inputBusNames));
+            }
+        }
         else if (inScope == kAudioUnitScope_Output)
-            num = CPLUG_NUM_OUTPUT_BUSSES;
+        {
+            num = cplug_getNumOutputBusses(auv2->userPlugin);
+            if (num != auv2->numOutputBusNames)
+            {
+                AUv2ReleaseStringArray(auv2->outputBusNames, auv2->numOutputBusNames);
+                auv2->outputBusNames = (CFStringRef*)realloc(auv2->outputBusNames, num * sizeof(*auv2->outputBusNames));
+            }
+        }
 
         CPLUG_LOG_ASSERT_RETURN(num != 0, kAudioUnitErr_InvalidProperty);
         CPLUG_SAFE_SET_PTR(outDataSize, (UInt32)sizeof(AudioChannelLayoutTag) * num);
@@ -545,17 +570,17 @@ static OSStatus AUMethodGetProperty(
     case kAudioUnitProperty_ParameterList:
     {
         AudioUnitParameterID* paramList = (AudioUnitParameterID*)(outData);
-        for (UInt32 i = 0; i < CPLUG_NUM_PARAMS; i++)
+        uint32_t numParams = cplug_getNumParameters(auv2->userPlugin);
+        for (UInt32 i = 0; i < numParams; i++)
             paramList[i] = cplug_getParameterID(auv2->userPlugin, i);
         break;
     }
 
     case kAudioUnitProperty_ParameterInfo:
     {
-        AudioUnitParameterInfo* paramInfo = outData;
+        AudioUnitParameterInfo* paramInfo = (AudioUnitParameterInfo*)outData;
 
-        const char* name = cplug_getParameterName(auv2->userPlugin, inElement);
-        snprintf(paramInfo->name, sizeof(paramInfo->name), "%s", name);
+        cplug_getParameterName(auv2->userPlugin, inElement, paramInfo->name, sizeof(paramInfo->name));
 
         // Support unit names? Nah. The less CFStrings the better
         // paramInfo->unitName
@@ -617,12 +642,17 @@ static OSStatus AUMethodGetProperty(
         if (inScope == kAudioUnitScope_Global)
             numBusses = 1;
         else if (inScope == kAudioUnitScope_Input)
+        {
             // In Logic Pro, every instrument must receive an input (eg. sidechain) whether you want to or not.
             // If you don't do this, Logic Pro will silently fail to load your plugin.
             // This is not a problem in other hosts such as Ableton, FL and even auval.
-            numBusses = CPLUG_NUM_INPUT_BUSSES == 0 ? 1 : CPLUG_NUM_INPUT_BUSSES;
+
+            numBusses = cplug_getNumInputBusses(auv2->userPlugin);
+            if (numBusses < 1)
+                numBusses = 1;
+        }
         else if (inScope == kAudioUnitScope_Output)
-            numBusses = CPLUG_NUM_OUTPUT_BUSSES;
+            numBusses = cplug_getNumOutputBusses(auv2->userPlugin);
 
         *(UInt32*)outData = numBusses;
         break;
@@ -636,7 +666,7 @@ static OSStatus AUMethodGetProperty(
 
     case kAudioUnitProperty_SupportedNumChannels:
     {
-        AUChannelInfo* infoArr = outData;
+        AUChannelInfo* infoArr = (AUChannelInfo*)outData;
         for (int i = 0; i < *ioDataSize / sizeof(*infoArr); i++)
         {
             int inChannels         = cplug_getInputBusChannelCount(auv2->userPlugin, i);
@@ -665,33 +695,29 @@ static OSStatus AUMethodGetProperty(
 
     case kAudioUnitProperty_ElementName:
     {
-        if (inScope == kAudioUnitScope_Input)
+        if (inScope == kAudioUnitScope_Input && inElement < auv2->numInputBusNames)
         {
-            if (inElement < CPLUG_NUM_INPUT_BUSSES)
+            if (auv2->inputBusNames[inElement] == NULL)
             {
-                if (auv2->inputBusNames[inElement] == NULL)
-                {
-                    const char* name               = cplug_getInputBusName(auv2->userPlugin, inElement);
-                    auv2->inputBusNames[inElement] = CFStringCreateWithCString(NULL, name, kCFStringEncodingUTF8);
-                    CFRetain(auv2->inputBusNames[inElement]);
-                }
-                *(CFStringRef*)(outData) = auv2->inputBusNames[inElement];
-                return noErr;
+                char name[256] = {0};
+                cplug_getInputBusName(auv2->userPlugin, inElement, name, sizeof(name));
+                auv2->inputBusNames[inElement] = CFStringCreateWithCString(NULL, name, kCFStringEncodingUTF8);
+                CFRetain(auv2->inputBusNames[inElement]);
             }
+            *(CFStringRef*)(outData) = auv2->inputBusNames[inElement];
+            return noErr;
         }
-        if (inScope == kAudioUnitScope_Output)
+        if (inScope == kAudioUnitScope_Output && inElement < auv2->numOutputBusNames)
         {
-            if (inElement < CPLUG_NUM_OUTPUT_BUSSES)
+            if (auv2->outputBusNames[inElement] == NULL)
             {
-                if (auv2->outputBusNames[inElement] == NULL)
-                {
-                    const char* name                = cplug_getOutputBusName(auv2->userPlugin, inElement);
-                    auv2->outputBusNames[inElement] = CFStringCreateWithCString(NULL, name, kCFStringEncodingUTF8);
-                    CFRetain(auv2->outputBusNames[inElement]);
-                }
-                *(CFStringRef*)(outData) = auv2->outputBusNames[inElement];
-                return noErr;
+                char name[256] = {0};
+                cplug_getOutputBusName(auv2->userPlugin, inElement, name, sizeof(name));
+                auv2->outputBusNames[inElement] = CFStringCreateWithCString(NULL, name, kCFStringEncodingUTF8);
+                CFRetain(auv2->outputBusNames[inElement]);
             }
+            *(CFStringRef*)(outData) = auv2->outputBusNames[inElement];
+            return noErr;
         }
         result = kAudioUnitErr_PropertyNotInUse;
         break;
@@ -699,6 +725,7 @@ static OSStatus AUMethodGetProperty(
 
     case kAudioUnitProperty_CocoaUI:
     {
+#ifdef CPLUG_WANT_GUI
         AudioUnitCocoaViewInfo* info = (AudioUnitCocoaViewInfo*)outData;
         // AUv2 docs tell you to bundle your Cocoa GUI as a seperate App bundle nested inside your .component bundle.
         // For most people, including CPLUG, this is s̶t̶u̶p̶i̶d̶ ̶a̶n̶d̶ ̶a̶n̶n̶o̶y̶i̶n̶g̶ intrusive to our build system.
@@ -709,6 +736,7 @@ static OSStatus AUMethodGetProperty(
         info->mCocoaAUViewClass[0] = CFStringCreateWithCString(0, CPLUG_AUV2_VIEW_CLASS_STR, kCFStringEncodingUTF8);
         CFRelease(bundleID);
         break;
+#endif
     }
 
     case kAudioUnitProperty_ParameterStringFromValue:
@@ -804,7 +832,7 @@ static OSStatus AUMethodSetProperty(
         CFDictionaryRef dict          = *((CFDictionaryRef*)inData);
         CFStringRef     presetDataKey = CFStringCreateWithCString(0, kAUPresetDataKey, 0);
 
-        const void* data = CFDictionaryGetValue(dict, presetDataKey);
+        CFDataRef data = (CFDataRef)CFDictionaryGetValue(dict, presetDataKey);
         CPLUG_LOG_ASSERT(data != NULL);
         if (data)
         {
@@ -1072,7 +1100,7 @@ bool AUv2ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
         return true;
     }
 
-    CPLUG_LOG_ASSERT(translator->midiIdx < ARRSIZE(translator->auv2->events));
+    CPLUG_LOG_ASSERT(translator->midiIdx < CPLUG_ARRSIZE(translator->auv2->events));
     const CplugEvent* cachedEvent = &translator->auv2->events[translator->midiIdx];
     if (cachedEvent->midi.frame != frameIdx)
     {
@@ -1144,7 +1172,7 @@ static OSStatus AUMethodProcessAudio(
             if (timesigNum != 0)
             {
                 ctx->flags            |= CPLUG_FLAG_TRANSPORT_HAS_TIME_SIGNATURE;
-                ctx->timeSigNumerator  = timesigNum;
+                ctx->timeSigNumerator = timesigNum;
             }
         }
         // Ableton 10 doesn't support transportStateProc2, so this should be our first choice
@@ -1216,7 +1244,7 @@ static OSStatus AUMethodMusicDeviceMIDIEventProc(
     UInt32      inOffsetSampleFrame)
 {
     cplug_log("AUMethodMusicDeviceMIDIEventProc => %u %u %u %u", inStatus, inData1, inData2, inOffsetSampleFrame);
-    if (auv2->numEvents < ARRSIZE(auv2->events))
+    if (auv2->numEvents < CPLUG_ARRSIZE(auv2->events))
     {
         CplugEvent* event  = &auv2->events[auv2->numEvents];
         event->type        = CPLUG_EVENT_MIDI;
@@ -1288,7 +1316,7 @@ static AudioComponentMethod AULookup(SInt16 selector)
     return NULL;
 }
 
-static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event)
+static void AUv2HostContext_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event)
 {
     AUv2Plugin* auv2 = (AUv2Plugin*)((char*)ctx - offsetof(AUv2Plugin, hostContext));
     AUv2SendParamEvent(auv2, event);
@@ -1299,6 +1327,7 @@ OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInst
     cplug_log("ComponentBase_AP_Open");
     auv2->compInstance = compInstance;
     auv2->userPlugin   = cplug_createPlugin(&auv2->hostContext);
+
     return auv2->userPlugin != NULL ? noErr : kAudioUnitErr_FailedInitialization;
 }
 
@@ -1307,12 +1336,10 @@ OSStatus ComponentBase_AP_Close(AUv2Plugin* auv2)
     cplug_log("ComponentBase_AP_Close");
     cplug_destroyPlugin(auv2->userPlugin);
 
-    for (int i = 0; i < CPLUG_NUM_INPUT_BUSSES; i++)
-        if (auv2->inputBusNames[i] != NULL)
-            CFRelease(auv2->inputBusNames[i]);
-    for (int i = 0; i < CPLUG_NUM_OUTPUT_BUSSES; i++)
-        if (auv2->outputBusNames[i] != NULL)
-            CFRelease(auv2->outputBusNames[i]);
+    AUv2ReleaseStringArray(auv2->inputBusNames, auv2->numInputBusNames);
+    AUv2ReleaseStringArray(auv2->outputBusNames, auv2->numOutputBusNames);
+    free(auv2->inputBusNames);
+    free(auv2->outputBusNames);
 
     free(auv2);
 
@@ -1338,7 +1365,7 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     auv2->mPlugInInterface.Close     = (OSStatus(*)(void*))ComponentBase_AP_Close;
     auv2->mPlugInInterface.Lookup    = AULookup;
     auv2->desc                       = *inDesc;
-    auv2->hostContext.sendParamEvent = _cplug_sendParamEvent;
+    auv2->hostContext.sendParamEvent = AUv2HostContext_sendParamEvent;
 
     auv2->supportsInPlaceProcessing = 1;
     auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;

@@ -11,9 +11,7 @@
 #include <wchar.h>
 
 #define tuid_match(a, b) memcmp(a, b, sizeof(Steinberg_TUID)) == 0
-#ifndef ARRSIZE
-#define ARRSIZE(a) (sizeof(a) / sizeof(a[0]))
-#endif
+#define CPLUG_ARRLEN(a)  (sizeof(a) / sizeof(a[0]))
 
 // Parameter automtion in some hosts can be too highly frequent. eg. Ableton sends a new automation points every 8
 // samples. In order to effeciently process parameter & audio events in order, parameter events are coalesced and
@@ -162,7 +160,7 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
     // https://github.com/justinfrankel/reaper-sdk
     // https://github.com/fenderdigital/presonus-plugin-extensions
 
-    for (size_t i = 0; i < ARRSIZE(_known_iids); ++i)
+    for (size_t i = 0; i < CPLUG_ARRLEN(_known_iids); ++i)
     {
         if (tuid_match(iid, _known_iids[i].iid))
             return _known_iids[i].name;
@@ -180,7 +178,6 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
     return buf;
 }
 
-#if CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES > 0
 // someone please tell me what is up with these..
 static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint32_t channelCount)
 {
@@ -236,7 +233,6 @@ static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint3
         return 0;
     }
 }
-#endif
 
 #ifndef NDEBUG
 static inline const char* _cplug_getMediaTypeStr(int32_t type)
@@ -916,6 +912,8 @@ VST3Controller_getState(void* const self, Steinberg_IBStream* const stream)
 static int32_t SMTG_STDMETHODCALLTYPE VST3Controller_getParameterCount(void* self)
 {
     // cplug_log("VST3Controller_getParameterCount => %p", self);
+    VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
+    uint32_t pluginParams = cplug_getNumParameters(vst3->userPlugin);
 #if CPLUG_WANT_MIDI_INPUT
     // We have to lie to some hosts like Cubase & Reaper that we have additional MidiCC params.
     // These hosts will call getParameterInfo() for us to set our special param iDs. These hosts then send us
@@ -925,9 +923,9 @@ static int32_t SMTG_STDMETHODCALLTYPE VST3Controller_getParameterCount(void* sel
     // parameter. This is probably the intended behaviour of a VST3 host, however some other hosts like Ableton,
     // FLStudio, and Bitwig are much more lenient, and will send (MIDI) param updates without requiring us to fake
     // params in getParameterCount() & getParameterInfo().
-    return CPLUG_NUM_PARAMS + CPLUG_MIDI_PARAMID_COUNT;
+    return pluginParams + CPLUG_MIDI_PARAMID_COUNT;
 #else
-    return CPLUG_NUM_PARAMS;
+    return pluginParams;
 #endif
 }
 
@@ -936,13 +934,16 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
 {
     // cplug_log("VST3Controller_getParameterInfo => %p %i", self, index);
     VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
+    uint32_t pluginParams = cplug_getNumParameters(vst3->userPlugin);
 
-    CPLUG_LOG_ASSERT(index >= 0 && index < CPLUG_NUM_PARAMS + CPLUG_MIDI_PARAMID_COUNT);
+    CPLUG_LOG_ASSERT(index >= 0 && index < pluginParams + CPLUG_MIDI_PARAMID_COUNT);
 
     memset(info, 0, sizeof(*info));
 
-    if (index >= 0 && index < CPLUG_NUM_PARAMS)
+    if (index >= 0 && index < pluginParams)
     {
+        char buf[sizeof(info->title)] = {0};
+
         uint32_t paramId = cplug_getParameterID(vst3->userPlugin, index);
         CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
         info->id = paramId;
@@ -968,17 +969,18 @@ VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_
 
         double defaultValue          = cplug_getDefaultParameterValue(vst3->userPlugin, paramId);
         info->defaultNormalizedValue = cplug_normaliseParameterValue(vst3->userPlugin, paramId, defaultValue);
-        _cplug_utf8To16(info->title, cplug_getParameterName(vst3->userPlugin, paramId), 128);
+        cplug_getParameterName(vst3->userPlugin, paramId, buf, sizeof(buf));
+        _cplug_utf8To16(info->title, buf, 128);
         // Who cares?
-        _cplug_utf8To16(info->shortTitle, cplug_getParameterName(vst3->userPlugin, paramId), 128);
+        memcpy(info->shortTitle, info->title, sizeof(info->shortTitle));
         return Steinberg_kResultOk;
     }
 
 #if CPLUG_WANT_MIDI_INPUT
-    if (index >= CPLUG_NUM_PARAMS && index < CPLUG_NUM_PARAMS + CPLUG_MIDI_PARAMID_COUNT)
+    if (index >= pluginParams && index < pluginParams + CPLUG_MIDI_PARAMID_COUNT)
     {
         // Fake MidiCC param
-        uint32_t rel_idx = index - CPLUG_NUM_PARAMS;
+        uint32_t rel_idx = index - pluginParams;
         info->id         = CPLUG_MIDI_PARAMID_START + rel_idx;
         return Steinberg_kResultOk;
     }
@@ -1070,7 +1072,7 @@ VST3Controller_setParamNormalized(void* const self, const Steinberg_Vst_ParamID 
         uint8_t channel = (paramId - CPLUG_MIDI_PARAMID_START) / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
         uint8_t control = (paramId - CPLUG_MIDI_PARAMID_START) % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
 
-        if (vst3->midiContollerQueueSize < ARRSIZE(vst3->midiContollerQueue))
+        if (vst3->midiContollerQueueSize < CPLUG_ARRLEN(vst3->midiContollerQueue))
         {
             uint8_t* midi = (uint8_t*)&vst3->midiContollerQueue[vst3->midiContollerQueueSize];
 
@@ -1169,15 +1171,16 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
     // Steinberg_IPlugViewContentScaleSupport
     view->scale.base.setContentScaleFactor = VST3ViewContentScale_setContentScaleFactor;
     view->scale.refcounter                 = 1;
-#endif
+#endif // _WIN32
+
     void* userGUI = cplug_createGUI(vst3->userPlugin);
-    CPLUG_LOG_ASSERT_RETURN(userGUI != NULL, NULL);
+    CPLUG_LOG_ASSERT(userGUI != NULL);
     view->userGUI = userGUI;
 
     return (Steinberg_IPlugView*)view;
-#else
+#else  // !CPLUG_WANT_GUI
     return NULL;
-#endif
+#endif // CPLUG_WANT_GUI
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1825,28 +1828,21 @@ VST3Component_getBusCount(void* const self, const int32_t media_type, const int3
         self,
         _cplug_getMediaTypeStr(media_type),
         _cplug_getBusDirectionStr(bus_direction));
+    VST3Plugin* vst3 = _cplug_pointerShiftComponent((VST3Component*)self);
 
-    switch ((Steinberg_Vst_MediaTypes)media_type)
-    {
-    case Steinberg_Vst_MediaTypes_kAudio:
-        switch ((Steinberg_Vst_BusDirections)bus_direction)
-        {
-        case Steinberg_Vst_BusDirections_kInput:
-            return CPLUG_NUM_INPUT_BUSSES;
-        case Steinberg_Vst_BusDirections_kOutput:
-            return CPLUG_NUM_OUTPUT_BUSSES;
-        }
-    case Steinberg_Vst_MediaTypes_kEvent:
-        switch ((Steinberg_Vst_BusDirections)bus_direction)
-        {
-        case Steinberg_Vst_BusDirections_kInput:
-            return CPLUG_WANT_MIDI_INPUT ? 1 : 0;
-        case Steinberg_Vst_BusDirections_kOutput:
-            return CPLUG_WANT_MIDI_OUTPUT ? 1 : 0;
-        }
-    case Steinberg_Vst_MediaTypes_kNumMediaTypes:
-        return 0;
-    }
+    const bool isAudio  = media_type == Steinberg_Vst_MediaTypes_kAudio;
+    const bool isMidi   = media_type == Steinberg_Vst_MediaTypes_kEvent;
+    const bool isInput  = bus_direction == Steinberg_Vst_BusDirections_kInput;
+    const bool isOutput = bus_direction == Steinberg_Vst_BusDirections_kOutput;
+
+    if (isAudio && isInput)
+        return cplug_getNumInputBusses(vst3->userPlugin);
+    if (isAudio && isOutput)
+        return cplug_getNumOutputBusses(vst3->userPlugin);
+    if (isMidi && isInput)
+        return CPLUG_WANT_MIDI_INPUT ? 1 : 0;
+    if (isMidi && isOutput)
+        return CPLUG_WANT_MIDI_OUTPUT ? 1 : 0;
 
     return 0;
 }
@@ -1865,7 +1861,8 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getBusInfo(
         _cplug_getBusDirectionStr(bus_direction),
         bus_idx,
         info);
-    VST3Plugin* vst3 = _cplug_pointerShiftComponent((VST3Component*)self);
+    VST3Plugin* vst3                     = _cplug_pointerShiftComponent((VST3Component*)self);
+    char        name[sizeof(info->name)] = {0};
 
     CPLUG_LOG_ASSERT_RETURN(
         media_type == Steinberg_Vst_MediaTypes_kAudio || media_type == Steinberg_Vst_MediaTypes_kEvent,
@@ -1875,39 +1872,45 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getBusInfo(
         Steinberg_kInvalidArgument);
     CPLUG_LOG_ASSERT_RETURN(bus_idx >= 0, Steinberg_kInvalidArgument);
 
-#if CPLUG_NUM_INPUT_BUSSES
-    if (media_type == Steinberg_Vst_MediaTypes_kAudio && bus_direction == Steinberg_Vst_BusDirections_kInput)
+    const bool isAudio  = media_type == Steinberg_Vst_MediaTypes_kAudio;
+    const bool isMIDI   = media_type == Steinberg_Vst_MediaTypes_kEvent;
+    const bool isInput  = bus_direction == Steinberg_Vst_BusDirections_kInput;
+    const bool isOutput = bus_direction == Steinberg_Vst_BusDirections_kOutput;
+
+    if (isAudio && isInput && bus_idx < cplug_getNumInputBusses(vst3->userPlugin))
     {
         info->mediaType    = media_type;
         info->direction    = bus_direction;
         info->channelCount = cplug_getInputBusChannelCount(vst3->userPlugin, bus_idx);
-        _cplug_utf8To16(info->name, cplug_getInputBusName(vst3->userPlugin, bus_idx), 128);
-        info->busType = CPLUG_IS_INSTRUMENT
-                            ? Steinberg_Vst_BusTypes_kAux
-                            : (bus_idx == 0 ? Steinberg_Vst_BusTypes_kMain : Steinberg_Vst_BusTypes_kAux);
-        info->flags   = Steinberg_Vst_BusInfo_BusFlags_kDefaultActive;
+
+        cplug_getInputBusName(vst3->userPlugin, bus_idx, name, sizeof(name));
+        _cplug_utf8To16(info->name, name, 128);
+
+        const bool isInstrument = CPLUG_IS_INSTRUMENT;
+        info->busType           = isInstrument ? Steinberg_Vst_BusTypes_kAux
+                                               : (bus_idx == 0 ? Steinberg_Vst_BusTypes_kMain : Steinberg_Vst_BusTypes_kAux);
+        info->flags             = Steinberg_Vst_BusInfo_BusFlags_kDefaultActive;
 
         return Steinberg_kResultOk;
     }
-#endif
 
-#if CPLUG_NUM_OUTPUT_BUSSES
-    if (media_type == Steinberg_Vst_MediaTypes_kAudio && bus_direction == Steinberg_Vst_BusDirections_kOutput)
+    if (isAudio && isOutput && bus_idx < cplug_getNumOutputBusses(vst3->userPlugin))
     {
         info->mediaType    = media_type;
         info->direction    = bus_direction;
         info->channelCount = cplug_getOutputBusChannelCount(vst3->userPlugin, bus_idx);
-        _cplug_utf8To16(info->name, cplug_getOutputBusName(vst3->userPlugin, bus_idx), 128);
+
+        cplug_getOutputBusName(vst3->userPlugin, bus_idx, name, sizeof(name));
+        _cplug_utf8To16(info->name, name, CPLUG_ARRLEN(info->name));
 
         info->busType = bus_idx == 0 ? Steinberg_Vst_BusTypes_kMain : Steinberg_Vst_BusTypes_kAux;
         info->flags   = Steinberg_Vst_BusInfo_BusFlags_kDefaultActive;
 
         return Steinberg_kResultOk;
     }
-#endif
 
 #if CPLUG_WANT_MIDI_INPUT
-    if (media_type == Steinberg_Vst_MediaTypes_kEvent && bus_direction == Steinberg_Vst_BusDirections_kInput)
+    if (isMIDI && isInput)
     {
         CPLUG_LOG_ASSERT_RETURN(bus_idx == 0, Steinberg_kInvalidArgument);
 
@@ -1919,9 +1922,9 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getBusInfo(
         info->flags   = Steinberg_Vst_BusInfo_BusFlags_kDefaultActive;
         return Steinberg_kResultOk;
     }
-#endif
+#endif // CPLUG_WANT_MIDI_INPUT
 #if CPLUG_WANT_MIDI_OUTPUT
-    if (media_type == Steinberg_Vst_MediaTypes_kEvent && bus_direction == Steinberg_Vst_BusDirections_kOutput)
+    if (isMIDI && isOutput)
     {
         CPLUG_LOG_ASSERT_RETURN(bus_idx == 0, Steinberg_kInvalidArgument);
 
@@ -1933,7 +1936,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getBusInfo(
         info->flags   = Steinberg_Vst_BusInfo_BusFlags_kDefaultActive;
         return Steinberg_kResultOk;
     }
-#endif
+#endif // CPLUG_WANT_MIDI_OUTPUT
     return Steinberg_kResultFalse;
 }
 
