@@ -912,29 +912,27 @@ VST3Controller_getState(void* const self, Steinberg_IBStream* const stream)
 static int32_t SMTG_STDMETHODCALLTYPE VST3Controller_getParameterCount(void* self)
 {
     // cplug_log("VST3Controller_getParameterCount => %p", self);
-    VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
-    uint32_t pluginParams = cplug_getNumParameters(vst3->userPlugin);
+    VST3Plugin* const vst3      = _cplug_pointerShiftController((VST3Controller*)self);
+    uint32_t          numParams = cplug_getNumParameters(vst3->userPlugin);
 #if CPLUG_WANT_MIDI_INPUT
-    // We have to lie to some hosts like Cubase & Reaper that we have additional MidiCC params.
+    // We have to lie to VST3 compliant hosts like Cubase & Reaper that we have additional MidiCC params.
     // These hosts will call getParameterInfo() for us to set our special param iDs. These hosts then send us
     // 'parameter' updates which we convert into MIDI. If we don't lie about the parameter count and give the hosts
     // param IDs, they seemingly fail to make a param idx <-> param id mapping, and won't send the plugin (MIDI)
     // parameter updates. For example, this means the pitch wheel won't work, because in VST3, the pitch wheel is a
-    // parameter. This is probably the intended behaviour of a VST3 host, however some other hosts like Ableton,
-    // FLStudio, and Bitwig are much more lenient, and will send (MIDI) param updates without requiring us to fake
-    // params in getParameterCount() & getParameterInfo().
-    return pluginParams + CPLUG_MIDI_PARAMID_COUNT;
-#else
-    return pluginParams;
+    // parameter. Other hosts like Ableton, FLStudio, and Bitwig are much more lenient, and will send (MIDI) param
+    // updates without requiring us to create fake params in getParameterCount() & getParameterInfo().
+    numParams += CPLUG_MIDI_PARAMID_COUNT;
 #endif
+    return numParams;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_getParameterInfo(void* self, int32_t index, struct Steinberg_Vst_ParameterInfo* info)
 {
     // cplug_log("VST3Controller_getParameterInfo => %p %i", self, index);
-    VST3Plugin* const vst3 = _cplug_pointerShiftController((VST3Controller*)self);
-    uint32_t pluginParams = cplug_getNumParameters(vst3->userPlugin);
+    VST3Plugin* const vst3         = _cplug_pointerShiftController((VST3Controller*)self);
+    uint32_t          pluginParams = cplug_getNumParameters(vst3->userPlugin);
 
     CPLUG_LOG_ASSERT(index >= 0 && index < pluginParams + CPLUG_MIDI_PARAMID_COUNT);
 

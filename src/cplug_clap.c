@@ -39,7 +39,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
     cplug_log("CLAPExtAudioPorts_get => %u %p", (unsigned)is_input, info);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    uint32_t numInputs = cplug_getNumInputBusses(clap->userPlugin);
+    uint32_t numInputs  = cplug_getNumInputBusses(clap->userPlugin);
     uint32_t numOutputs = cplug_getNumOutputBusses(clap->userPlugin);
     if (is_input && index < numInputs)
     {
@@ -189,14 +189,14 @@ static const clap_plugin_state_t s_clap_state = {
 uint32_t CLAPExtParams_count(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtParams_count");
-    CLAPPlugin*    clap     = (CLAPPlugin*)plugin->plugin_data;
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
     return cplug_getNumParameters(clap->userPlugin);
 }
 
 bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, clap_param_info_t* param_info)
 {
     // cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
-    CLAPPlugin*    clap     = (CLAPPlugin*)plugin->plugin_data;
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
     CPLUG_LOG_ASSERT_RETURN(param_index < cplug_getNumParameters(clap->userPlugin), false);
 
     const uint32_t param_id = cplug_getParameterID(clap->userPlugin, param_index);
@@ -564,6 +564,7 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         const clap_event_note_t* ev = (const clap_event_note_t*)hdr;
 
         event->midi.type     = CPLUG_EVENT_MIDI;
+        event->midi.frame    = event_time;
         event->midi.bytes[0] = 0x90; // Note on
         if (ev->channel >= 0 && ev->channel < 16)
             event->midi.bytes[0] |= ev->channel;
@@ -571,7 +572,6 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         event->midi.bytes[1] = (uint8_t)ev->key;
         event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
         event->midi.bytes[3] = 0;
-        event->midi.frame    = event_time;
         break;
     }
     case CLAP_EVENT_NOTE_OFF:
@@ -579,14 +579,14 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         const clap_event_note_t* ev = (const clap_event_note_t*)hdr;
 
         event->midi.type     = CPLUG_EVENT_MIDI;
+        event->midi.frame    = event_time;
         event->midi.bytes[0] = 0x80; // Note off
         if (ev->channel >= 0 && ev->channel < 16)
             event->midi.bytes[0] |= ev->channel;
 
-        event->midi.bytes[1] = (uint8_t)ev->key;
+        event->midi.bytes[1] = ev->key;
         event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
         event->midi.bytes[3] = 0;
-        event->midi.frame    = event_time;
         break;
     }
     case CLAP_EVENT_NOTE_EXPRESSION:
@@ -596,14 +596,20 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         if (ev->expression_id == CLAP_NOTE_EXPRESSION_PRESSURE)
         {
             event->midi.type     = CPLUG_EVENT_MIDI;
+            event->midi.frame    = event_time;
             event->midi.bytes[0] = 0xa0; // Polyphonic aftertouch
             if (ev->channel >= 0 && ev->channel < 16)
                 event->midi.bytes[0] |= ev->channel;
 
-            event->midi.bytes[1] = (uint8_t)ev->key;
+            event->midi.bytes[1] = ev->key;
             event->midi.bytes[2] = (int8_t)(ev->value * 127);
             event->midi.bytes[3] = 0;
-            event->midi.frame    = event_time;
+        }
+        else if (ev->expression_id == CLAP_NOTE_EXPRESSION_TUNING)
+        {
+            event->note_expression.type  = CPLUG_EVENT_NOTE_EXPRESSION_TUNING;
+            event->note_expression.key   = ev->key;
+            event->note_expression.value = ev->value;
         }
         else
         {
@@ -721,7 +727,7 @@ static const void* CLAPPlugin_get_extension(const struct clap_plugin* plugin, co
     cplug_log("CLAPPlugin_get_extension => %s", id);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    uint32_t numInputs = cplug_getNumInputBusses(clap->userPlugin);
+    uint32_t numInputs  = cplug_getNumInputBusses(clap->userPlugin);
     uint32_t numOutputs = cplug_getNumOutputBusses(clap->userPlugin);
     uint32_t numParams  = cplug_getNumParameters(clap->userPlugin);
 

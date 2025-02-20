@@ -73,6 +73,12 @@ enum
     CPLUG_EVENT_PARAM_CHANGE_UPDATE,
     CPLUG_EVENT_PARAM_CHANGE_END,
     CPLUG_EVENT_MIDI,
+    // CPLUG_EVENT_NOTE_EXPRESSION_VOLUME,
+    // CPLUG_EVENT_NOTE_EXPRESSION_PAN,
+    CPLUG_EVENT_NOTE_EXPRESSION_TUNING,
+    // CPLUG_EVENT_NOTE_EXPRESSION_VIBRATO,
+    // CPLUG_EVENT_NOTE_EXPRESSION_EXPRESSION, // similar to an expression pedal (MIDI CC 11), except polyphonic
+    // CPLUG_EVENT_NOTE_EXPRESSION_BRIGHTNESS,
 };
 
 union CplugEvent
@@ -108,6 +114,13 @@ union CplugEvent
             uint32_t bytesAsInt;
         };
     } midi;
+
+    struct
+    {
+        uint32_t type;
+        uint32_t key; // 0-127
+        double   value;
+    } note_expression;
 };
 
 enum
@@ -246,11 +259,11 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 #else
 #include <stdarg.h>
 #include <stdio.h>
-// When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
 static inline void cplug_printf(const char* const fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
+    // When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
     vfprintf(stderr, fmt, args);
     fprintf(stderr, "\n");
     va_end(args);
