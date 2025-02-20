@@ -118,7 +118,7 @@ union CplugEvent
     struct
     {
         uint32_t type;
-        uint32_t key; // 0-127
+        int32_t  key; // 0-127
         double   value;
     } note_expression;
 };

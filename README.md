@@ -38,15 +38,14 @@ Tested using compilers MinGW GCC 8, VS 17.5, Clang 15 (Windows), Clang 14 (Mac),
 
 ### Included:
 
-- Uses _sample accurate automation_ by default
-- Standalone builds include hotreloading, and a native menu for switching between sample rates, block sizes, MIDI devices and audio drivers.
+-   Uses _sample accurate automation_ by default
+-   Standalone builds include hotreloading, and a native menu for switching between sample rates, block sizes, MIDI devices and audio drivers.
 
 ### **Not** included
 
 -   _"Distributable"_. Support for external GUIs and external processing
 -   Parameter groups.
 -   Bus activation/deactivation
--   MPE
 
 Most plugins don't support these features, & most users don't ask for them or know about them. This library takes a YAGNI approach to uncommon features. Because this library is such a thin wrapper over the plugin APIs, adding any feature you need yourself should be a breeze.
 
@@ -82,5 +81,5 @@ Everything else is in the public domain, or MIT if you insist. See [LICENSE](LIC
 
 ## Credits
 
-- Filipe Coelho - Most of the VST3 wrapper and debugging code is a heavily edited version of his code from the [DISTRHO Plugin Framework](https://github.com/DISTRHO/DPF)
-- Nakst - The drawing used in the example plugin was taken from the [CLAP tutorial](https://nakst.gitlab.io/tutorial/clap-part-1.html)
+-   Filipe Coelho - Most of the VST3 wrapper and debugging code is a heavily edited version of his code from the [DISTRHO Plugin Framework](https://github.com/DISTRHO/DPF)
+-   Nakst - The drawing used in the example plugin was taken from the [CLAP tutorial](https://nakst.gitlab.io/tutorial/clap-part-1.html)

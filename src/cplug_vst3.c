@@ -380,6 +380,13 @@ typedef struct VST3Plugin
 
     struct
     {
+        Steinberg_Vst_INoteExpressionControllerVtbl* lpVtbl;
+        Steinberg_Vst_INoteExpressionControllerVtbl  base;
+        cplug_atomic_i32                             refcounter;
+    } noteExpression;
+
+    struct
+    {
         Steinberg_Vst_IAudioProcessorVtbl* lpVtbl;
         Steinberg_Vst_IAudioProcessorVtbl  base;
         cplug_atomic_i32                   refcounter;
@@ -407,6 +414,10 @@ static inline VST3Plugin* _cplug_pointerShiftController(void* const ptr)
 static inline VST3Plugin* _cplug_pointerShiftMidiMapping(void* const ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, midiMapping));
+}
+static inline VST3Plugin* _cplug_pointerShiftNoteExpression(void* const ptr)
+{
+    return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, noteExpression));
 }
 static inline VST3Plugin* _cplug_pointerShiftProcessor(void* const ptr)
 {
@@ -468,8 +479,9 @@ static int _cplug_tryDeleteVST3(VST3Plugin* vst3)
     int total  = 0;
     total     += cplug_atomic_load_i32(&vst3->component.refcounter);
     total     += cplug_atomic_load_i32(&vst3->controller.refcounter);
-    total     += cplug_atomic_load_i32(&vst3->processor.refcounter);
     total     += cplug_atomic_load_i32(&vst3->midiMapping.refcounter);
+    total     += cplug_atomic_load_i32(&vst3->noteExpression.refcounter);
+    total     += cplug_atomic_load_i32(&vst3->processor.refcounter);
 
     if (total != 0)
         return 0;
@@ -820,6 +832,170 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3MidiMapping_getMidiControllerAssign
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+Source: "pluginterfaces/vst/ivstnoteexpression.h", line 165 */
+// Implementation largely copy pasted from here:
+// https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Change+History/3.5.0/INoteExpressionController.html
+
+// Steinberg_FUnknown
+Steinberg_tresult SMTG_STDMETHODCALLTYPE
+VST3NoteExpression_queryInterface(void* thisInterface, const Steinberg_TUID iid, void** obj)
+{
+    if (tuid_match(iid, Steinberg_Vst_INoteExpressionController_iid))
+    {
+        cplug_log("VST3NoteExpression_queryInterface => %p %s %p | OK", thisInterface, _cplug_tuid2str(iid), obj);
+        *obj = thisInterface;
+        return Steinberg_kResultOk;
+    }
+
+    cplug_log(
+        "VST3NoteExpression_queryInterface => %p %s %p | WARNING UNSUPPORTED",
+        thisInterface,
+        _cplug_tuid2str(iid),
+        obj);
+    *obj = NULL;
+    return Steinberg_kNoInterface;
+}
+
+Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_addRef(void* thisInterface)
+{
+    VST3Plugin* const vst3     = _cplug_pointerShiftNoteExpression(thisInterface);
+    const int         refcount = cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, 1) + 1;
+    cplug_log("VST3NoteExpression_addRef => %p | refcount %i", thisInterface, refcount);
+    return refcount;
+}
+
+Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_release(void* thisInterface)
+{
+    VST3Plugin* vst3     = _cplug_pointerShiftNoteExpression(thisInterface);
+    const int   refcount = cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, -1) - 1;
+    cplug_log("VST3NoteExpression_release => %p | refcount %d", thisInterface, refcount);
+
+    if (refcount)
+        return refcount;
+
+    _cplug_tryDeleteVST3(vst3);
+    return 0;
+}
+// Steinberg_Vst_INoteExpressionController
+Steinberg_int32 SMTG_STDMETHODCALLTYPE
+VST3NoteExpression_getNoteExpressionCount(void* thisInterface, Steinberg_int32 busIndex, Steinberg_int16 channel)
+{
+    cplug_log("VST3NoteExpression_getNoteExpressionCount => %p %d %hd", thisInterface, busIndex, channel);
+    // we accept only the first bus and 1 channel
+    if (busIndex == 0 && channel == 0)
+        return 1;
+    return 0;
+}
+Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionInfo(
+    void*                                        thisInterface,
+    Steinberg_int32                              busIndex,
+    Steinberg_int16                              channel,
+    Steinberg_int32                              noteExpressionIndex,
+    struct Steinberg_Vst_NoteExpressionTypeInfo* info)
+{
+    cplug_log(
+        "VST3NoteExpression_getNoteExpressionInfo => %p %d %hd %d %p",
+        thisInterface,
+        busIndex,
+        channel,
+        noteExpressionIndex,
+        info);
+    // we accept only the first bus and 1 channel and only 1 Note Expression (tuning)
+    if (busIndex == 0 && channel == 0 && noteExpressionIndex == 0)
+    {
+        memset(info, 0, sizeof(*info));
+
+        // set the tuning type
+        info->typeId = Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID;
+
+        // set some strings
+        swprintf((wchar_t*)info->title, 128, L"%ls", L"Tuning");
+        swprintf((wchar_t*)info->shortTitle, 128, L"%ls", L"Tun");
+        swprintf((wchar_t*)info->units, 128, L"%ls", L"Half Tone");
+
+        info->unitId                = -1; // no unit wanted
+        info->associatedParameterId = -1; // no associated parameter wanted
+
+        info->flags =
+            Steinberg_Vst_NoteExpressionTypeInfo_NoteExpressionTypeFlags_kIsBipolar; // event is bipolar (centered)
+
+        // for Tuning the convert functions are: plain = 240 * (norm - 0.5); norm = plain / 240 + 0.5;
+        // we want to support only +/- one octave
+        const double kNormTuningOneOctave = 12.0 / 240.0;
+
+        info->valueDesc.minimum      = 0.5 - kNormTuningOneOctave;
+        info->valueDesc.maximum      = 0.5 + kNormTuningOneOctave;
+        info->valueDesc.defaultValue = 0.5; // middle of [0, 1] => no detune (240 * (0.5 - 0.5) = 0)
+        info->valueDesc.stepCount    = 0;   // we want continuous (no step)
+
+        return Steinberg_kResultTrue;
+    }
+
+    return Steinberg_kResultFalse;
+}
+
+Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionStringByValue(
+    void*                              thisInterface,
+    Steinberg_int32                    busIndex,
+    Steinberg_int16                    channel,
+    Steinberg_Vst_NoteExpressionTypeID id,
+    Steinberg_Vst_NoteExpressionValue  valueNormalized,
+    Steinberg_Vst_String128            string)
+{
+    cplug_log(
+        "VST3NoteExpression_getNoteExpressionStringByValue => %p %d %hd %u %f %p",
+        thisInterface,
+        busIndex,
+        channel,
+        id,
+        valueNormalized,
+        string);
+    // here we use the id (not the index)
+    if (busIndex == 0 && channel == 0 && id == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
+    {
+        // here we have to convert a normalized value to a Tuning string representation
+        valueNormalized = (240 * valueNormalized) - 120; // compute half Tones
+        swprintf((wchar_t*)string, 128, L"%.2f", valueNormalized);
+
+        return Steinberg_kResultTrue;
+    }
+
+    return Steinberg_kResultFalse;
+}
+
+Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionValueByString(
+    void*                              thisInterface,
+    Steinberg_int32                    busIndex,
+    Steinberg_int16                    channel,
+    Steinberg_Vst_NoteExpressionTypeID id,
+    const Steinberg_Vst_TChar*         string,
+    Steinberg_Vst_NoteExpressionValue* valueNormalized)
+{
+    cplug_log(
+        "VST3NoteExpression_getNoteExpressionValueByString => %p %d %hd %u %p %p",
+        thisInterface,
+        busIndex,
+        channel,
+        id,
+        string,
+        valueNormalized);
+    // here we use the id (not the index)
+    if (busIndex == 0 && channel == 0 && id == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
+    {
+        // here we have to convert a given tuning string (half Tone) to a normalized value
+        double tmp   = 0;
+        int    count = swscanf((const wchar_t*)string, L"%f", &tmp);
+        if (count)
+        {
+            *valueNormalized = (tmp + 120) / 240;
+            return Steinberg_kResultTrue;
+        }
+    }
+
+    return Steinberg_kResultOk;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
 Source: "pluginterfaces/vst/ivsteditcontroller.h", line 398 */
 // Steinberg_FUnknown
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -840,6 +1016,13 @@ VST3Controller_queryInterface(void* const self, const Steinberg_TUID iid, void**
         cplug_log("VST3Controller_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, 1);
         *iface = &vst3->midiMapping;
+        return Steinberg_kResultOk;
+    }
+    if (tuid_match(iid, Steinberg_Vst_INoteExpressionController_iid))
+    {
+        cplug_log("VST3Controller_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, 1);
+        *iface = &vst3->noteExpression;
         return Steinberg_kResultOk;
     }
 
@@ -1497,8 +1680,22 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                     event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.pitch;
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_polyPressure.pressure * 127.0f);
                     break;
-                case Steinberg_Vst_Event_EventTypes_kDataEvent: // TODO: support SYSEX
                 case Steinberg_Vst_Event_EventTypes_kNoteExpressionValueEvent:
+                    if (vst3Midi.Steinberg_Vst_Event_noteExpressionValue.typeId ==
+                        Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
+                    {
+                        // Denormalise value to range -120 - 120 semitones
+                        const double norm            = vst3Midi.Steinberg_Vst_Event_noteExpressionValue.value;
+                        event->note_expression.type  = CPLUG_EVENT_NOTE_EXPRESSION_TUNING;
+                        event->note_expression.key   = vst3Midi.Steinberg_Vst_Event_noteExpressionValue.noteId;
+                        event->note_expression.value = -120.0 + norm * 240;
+                    }
+                    else
+                    {
+                        event->type = CPLUG_EVENT_UNHANDLED_EVENT;
+                    }
+                    break;
+                case Steinberg_Vst_Event_EventTypes_kDataEvent: // TODO: support SYSEX
                 case Steinberg_Vst_Event_EventTypes_kNoteExpressionTextEvent:
                 case Steinberg_Vst_Event_EventTypes_kChordEvent:
                 case Steinberg_Vst_Event_EventTypes_kScaleEvent:
@@ -2185,6 +2382,18 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         vst3->midiMapping.base.release        = VST3MidiMapping_release;
         // Steinberg_Vst_IMidiMapping
         vst3->midiMapping.base.getMidiControllerAssignment = VST3MidiMapping_getMidiControllerAssignment;
+
+        vst3->noteExpression.lpVtbl     = &vst3->noteExpression.base;
+        vst3->noteExpression.refcounter = 1;
+        // Steinberg_FUnknown
+        vst3->noteExpression.base.queryInterface = VST3NoteExpression_queryInterface;
+        vst3->noteExpression.base.addRef         = VST3NoteExpression_addRef;
+        vst3->noteExpression.base.release        = VST3NoteExpression_release;
+        // Steinberg_Vst_INoteExpressionController
+        vst3->noteExpression.base.getNoteExpressionCount         = VST3NoteExpression_getNoteExpressionCount;
+        vst3->noteExpression.base.getNoteExpressionInfo          = VST3NoteExpression_getNoteExpressionInfo;
+        vst3->noteExpression.base.getNoteExpressionStringByValue = VST3NoteExpression_getNoteExpressionStringByValue;
+        vst3->noteExpression.base.getNoteExpressionValueByString = VST3NoteExpression_getNoteExpressionValueByString;
 
         vst3->processor.lpVtbl     = &vst3->processor.base;
         vst3->processor.refcounter = 1;
