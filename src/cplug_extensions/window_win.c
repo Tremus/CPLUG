@@ -1103,8 +1103,12 @@ LRESULT CALLBACK PWCallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
 
         if (cwp->message == WM_SIZING)
         {
-            g_ResizeDirection = cwp->wParam;
-            PW_ASSERT(g_ResizeDirection > PW_RESIZE_UNKNOWN && g_ResizeDirection <= PW_RESIZE_BOTTOMRIGHT);
+            // I've spotted Windows 11 sending cwp->wParam == 9, which is undocumented and possibly a bug
+            // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
+            if (cwp->wParam > PW_RESIZE_UNKNOWN && cwp->wParam <= PW_RESIZE_BOTTOMRIGHT)
+                g_ResizeDirection = cwp->wParam;
+            else
+                g_ResizeDirection = PW_RESIZE_UNKNOWN;
         }
     }
     return 0;
