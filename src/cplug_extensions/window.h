@@ -62,7 +62,7 @@ $$$$$$$$$$$$$$$$$$$
 #if 0
 
 #include <cplug.h>
-#include <cplug/ext/window.h>
+#include <cplug_extensions/window.h>
 
 struct GUI;
 
