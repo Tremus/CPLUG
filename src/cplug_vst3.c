@@ -457,55 +457,28 @@ static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event
     }
 }
 
-// Guard against plugin hosts that lose track of their own refs to your plugin
-static VST3Plugin** _cplug_leakedVST3Arr   = NULL;
-static int          _cplug_leakedVST3Count = 0;
-static int          _cplug_leakedVST3Cap   = 0;
-
-static void _cplug_pushLeakedVST3(VST3Plugin* ptr)
+static void _cplug_tryDeleteVST3(VST3Plugin* vst3)
 {
-    if (_cplug_leakedVST3Cap >= _cplug_leakedVST3Count)
+    int ref_component  = cplug_atomic_load_i32(&vst3->component.refcounter);
+    int ref_controller = cplug_atomic_load_i32(&vst3->controller.refcounter);
+    int ref_midimap    = cplug_atomic_load_i32(&vst3->midiMapping.refcounter);
+    int ref_noteexp    = cplug_atomic_load_i32(&vst3->noteExpression.refcounter);
+    int ref_processor  = cplug_atomic_load_i32(&vst3->processor.refcounter);
+    cplug_log(
+        "_cplug_tryDeleteVST3 %p | component: %d, controller: %d, midimapping: %d, processor: %d",
+        vst3,
+        ref_component,
+        ref_controller,
+        ref_midimap,
+        ref_noteexp,
+        ref_processor);
+
+    int total = ref_component + ref_controller + ref_midimap + ref_noteexp + ref_processor;
+    if (total == 0)
     {
-        _cplug_leakedVST3Cap += 32;
-        size_t nextCapBytes   = sizeof(void*) * (_cplug_leakedVST3Cap);
-        _cplug_leakedVST3Arr  = (VST3Plugin**)realloc(_cplug_leakedVST3Arr, nextCapBytes);
+        cplug_log("_cplug_tryDeleteVST3 %p | all refcounts are zero, deleting everything!", vst3);
+        free(vst3);
     }
-    _cplug_leakedVST3Arr[_cplug_leakedVST3Count] = ptr;
-    _cplug_leakedVST3Count++;
-}
-
-static int _cplug_tryDeleteVST3(VST3Plugin* vst3)
-{
-    int total  = 0;
-    total     += cplug_atomic_load_i32(&vst3->component.refcounter);
-    total     += cplug_atomic_load_i32(&vst3->controller.refcounter);
-    total     += cplug_atomic_load_i32(&vst3->midiMapping.refcounter);
-    total     += cplug_atomic_load_i32(&vst3->noteExpression.refcounter);
-    total     += cplug_atomic_load_i32(&vst3->processor.refcounter);
-
-    if (total != 0)
-        return 0;
-
-    cplug_log("_cplug_tryDeleteVST3 %p | all refcounts are zero, deleting everything!", vst3);
-
-    free(vst3);
-
-    // If we previously stored a ptr that looked like a leak, we remove it
-    for (int i = 0; i < _cplug_leakedVST3Count; i++)
-    {
-        if (_cplug_leakedVST3Arr[i] == vst3)
-        {
-            cplug_log("_cplug_tryDeleteVST3 %p | Removing VST3 from leak array", vst3);
-            _cplug_leakedVST3Count--;
-            if (i != _cplug_leakedVST3Count)
-            {
-                size_t bytes = sizeof(void*) * (_cplug_leakedVST3Count - i);
-                memmove(_cplug_leakedVST3Arr + i, _cplug_leakedVST3Arr + i + 1, bytes);
-            }
-            break;
-        }
-    }
-    return 1;
 }
 
 #if CPLUG_WANT_GUI
@@ -570,6 +543,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_release(void* const 
 {
     VST3View* const view     = _cplug_pointerShiftContentScaleSupport(self);
     int             refcount = cplug_atomic_fetch_add_i32(&view->contentScaleSupport.refcounter, -1) - 1;
+    cplug_log("VST3ViewContentScale_release => %p | refcount %d", self, refcount);
 
     if (refcount == 0 && cplug_atomic_load_i32(&view->refcounter) == 0)
     {
@@ -635,22 +609,22 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3View_release(void* self)
 {
     VST3View* const view = (VST3View*)self;
 
-    const int view_refcount = cplug_atomic_fetch_add_i32(&view->refcounter, -1) - 1;
-    cplug_log("VST3View_release => %p | refcount %i", self, view_refcount);
-    if (view_refcount)
-        return view_refcount;
-
-    cplug_setVisible(view->userGUI, false);
-    // Some hosts (Ableton) don't call removed() before destroying your GUI, others (Bitwig) do.
-    cplug_setParent(view->userGUI, NULL);
-    cplug_destroyGUI(view->userGUI);
+    const int refcount = cplug_atomic_fetch_add_i32(&view->refcounter, -1) - 1;
+    cplug_log("VST3View_release => %p | refcount %d", self, refcount);
+    if (refcount == 0)
+    {
+        cplug_setVisible(view->userGUI, false);
+        // Some hosts (Ableton) don't call removed() before destroying your GUI, others (Bitwig) do.
+        cplug_setParent(view->userGUI, NULL);
+        cplug_destroyGUI(view->userGUI);
 #ifndef _WIN32
-    free(view);
+        free(view);
 #else
-    cplug_log("VST3View_release | should call free from IPlugViewContentScaleSupport extension");
-    view->contentScaleSupport.lpVtbl->release(&view->contentScaleSupport);
+        cplug_log("VST3View_release | should call free from IPlugViewContentScaleSupport extension");
+        view->contentScaleSupport.lpVtbl->release(&view->contentScaleSupport);
 #endif
-    return 0;
+    }
+    return refcount;
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -798,18 +772,14 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_addRef(void* const thisIn
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_release(void* const thisInterface)
 {
-    VST3Plugin* vst3     = (VST3Plugin*)((char*)(thisInterface)-offsetof(VST3Plugin, midiMapping));
+    VST3Plugin* vst3     = _cplug_pointerShiftMidiMapping(thisInterface);
     const int   refcount = cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, -1) - 1;
+    cplug_log("VST3MidiMapping_release => %p | refcount %d", thisInterface, refcount);
 
-    if (refcount)
-    {
-        cplug_log("VST3MidiMapping_release => %p | refcount %d", thisInterface, refcount);
-        return refcount;
-    }
+    if (refcount == 0)
+        _cplug_tryDeleteVST3(vst3);
 
-    _cplug_tryDeleteVST3(vst3);
-
-    return 0;
+    return refcount;
 }
 
 // Steinberg_Vst_IMidiMapping
@@ -870,11 +840,10 @@ Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_release(void* thisInt
     const int   refcount = cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, -1) - 1;
     cplug_log("VST3NoteExpression_release => %p | refcount %d", thisInterface, refcount);
 
-    if (refcount)
-        return refcount;
+    if (refcount == 0)
+        _cplug_tryDeleteVST3(vst3);
 
-    _cplug_tryDeleteVST3(vst3);
-    return 0;
+    return refcount;
 }
 // Steinberg_Vst_INoteExpressionController
 Steinberg_int32 SMTG_STDMETHODCALLTYPE
@@ -1043,20 +1012,21 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_release(void* const self)
 {
     VST3Plugin* vst3     = _cplug_pointerShiftController(self);
     const int   refcount = cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, -1) - 1;
+    cplug_log("VST3Controller_release => %p | refcount %i", self, refcount);
 
-    if (refcount)
+    if (refcount == 0)
     {
-        cplug_log("VST3Controller_release => %p | refcount %i", self, refcount);
-        return refcount;
+        if (vst3->controller.componentHandler)
+            vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
+
+        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from IMidiMapping extension");
+        vst3->midiMapping.lpVtbl->release(&vst3->midiMapping);
+        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from "
+                  "Steinberg_Vst_INoteExpressionController extension");
+        vst3->noteExpression.lpVtbl->release(&vst3->noteExpression);
     }
 
-    if (vst3->controller.componentHandler)
-        vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
-
-    cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from IMidiMapping extension");
-    vst3->midiMapping.lpVtbl->release(&vst3->midiMapping);
-
-    return 0;
+    return refcount;
 }
 // Steinberg_IPluginBase
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -1441,6 +1411,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_addRef(void* const self)
 {
     VST3Plugin* const vst3     = _cplug_pointerShiftProcessor(self);
     const int         refcount = cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, 1) + 1;
+    cplug_log("VST3Processor_addRef => %p | refcount %i", self, refcount);
     return refcount;
 }
 
@@ -1448,14 +1419,11 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_release(void* const self)
 {
     VST3Plugin* const vst3     = _cplug_pointerShiftProcessor(self);
     const int         refcount = cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, -1) - 1;
-    if (refcount)
-    {
-        cplug_log("VST3Processor_release => %p | refcount %i", self, refcount);
-        return refcount;
-    }
+    cplug_log("VST3Processor_release => %p | refcount %i", self, refcount);
+    if (refcount == 0)
+        _cplug_tryDeleteVST3(vst3);
 
-    _cplug_tryDeleteVST3(vst3);
-    return 0;
+    return refcount;
 }
 // Steinberg_Vst_IAudioProcessor
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements(
@@ -1939,31 +1907,29 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Component_release(void* const self)
     const int   refcount = cplug_atomic_fetch_add_i32(&vst3->component.refcounter, -1) - 1;
     cplug_log("VST3Component_release => %p | refcount %i", self, refcount);
 
-    if (refcount != 0)
-        return refcount;
-
-    // The expected lifecycle in this library is that IComponent is created first and destroyed last
-    // Bitwig 5 & FL Studio 21 follow this lifecycle
-    // Ableton 10 & Reaper 7 create IComponent first, but destroys the IAudioProcessor last (huh?)
-    // pluginval will test both destroying IEditController & IComponent last
-
-    // Because we aggregate all the VST3 objects, we must check that all references are 0 before deleting this
-
-    int ec_refcount = vst3->controller.lpVtbl->release(&vst3->controller);
-    if (ec_refcount)
-        cplug_log("[WARNING] VST3Component_release: IEditController is still active (refcount %d)", ec_refcount);
-
-    int ap_refcount = vst3->processor.lpVtbl->release(&vst3->processor);
-    if (ap_refcount)
-        cplug_log("[WARNING] VST3Component_release: IAudioProcessor is still active (refcount %d)", ap_refcount);
-
-    if ((ec_refcount + ap_refcount) != 0)
+    if (refcount == 0)
     {
-        cplug_log("[WARNING] VST3Component_release: Adding pointer to leak array");
-        _cplug_pushLeakedVST3(vst3);
+        // The expected lifecycle in this library is that IComponent is created first and destroyed last
+        // Bitwig 5 & FL Studio 21 follow this lifecycle
+        // Ableton 10 & Reaper 7 create IComponent first, but destroys the IAudioProcessor last (huh?)
+        // pluginval will test both destroying IEditController & IComponent last
+
+        // Because we aggregate all the VST3 objects, we must check that all references are 0 before deleting this
+
+        int ec_refcount = vst3->controller.lpVtbl->release(&vst3->controller);
+        if (ec_refcount)
+        {
+            cplug_log("[WARNING] VST3Component_release: IEditController is still active (refcount %d)", ec_refcount);
+        }
+
+        int ap_refcount = vst3->processor.lpVtbl->release(&vst3->processor);
+        if (ap_refcount)
+        {
+            cplug_log("[WARNING] VST3Component_release: IAudioProcessor is still active (refcount %d)", ap_refcount);
+        }
     }
 
-    return 0;
+    return refcount;
 }
 // Steinberg_IPluginBase
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -2251,33 +2217,20 @@ uint32_t SMTG_STDMETHODCALLTYPE VST3Factory_release(void* const self)
 {
     VST3Factory* const factory  = (VST3Factory*)(self);
     const int          refcount = cplug_atomic_fetch_add_i32(&factory->refcounter, -1) - 1;
+    cplug_log("VST3Factory_release => %p | refcount %i", self, refcount);
 
-    if (refcount)
+    if (refcount == 0)
     {
-        cplug_log("VST3Factory_release => %p | refcount %i", self, refcount);
-        return refcount;
+        cplug_log("VST3Factory_release => %p | refcount is zero, deleting factory", self);
+
+        // unref old context if there is one
+        if (factory->host != NULL)
+            factory->host->lpVtbl->release(factory->host);
+
+        free(factory);
     }
 
-    cplug_log("VST3Factory_release => %p | refcount is zero, deleting factory", self);
-
-    // unref old context if there is one
-    if (factory->host != NULL)
-        factory->host->lpVtbl->release(factory->host);
-
-    if (_cplug_leakedVST3Arr != NULL)
-    {
-        cplug_log("CPLUG notice: cleaning up %d leaked VST3s...", _cplug_leakedVST3Count);
-        for (int i = 0; i < _cplug_leakedVST3Count; i++)
-            free(_cplug_leakedVST3Arr[i]);
-
-        free(_cplug_leakedVST3Arr);
-        _cplug_leakedVST3Arr   = NULL;
-        _cplug_leakedVST3Count = 0;
-        _cplug_leakedVST3Cap   = 0;
-    }
-
-    free(factory);
-    return 0;
+    return refcount;
 }
 // Steinberg_IPluginFactory
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
@@ -2327,8 +2280,7 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
     if (tuid_match(class_id, cplug_tuid_component) &&
         (tuid_match(iid, Steinberg_Vst_IComponent_iid) || tuid_match(iid, Steinberg_FUnknown_iid)))
     {
-        VST3Plugin* vst3 = (VST3Plugin*)malloc(sizeof(VST3Plugin));
-        memset(vst3, 0, sizeof(*vst3));
+        VST3Plugin* vst3                 = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
         vst3->hostContext.sendParamEvent = _cplug_sendParamEvent;
         vst3->component.lpVtbl           = &vst3->component.base;
         vst3->component.refcounter       = 1;

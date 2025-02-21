@@ -18,18 +18,18 @@ The idea is [cplug.h](src/cplug.h) contains forward declarations of functions wh
 
 The source files are configurable using macros you define. A full list of these macros can be found in the [example project](example/config.h). AUv2 and Standalone builds require a few extra macros which are set in [CMakeLists.txt](CMakeLists.txt). If you're building these targets, you should read the CMake file.
 
-| Source file            | Lines of code | Description           | Extra dependencies        |
-| ---------------------- | ------------- | --------------------- | ------------------------- |
-| cplug.h                | < 300         | Common API            | None                      |
-| cplug_clap.c           | < 800         | CLAP wrapper          | `#include <clap/clap.h>`  |
-| cplug_auv2.c           | < 1,400       | Audio Unit v2 wrapper | None                      |
-| cplug_standalone_osx.m | < 1,400       | Standalone            | None                      |
-| cplug_standalone_win.c | < 1,600       | Standalone            | None                      |
-| cplug_vst3.c           | < 2,400       | VST3 wrapper          | `#include <vst3_c_api.h>` |
+| Source file            | Lines of code | Description   | Extra dependencies        |
+| ---------------------- | ------------- | ------------- | ------------------------- |
+| cplug.h                | < 300         | Common API    | None                      |
+| cplug_clap.c           | < 900         | CLAP          | `#include <clap/clap.h>`  |
+| cplug_auv2.c           | < 1,400       | Audio Unit v2 | None                      |
+| cplug_standalone_osx.m | < 1,400       | Standalone    | None                      |
+| cplug_standalone_win.c | < 1,600       | Standalone    | None                      |
+| cplug_vst3.c           | < 2,600       | VST3          | `#include <vst3_c_api.h>` |
 
 Copies of the CLAP API and VST3 C API are included in the `src` folder for convenience. They're both single files.
 
-Tested using compilers MinGW GCC 8, VS 17.5, Clang 15 (Windows), Clang 14 (Mac), using C99 & C++11
+Tested using compilers MinGW GCC 8, VS 17.5, Clang 18 (Windows), Clang 16 (Mac), using C99 & C++11
 
 > [!NOTE]
 > Some versions of MinGW may not ship with `mmeapi.h`, which is required for MIDI in Windows standalone builds. Either define the functions and structs yourself, or use a different compiler for this build
@@ -54,9 +54,6 @@ Most plugins don't support these features, & most users don't ask for them or kn
 -   Extension: Parameters
 -   AUv2: Support multiple input/output busses
 -   AUv2: Support sample accurate processing AUv2
--   Add example using PUGL & NanoVG
--   Add example using Dear ImGUI
--   Add example using Nuklear
 -   (Maybe) Support Max 4 Live?
 -   (Maybe) Support FL Studio Plugins?
 -   (Maybe) Support Linux
