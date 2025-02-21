@@ -28,6 +28,7 @@
 #include <synchapi.h>
 
 #include <cplug.h>
+#include <stdio.h>
 
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "cfgmgr32.lib")
@@ -864,7 +865,7 @@ void CPWIN_LoadPlugin()
 
 #ifdef HOTRELOAD_WATCH_DIR
 #pragma region PLUGIN_STATE
-int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
     cplug_assert(stateCtx != NULL);
     cplug_assert(writePos != NULL);
