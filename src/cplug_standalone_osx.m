@@ -30,7 +30,7 @@ enum
 #define cplug_assert(...)
 #else
 #define cplug_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
-#endif
+#endif // NDEBUG
 
 #pragma mark -Structs
 
@@ -125,6 +125,8 @@ struct STAND_PluginStateContext
     size_t bytesWritten;
     size_t bytesRead;
 } g_pluginState;
+FSEventStreamRef g_filesystemEventStream = NULL;
+
 int64_t STAND_writeStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
 int64_t STAND_readStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
 #endif // HOTRELOAD_BUILD_COMMAND
@@ -149,8 +151,6 @@ UInt32              g_audioNumChannels = USER_NUM_CHANNELS;
 volatile bool       g_audioStopFlag    = false;
 pthread_cond_t      g_audioStopCondition;
 pthread_mutex_t     g_audioMutex;
-
-FSEventStreamRef g_filesystemEventStream = NULL;
 
 NSWindow* g_window = NULL;
 
@@ -274,23 +274,19 @@ OSStatus STAND_audioDeviceChangeListener(
     uint32_t guiWidth, guiHeight;
     g_plugin.getSize(g_plugin.userGUI, &guiWidth, &guiHeight);
 
+    NSWindowStyleMask windowStyles =
+        NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+#if CPLUG_GUI_RESIZABLE
+    windowStyles |= NSWindowStyleMaskResizable;
+#endif
+
     g_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, guiWidth, guiHeight)
-                                           styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                           styleMask:windowStyles
                                              backing:NSBackingStoreBuffered
                                                defer:NO];
     [g_window setReleasedWhenClosed:NO];
     [g_window makeKeyAndOrderFront:nil];
     [g_window setTitle:@(CPLUG_PLUGIN_NAME)];
-#if CPLUG_GUI_RESIZABLE
-    [g_window setStyleMask:[g_window styleMask] | NSWindowStyleMaskResizable];
-#endif
-    [g_window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenNone];
-    NSButton* window_button = [g_window standardWindowButton:NSWindowZoomButton];
-    if (window_button)
-        [window_button setHidden:YES];
-    window_button = [g_window standardWindowButton:NSWindowFullScreenButton];
-    if (window_button)
-        [window_button setHidden:YES];
 
     [g_window setContentView:[[NSView alloc] init]];
     [g_window setDelegate:[[WindowDelegate alloc] init]];
@@ -417,9 +413,11 @@ OSStatus STAND_audioDeviceChangeListener(
 
 - (void)applicationWillTerminate:(NSNotification*)notification
 {
+#ifdef HOTRELOAD_WATCH_DIR
     FSEventStreamStop(g_filesystemEventStream);
     FSEventStreamInvalidate(g_filesystemEventStream);
     FSEventStreamRelease(g_filesystemEventStream);
+#endif
 
     STAND_audioStop();
 
@@ -655,15 +653,16 @@ void STAND_menuRefreshAudioOutputItems()
         if ((numChannels % 2) != 0)
             continue;
 
-        CFStringRef name = 0;
-        propertySize        = sizeof(CFStringRef);
-        addr.mSelector      = kAudioDevicePropertyDeviceNameCFString;
-        status              = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &name);
+        CFStringRef name = NULL;
+        propertySize     = sizeof(CFStringRef);
+        addr.mSelector   = kAudioDevicePropertyDeviceNameCFString;
+        status           = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &name);
         cplug_assert(status == noErr);
         cplug_assert(name != 0);
 
-
-        NSMenuItem* item = [menu addItemWithTitle:(NSString*)name action:@selector(handleClickAudioOutput:) keyEquivalent:@""];
+        NSMenuItem* item = [menu addItemWithTitle:(NSString*)name
+                                           action:@selector(handleClickAudioOutput:)
+                                    keyEquivalent:@""];
         item.target      = [NSApp delegate];
         [item setTag:deviceID];
         [item setState:deviceID == g_audioOutputDeviceID];
@@ -1132,7 +1131,7 @@ void handleAudioDeviceChange()
             if (deviceIDs[i] == g_audioOutputDeviceID)
                 deviceStillExists = true;
 
-        if (! deviceStillExists)
+        if (!deviceStillExists)
         {
             printf("Warning: Disconnected active audio output");
 
