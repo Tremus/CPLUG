@@ -13,7 +13,7 @@
 #define CPLUG_PLUGIN_URI     "http://github.com/Tremus/CPLUG"
 #define CPLUG_PLUGIN_VERSION "1.0.0"
 
-// See list of categories here: https://steinbergmedia.github.io/vst3_doc/vstinterfaces/group__plugType.html
+// See list of categories here: https://steinbergmedia.github.io/vst3_doc/vstinterfaces/namespaceSteinberg_1_1Vst_1_1PlugType.html
 #define CPLUG_VST3_CATEGORIES "Instrument|Stereo"
 
 #define CPLUG_VST3_TUID_COMPONENT  'cplg', 'comp', 'xmpl', 0
