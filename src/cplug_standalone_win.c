@@ -57,8 +57,6 @@
 #define CPLUG_WTF_IS_A_REFERENCE(obj) &obj
 #endif
 
-#define CPLUG_MENU_MAX_CHARS 8
-
 ////////////
 // Plugin //
 ////////////
@@ -94,7 +92,7 @@ struct CPWIN_Plugin
 } _gCPLUG;
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
-void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
 
 #ifdef HOTRELOAD_WATCH_DIR
 struct CPWIN_PluginStateContext
@@ -411,13 +409,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     if (prevDpiCtx)
         SetThreadDpiAwarenessContext(prevDpiCtx);
 
-    {
-        // https://stackoverflow.com/questions/68076251/how-to-prevent-fullscreen-halfscreen-on-windows
-        LONG style  = GetWindowLongW(hWindow, GWL_STYLE);
-        style      &= ~WS_MAXIMIZEBOX;
-        SetWindowLongW(hWindow, GWL_STYLE, style);
-    }
-
     ///////////////
     // INIT MENU //
     ///////////////
@@ -532,6 +523,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 #endif
         DestroyWindow(hWnd);
         return 0;
+    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
     case WM_SIZING: // User is resizing
     {
         // Note: The size of the child window is different to the size of our window.
@@ -565,19 +557,24 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-size
     case WM_SIZE: // Window has resized, minimised, maximised, or unminimised/unmaximised?
     {
-        UINT width  = LOWORD(lParam);
-        UINT height = HIWORD(lParam);
+        UINT Width  = LOWORD(lParam);
+        UINT Height = HIWORD(lParam);
 
-        // When a user minimises the window (wParam == SIZE_MINIMIZED) the width & height will be 0.
-        // Sending a width or height of 0 will crash most applications
-        if (wParam != SIZE_MINIMIZED && width != 0 && height != 0)
+        switch (wParam)
         {
-            _gCPLUG.setSize(_gCPLUG.UserGUI, width, height);
+        case SIZE_RESTORED:
+        case SIZE_MAXSHOW:
+            _gCPLUG.setSize(_gCPLUG.UserGUI, Width, Height);
             _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
-        }
-        else
-        {
+            break;
+        case SIZE_MINIMIZED:
+        case SIZE_MAXHIDE:
             _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
+            break;
+        case SIZE_MAXIMIZED:
+            _gCPLUG.checkSize(_gCPLUG.UserGUI, &Width, &Height);
+            _gCPLUG.setSize(_gCPLUG.UserGUI, Width, Height);
+            break;
         }
         return 0;
     }
@@ -642,7 +639,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             UINT64 buildStart = CPWIN_GetNowNS();
             // Run build command in child process.
-            const LPWSTR cmd = (LPWSTR)TEXT(HOTRELOAD_BUILD_COMMAND);
+            const LPWSTR cmd = TEXT(HOTRELOAD_BUILD_COMMAND);
             if (!CreateProcessW(0, cmd, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
             {
                 printf("CreateProcess failed (%lu).\n", GetLastError());
@@ -701,10 +698,10 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_SampleRate_96000:
         {
             CPWIN_Audio_Stop();
-            WCHAR text[CPLUG_MENU_MAX_CHARS];
+            const SIZE_T MaxChars = 8;
+            WCHAR        text[MaxChars];
             // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
-            int numCharsCopied =
-                GetMenuStringW(_gMenus.hSampleRateSubmenu, (UINT)wParam, text, CPLUG_MENU_MAX_CHARS, MF_BYCOMMAND);
+            int numCharsCopied = GetMenuStringW(_gMenus.hSampleRateSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             _gAudio.SampleRate = _wtoi(text);
             CPWIN_Audio_Start();
@@ -722,9 +719,9 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_BlockSize_2048:
         {
             CPWIN_Audio_Stop();
-            WCHAR text[CPLUG_MENU_MAX_CHARS];
-            int   numCharsCopied =
-                GetMenuStringW(_gMenus.hBlockSizeSubmenu, (UINT)wParam, text, CPLUG_MENU_MAX_CHARS, MF_BYCOMMAND);
+            const SIZE_T MaxChars = 8;
+            WCHAR        text[MaxChars];
+            int numCharsCopied = GetMenuStringW(_gMenus.hBlockSizeSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             _gAudio.BlockSize = _wtoi(text);
             CPWIN_Audio_Start();
@@ -790,17 +787,17 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         {
             if (wParam >= IDM_OFFSET_AUDIO_DEVICES && wParam < IDM_RefreshAudioDeviceList)
             {
-                int idx = (int)(wParam - IDM_OFFSET_AUDIO_DEVICES);
+                WPARAM idx = wParam - IDM_OFFSET_AUDIO_DEVICES;
                 CPWIN_Audio_Stop();
-                CPWIN_Audio_SetDevice(idx);
+                CPWIN_Audio_SetDevice((int)idx);
                 CPWIN_Audio_Start();
                 CPWIN_Menu_RefreshAudioOutputs();
             }
             if (wParam >= IDM_OFFSET_MIDI_DEVICES && wParam < IDM_RefreshMIDIDeviceList)
             {
-                int idx = (int)(wParam - IDM_OFFSET_MIDI_DEVICES);
+                WPARAM idx = wParam - IDM_OFFSET_MIDI_DEVICES;
                 CPWIN_MIDI_DisconnectInput();
-                CPWIN_MIDI_ConnectInput(idx);
+                CPWIN_MIDI_ConnectInput((UINT)idx);
                 CPWIN_Menu_RefreshMIDIInputs();
             }
         }
