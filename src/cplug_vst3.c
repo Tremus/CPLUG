@@ -378,6 +378,15 @@ typedef struct VST3Plugin
         cplug_atomic_i32                refcounter;
     } midiMapping;
 
+    // At the time of writing, the only DAWs that properly support INoteExpressionController are Cubase & Bitwig.
+    // Cubase are a little more othodox to their own plugin format. The noteId they send in their
+    // NoteExpressionValueEvent is a full 4-byte signed integer, and the plugin is meant to use this noteId to lookup
+    // the voice triggered by kNoteOnEvent, which was sent tagged with a kNoteOnEvent. Theoretically this can support
+    // simultaneous note down events of the same key, but ironically Cubases own MIDI interface does not support writing
+    // MIDI in this way, making the 4 byte ID redundant for plugins ie. all MIDI notes in Cubase are mapped to the key.
+    // Bitwig simply sets the noteId to the MIDI note number, meaning you only need 1 byte.
+    // As a quality of life feature for CPLUG, we convert noteIds to midi note numbers using 'id_to_pitch_map' below.
+    // If NoteExpressionValueEvent had been designed a pitch/midi note number field, we wouldn't have to do this...
     struct
     {
         Steinberg_Vst_INoteExpressionControllerVtbl* lpVtbl;
@@ -400,6 +409,14 @@ typedef struct VST3Plugin
     // NOTE: We only assume that hosts aren't doubly stupid and only send these messages on the audio thread.
     size_t   midiContollerQueueSize;
     uint32_t midiContollerQueue[CPLUG_EVENT_QUEUE_SIZE];
+
+    // Structure of arrays format. The index of the ID (key) matches the midi note (value)
+    struct VST3NoteIdToMIDINoteMap
+    {
+        uint32_t        size;
+        Steinberg_int32 ids[128];
+        uint8_t         pitch[128];
+    } id_to_pitch_map;
 } VST3Plugin;
 
 // Naughty pointer shifting for VST3 classes
@@ -1634,28 +1651,81 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                 switch (vst3Midi.type)
                 {
                 case Steinberg_Vst_Event_EventTypes_kNoteOnEvent:
+                {
                     event->midi.status = 0x90 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.channel;
                     event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOn.velocity * 127.0f);
+
+                    // Add to noteId > pitch map
+                    struct VST3NoteIdToMIDINoteMap* noteidmap = &translator->vst3->id_to_pitch_map;
+
+                    if (noteidmap->size < CPLUG_ARRLEN(noteidmap->ids))
+                    {
+                        const size_t idx      = noteidmap->size;
+                        noteidmap->ids[idx]   = vst3Midi.Steinberg_Vst_Event_noteOn.noteId;
+                        noteidmap->pitch[idx] = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
+                        noteidmap->size++;
+                    }
                     break;
+                }
                 case Steinberg_Vst_Event_EventTypes_kNoteOffEvent:
+                {
                     event->midi.status = 0x80 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.channel;
                     event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.pitch;
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOff.velocity * 127.0f);
+
+                    // Remove from noteId > pitch map
+                    struct VST3NoteIdToMIDINoteMap* noteidmap = &translator->vst3->id_to_pitch_map;
+                    if (noteidmap->size > 0)
+                    {
+                        bool   do_copy = false;
+                        size_t idx     = 0;
+                        for (; idx < noteidmap->size; idx++)
+                        {
+                            if (vst3Midi.Steinberg_Vst_Event_noteOff.noteId == noteidmap->ids[idx])
+                                do_copy = true;
+                            if (do_copy)
+                            {
+                                size_t next_idx = idx + 1;
+                                if (next_idx < noteidmap->size)
+                                {
+                                    noteidmap->ids[idx]   = noteidmap->ids[next_idx];
+                                    noteidmap->pitch[idx] = noteidmap->pitch[next_idx];
+                                }
+                            }
+                        }
+                    }
                     break;
+                }
                 case Steinberg_Vst_Event_EventTypes_kPolyPressureEvent:
                     event->midi.status = 0xA0 | (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.channel;
                     event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.pitch;
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_polyPressure.pressure * 127.0f);
                     break;
                 case Steinberg_Vst_Event_EventTypes_kNoteExpressionValueEvent:
-                    if (vst3Midi.Steinberg_Vst_Event_noteExpressionValue.typeId ==
-                        Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
+                {
+                    // Find pitch in map
+                    const struct Steinberg_Vst_NoteExpressionValueEvent* noteExp =
+                        &vst3Midi.Steinberg_Vst_Event_noteExpressionValue;
+                    const struct VST3NoteIdToMIDINoteMap* noteidmap = &translator->vst3->id_to_pitch_map;
+
+                    int32_t key = -1;
+                    size_t  idx = 0;
+                    for (; idx < noteidmap->size; idx++)
+                    {
+                        if (noteExp->noteId == noteidmap->ids[idx])
+                        {
+                            key = noteidmap->pitch[idx];
+                            break;
+                        }
+                    }
+
+                    if (key != -1 && noteExp->typeId == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
                     {
                         // Denormalise value to range -120 - 120 semitones
-                        const double norm            = vst3Midi.Steinberg_Vst_Event_noteExpressionValue.value;
+                        const double norm            = noteExp->value;
                         event->note_expression.type  = CPLUG_EVENT_NOTE_EXPRESSION_TUNING;
-                        event->note_expression.key   = vst3Midi.Steinberg_Vst_Event_noteExpressionValue.noteId;
+                        event->note_expression.key   = key;
                         event->note_expression.value = -120.0 + norm * 240;
                     }
                     else
@@ -1663,6 +1733,7 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                         event->type = CPLUG_EVENT_UNHANDLED_EVENT;
                     }
                     break;
+                }
                 case Steinberg_Vst_Event_EventTypes_kDataEvent: // TODO: support SYSEX
                 case Steinberg_Vst_Event_EventTypes_kNoteExpressionTextEvent:
                 case Steinberg_Vst_Event_EventTypes_kChordEvent:
