@@ -40,8 +40,18 @@ typedef struct CplugProcessContext CplugProcessContext;
 CPLUG_API void cplug_libraryLoad();
 CPLUG_API void cplug_libraryUnload();
 
+enum
+{
+    CPLUG_PLUGIN_IS_STANDALONE,
+    CPLUG_PLUGIN_IS_CLAP,
+    CPLUG_PLUGIN_IS_VST3,
+    CPLUG_PLUGIN_IS_AUV2,
+};
+
 struct CplugHostContext
 {
+    uint32_t type; // CPLUG_PLUGIN_IS_XXX
+
     // VST3 & AUv2 only, UI thread only.
     void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
 };

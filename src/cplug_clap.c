@@ -807,6 +807,7 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     clap->clapPlugin.process          = CLAPPlugin_process;
     clap->clapPlugin.get_extension    = CLAPPlugin_get_extension;
     clap->clapPlugin.on_main_thread   = CLAPPlugin_on_main_thread;
+    clap->hostContext.type            = CPLUG_PLUGIN_IS_CLAP;
     clap->hostContext.sendParamEvent  = _cplug_dummySendParamEvent;
 
     clap->host = host;

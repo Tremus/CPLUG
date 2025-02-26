@@ -570,7 +570,7 @@ static OSStatus AUMethodGetProperty(
     case kAudioUnitProperty_ParameterList:
     {
         AudioUnitParameterID* paramList = (AudioUnitParameterID*)(outData);
-        uint32_t numParams = cplug_getNumParameters(auv2->userPlugin);
+        uint32_t              numParams = cplug_getNumParameters(auv2->userPlugin);
         for (UInt32 i = 0; i < numParams; i++)
             paramList[i] = cplug_getParameterID(auv2->userPlugin, i);
         break;
@@ -1172,7 +1172,7 @@ static OSStatus AUMethodProcessAudio(
             if (timesigNum != 0)
             {
                 ctx->flags            |= CPLUG_FLAG_TRANSPORT_HAS_TIME_SIGNATURE;
-                ctx->timeSigNumerator = timesigNum;
+                ctx->timeSigNumerator  = timesigNum;
             }
         }
         // Ableton 10 doesn't support transportStateProc2, so this should be our first choice
@@ -1365,6 +1365,7 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     auv2->mPlugInInterface.Close     = (OSStatus(*)(void*))ComponentBase_AP_Close;
     auv2->mPlugInInterface.Lookup    = AULookup;
     auv2->desc                       = *inDesc;
+    auv2->hostContext.type           = CPLUG_PLUGIN_IS_AUV2;
     auv2->hostContext.sendParamEvent = AUv2HostContext_sendParamEvent;
 
     auv2->supportsInPlaceProcessing = 1;

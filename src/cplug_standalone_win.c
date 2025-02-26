@@ -309,6 +309,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     CPWIN_LoadPlugin();
     _gCPLUG.libraryLoad();
+    _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
     _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
     _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
     cplug_assert(_gCPLUG.UserPlugin != NULL);
@@ -665,6 +666,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             {
                 CPWIN_LoadPlugin();
                 _gCPLUG.libraryLoad();
+                _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
                 _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
                 _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
                 cplug_assert(_gCPLUG.UserPlugin != NULL);

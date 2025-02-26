@@ -2281,6 +2281,7 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         (tuid_match(iid, Steinberg_Vst_IComponent_iid) || tuid_match(iid, Steinberg_FUnknown_iid)))
     {
         VST3Plugin* vst3                 = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
+        vst3->hostContext.type           = CPLUG_PLUGIN_IS_VST3;
         vst3->hostContext.sendParamEvent = _cplug_sendParamEvent;
         vst3->component.lpVtbl           = &vst3->component.base;
         vst3->component.refcounter       = 1;

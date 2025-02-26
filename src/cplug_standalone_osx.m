@@ -228,6 +228,7 @@ OSStatus STAND_audioDeviceChangeListener(
     STAND_openLibraryWithSymbols();
 
     g_plugin.libraryLoad();
+    g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
     g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
     g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
     cplug_assert(g_plugin.userPlugin != NULL);
@@ -1274,6 +1275,7 @@ void STAND_filesystemEventCallback(
             {
                 STAND_openLibraryWithSymbols();
                 g_plugin.libraryLoad();
+                g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
                 g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
                 g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
                 cplug_assert(g_plugin.userPlugin != NULL);
