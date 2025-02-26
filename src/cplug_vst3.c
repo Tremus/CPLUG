@@ -404,19 +404,19 @@ typedef struct VST3Plugin
     // We don't use this, but it's here in case you need it...
     Steinberg_Vst_IHostApplication* host;
 
+    // Structure of arrays format. The index of the ID (key) matches the midi note (value)
+    struct
+    {
+        size_t          size;
+        Steinberg_int32 ids[128];
+        uint8_t         pitch[128];
+    } noteidmap;
+
     // Not all hosts (Ableton) pass MIDI controller events through the process callback. In Steinberg logic, MIDI
     // controller messages are parameters, and hosts will call 'setParamNormalized' to send these messages
     // NOTE: We only assume that hosts aren't doubly stupid and only send these messages on the audio thread.
     size_t   midiContollerQueueSize;
     uint32_t midiContollerQueue[CPLUG_EVENT_QUEUE_SIZE];
-
-    // Structure of arrays format. The index of the ID (key) matches the midi note (value)
-    struct VST3NoteIdToMIDINoteMap
-    {
-        uint32_t        size;
-        Steinberg_int32 ids[128];
-        uint8_t         pitch[128];
-    } id_to_pitch_map;
 } VST3Plugin;
 
 // Naughty pointer shifting for VST3 classes
@@ -1657,14 +1657,14 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOn.velocity * 127.0f);
 
                     // Add to noteId > pitch map
-                    struct VST3NoteIdToMIDINoteMap* noteidmap = &translator->vst3->id_to_pitch_map;
+                    struct VST3Plugin* vst3 = translator->vst3;
 
-                    if (noteidmap->size < CPLUG_ARRLEN(noteidmap->ids))
+                    if (vst3->noteidmap.size < CPLUG_ARRLEN(vst3->noteidmap.ids))
                     {
-                        const size_t idx      = noteidmap->size;
-                        noteidmap->ids[idx]   = vst3Midi.Steinberg_Vst_Event_noteOn.noteId;
-                        noteidmap->pitch[idx] = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
-                        noteidmap->size++;
+                        const size_t idx           = vst3->noteidmap.size;
+                        vst3->noteidmap.ids[idx]   = vst3Midi.Steinberg_Vst_Event_noteOn.noteId;
+                        vst3->noteidmap.pitch[idx] = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
+                        vst3->noteidmap.size++;
                     }
                     break;
                 }
@@ -1675,22 +1675,22 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                     event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOff.velocity * 127.0f);
 
                     // Remove from noteId > pitch map
-                    struct VST3NoteIdToMIDINoteMap* noteidmap = &translator->vst3->id_to_pitch_map;
-                    if (noteidmap->size > 0)
+                    struct VST3Plugin* vst3 = translator->vst3;
+                    if (vst3->noteidmap.size > 0)
                     {
                         bool   do_copy = false;
                         size_t idx     = 0;
-                        for (; idx < noteidmap->size; idx++)
+                        for (; idx < vst3->noteidmap.size; idx++)
                         {
-                            if (vst3Midi.Steinberg_Vst_Event_noteOff.noteId == noteidmap->ids[idx])
+                            if (vst3Midi.Steinberg_Vst_Event_noteOff.noteId == vst3->noteidmap.ids[idx])
                                 do_copy = true;
                             if (do_copy)
                             {
                                 size_t next_idx = idx + 1;
-                                if (next_idx < noteidmap->size)
+                                if (next_idx < vst3->noteidmap.size)
                                 {
-                                    noteidmap->ids[idx]   = noteidmap->ids[next_idx];
-                                    noteidmap->pitch[idx] = noteidmap->pitch[next_idx];
+                                    vst3->noteidmap.ids[idx]   = vst3->noteidmap.ids[next_idx];
+                                    vst3->noteidmap.pitch[idx] = vst3->noteidmap.pitch[next_idx];
                                 }
                             }
                         }
@@ -1705,17 +1705,17 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
                 case Steinberg_Vst_Event_EventTypes_kNoteExpressionValueEvent:
                 {
                     // Find pitch in map
+                    const VST3Plugin*                                    vst3 = translator->vst3;
                     const struct Steinberg_Vst_NoteExpressionValueEvent* noteExp =
                         &vst3Midi.Steinberg_Vst_Event_noteExpressionValue;
-                    const struct VST3NoteIdToMIDINoteMap* noteidmap = &translator->vst3->id_to_pitch_map;
 
                     int32_t key = -1;
                     size_t  idx = 0;
-                    for (; idx < noteidmap->size; idx++)
+                    for (; idx < vst3->noteidmap.size; idx++)
                     {
-                        if (noteExp->noteId == noteidmap->ids[idx])
+                        if (noteExp->noteId == vst3->noteidmap.ids[idx])
                         {
-                            key = noteidmap->pitch[idx];
+                            key = vst3->noteidmap.pitch[idx];
                             break;
                         }
                     }
