@@ -1937,7 +1937,6 @@ DWORD PWChooseFileThread(_In_ LPVOID lpParameter)
 
     if (pw->ChooseFile.Mutliselect)
     {
-        OutputDebugStringW(L"multiple\n");
         // https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileopendialog-getresults
         // https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ishellitemarray
         IFileOpenDialog* pod      = (IFileOpenDialog*)pfd;
@@ -1984,7 +1983,6 @@ DWORD PWChooseFileThread(_In_ LPVOID lpParameter)
     }
     else
     {
-        OutputDebugStringW(L"single\n");
         IShellItem* psiResult   = NULL;
         PWSTR       pszFilePath = NULL;
 
