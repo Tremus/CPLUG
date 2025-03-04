@@ -17,7 +17,7 @@
 #define CPLUG_WANT_GUI 1
 #define CPLUG_GUI_RESIZABLE 1
 
-// See list of categories here: https://steinbergmedia.github.io/vst3_doc/vstinterfaces/group__plugType.html
+// See list of categories here: https://steinbergmedia.github.io/vst3_doc/vstinterfaces/namespaceSteinberg_1_1Vst_1_1PlugType.html
 #define CPLUG_VST3_CATEGORIES "Instrument|Stereo"
 
 #define CPLUG_VST3_TUID_COMPONENT 'cplg', 'comp', 'xmpl', 0
