@@ -681,8 +681,8 @@ void pw_set_clipboard_text(void* _pw, const char* text)
     // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalunlock
     // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalfree
     // https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-multibytetowidechar
-    int     text_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
-    HGLOBAL hMem     = GlobalAlloc(GMEM_MOVEABLE, sizeof(WCHAR) * (text_len + 1));
+    int     utf16_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+    HGLOBAL hMem      = GlobalAlloc(GMEM_MOVEABLE, sizeof(WCHAR) * (utf16_len + 1));
     if (hMem == NULL)
     {
         CloseClipboard();
@@ -696,8 +696,8 @@ void pw_set_clipboard_text(void* _pw, const char* text)
         return;
     }
 
-    MultiByteToWideChar(CP_UTF8, 0, text, text_len, utf16, text_len);
-    utf16[text_len] = 0;
+    MultiByteToWideChar(CP_UTF8, 0, text, -1, utf16, utf16_len);
+    utf16[utf16_len] = 0;
     GlobalUnlock(hMem);
     SetClipboardData(CF_UNICODETEXT, utf16);
     CloseClipboard();
