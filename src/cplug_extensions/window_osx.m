@@ -471,7 +471,12 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
 
     if (event.hasPreciseScrollingDeltas)
     {
-        e.type    = PW_EVENT_MOUSE_SCROLL_TOUCHPAD;
+        NSEventPhase phase = [event phase];
+        e.type             = PW_EVENT_MOUSE_TOUCHPAD_MOVE;
+        if (phase & NSEventPhaseBegan)
+            e.type = PW_EVENT_MOUSE_TOUCHPAD_BEGIN;
+        else if (phase & NSEventPhaseEnded)
+            e.type = PW_EVENT_MOUSE_TOUCHPAD_END;
         e.mouse.x = [event scrollingDeltaX];
         e.mouse.y = [event scrollingDeltaY];
     }
