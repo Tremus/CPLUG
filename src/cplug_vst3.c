@@ -906,11 +906,8 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionInf
             Steinberg_Vst_NoteExpressionTypeInfo_NoteExpressionTypeFlags_kIsBipolar; // event is bipolar (centered)
 
         // for Tuning the convert functions are: plain = 240 * (norm - 0.5); norm = plain / 240 + 0.5;
-        // we want to support only +/- one octave
-        const double kNormTuningOneOctave = 12.0 / 240.0;
-
-        info->valueDesc.minimum      = 0.5 - kNormTuningOneOctave;
-        info->valueDesc.maximum      = 0.5 + kNormTuningOneOctave;
+        info->valueDesc.minimum      = 0.0;
+        info->valueDesc.maximum      = 1.0;
         info->valueDesc.defaultValue = 0.5; // middle of [0, 1] => no detune (240 * (0.5 - 0.5) = 0)
         info->valueDesc.stepCount    = 0;   // we want continuous (no step)
 
