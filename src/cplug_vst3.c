@@ -928,20 +928,21 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionStr
     Steinberg_Vst_NoteExpressionValue  valueNormalized,
     Steinberg_Vst_String128            string)
 {
-    cplug_log(
-        "VST3NoteExpression_getNoteExpressionStringByValue => %p %d %hd %u %f %p",
-        thisInterface,
-        busIndex,
-        channel,
-        id,
-        valueNormalized,
-        string);
+    // This gets called a lot
+    // cplug_log(
+    //     "VST3NoteExpression_getNoteExpressionStringByValue => %p %d %hd %u %f %p",
+    //     thisInterface,
+    //     busIndex,
+    //     channel,
+    //     id,
+    //     valueNormalized,
+    //     string);
     // here we use the id (not the index)
     if (busIndex == 0 && channel == 0 && id == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
     {
         // here we have to convert a normalized value to a Tuning string representation
-        valueNormalized = (240 * valueNormalized) - 120; // compute half Tones
-        swprintf((wchar_t*)string, 128, L"%.2f", valueNormalized);
+        double denormalised = valueNormalized = (240 * valueNormalized) - 120; // compute half Tones
+        swprintf ((wchar_t*)string, 128, L"%.*lf", 2, denormalised);
 
         return Steinberg_kResultTrue;
     }
@@ -957,20 +958,21 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionVal
     const Steinberg_Vst_TChar*         string,
     Steinberg_Vst_NoteExpressionValue* valueNormalized)
 {
-    cplug_log(
-        "VST3NoteExpression_getNoteExpressionValueByString => %p %d %hd %u %p %p",
-        thisInterface,
-        busIndex,
-        channel,
-        id,
-        string,
-        valueNormalized);
+    // This gets called a lot
+    // cplug_log(
+    //     "VST3NoteExpression_getNoteExpressionValueByString => %p %d %hd %u %p %p",
+    //     thisInterface,
+    //     busIndex,
+    //     channel,
+    //     id,
+    //     string,
+    //     valueNormalized);
     // here we use the id (not the index)
     if (busIndex == 0 && channel == 0 && id == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
     {
         // here we have to convert a given tuning string (half Tone) to a normalized value
         double tmp   = 0;
-        int    count = swscanf((const wchar_t*)string, L"%f", &tmp);
+        int    count = swscanf((const wchar_t*)string, L"%lf", &tmp);
         if (count)
         {
             *valueNormalized = (tmp + 120) / 240;
@@ -978,7 +980,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionVal
         }
     }
 
-    return Steinberg_kResultOk;
+    return Steinberg_kResultFalse;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
