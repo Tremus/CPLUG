@@ -114,6 +114,8 @@ struct STAND_Plugin
 } g_plugin;
 
 void STAND_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+void STAND_rescan(CplugHostContext* ctx, uint32_t flags) {}
+_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
 
 #ifdef HOTRELOAD_BUILD_COMMAND
 struct STAND_PluginStateContext
@@ -230,6 +232,7 @@ OSStatus STAND_audioDeviceChangeListener(
     g_plugin.libraryLoad();
     g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
     g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
+    g_plugin.hostContext.rescan         = STAND_rescan;
     g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
     cplug_assert(g_plugin.userPlugin != NULL);
 
@@ -1277,6 +1280,7 @@ void STAND_filesystemEventCallback(
                 g_plugin.libraryLoad();
                 g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
                 g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
+                g_plugin.hostContext.rescan         = STAND_rescan;
                 g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
                 cplug_assert(g_plugin.userPlugin != NULL);
                 g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);

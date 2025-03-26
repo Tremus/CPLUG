@@ -93,6 +93,8 @@ struct CPWIN_Plugin
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
 void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
+void CPWIN_HostContext_Rescan(CplugHostContext* ctx, uint32_t flags) {}
+_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
 
 #ifdef HOTRELOAD_WATCH_DIR
 struct CPWIN_PluginStateContext
@@ -311,6 +313,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     _gCPLUG.libraryLoad();
     _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
     _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
+    _gCPLUG.HostContext.rescan         = CPWIN_HostContext_Rescan;
     _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
     cplug_assert(_gCPLUG.UserPlugin != NULL);
 
@@ -668,6 +671,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 _gCPLUG.libraryLoad();
                 _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
                 _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
+                _gCPLUG.HostContext.rescan         = CPWIN_HostContext_Rescan;
                 _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
                 cplug_assert(_gCPLUG.UserPlugin != NULL);
                 _gCPLUG.loadState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_ReadStateProc);

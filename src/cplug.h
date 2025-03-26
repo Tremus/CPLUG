@@ -58,11 +58,11 @@ enum
     // AUv2 - support listener for kAudioUnitProperty_TailTime
     // CLAP - clap_host_tail.changed()
     CPLUG_FLAG_RESCAN_TAIL_TIME = 1 << 1,
-    // VST3 - RestartFlags::kIOChanged
+    // VST3 - RestartFlags::kIoChanged
     // AUv2 - support listener for kAudioUnitProperty_ElementCount
     // CLAP - CLAP_AUDIO_PORTS_RESCAN_LIST
     CPLUG_FLAG_RESCAN_BUS_COUNT = 1 << 2,
-    // VST3 - RestartFlags::kIOTitlesChanged
+    // VST3 - RestartFlags::kIoTitlesChanged
     // AUv2 - Unknown. Try calling AUEventListenerNotify(kAudioUnitProperty_ElementName)
     // CLAP - CLAP_AUDIO_PORTS_RESCAN_NAMES
     CPLUG_FLAG_RESCAN_BUS_NAMES = 1 << 3,
@@ -90,7 +90,7 @@ struct CplugHostContext
 
     // VST3 & AUv2 only, UI thread only.
     void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
-    void (*rescan)(CplugHostContext* ctx, uint32_t flags /* CPLUG_RESCAN_XXX */)
+    void (*rescan)(CplugHostContext* ctx, uint32_t flags /* CPLUG_RESCAN_XXX */);
 };
 
 CPLUG_API void* cplug_createPlugin(CplugHostContext* ctx);

@@ -450,7 +450,7 @@ static inline VST3Plugin* _cplug_pointerShiftProcessor(void* const ptr)
 // Sending parameter updates through the audio thread doesn't sync with FL Studio.
 // In Reaper & Bitwig, only sending param updates over the audio thread won't produce syncing problems.
 // This method is the most reliable way to send param changes and sync them with the DAW
-static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event)
+static void _cplug_vst3_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event)
 {
     CPLUG_LOG_ASSERT(
         event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN || event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE ||
@@ -473,6 +473,38 @@ static void _cplug_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event
             handler->lpVtbl->endEdit(handler, event->parameter.id);
     }
 }
+
+static void _cplug_vst3_rescan(CplugHostContext* ctx, uint32_t flags)
+{
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+
+    Steinberg_int32 vst_flags = 0;
+
+    if (flags & CPLUG_FLAG_RESCAN_LATENCY)
+        vst_flags |= Steinberg_Vst_RestartFlags_kLatencyChanged;
+    if (flags & CPLUG_FLAG_RESCAN_BUS_COUNT)
+        vst_flags |= Steinberg_Vst_RestartFlags_kIoChanged;
+    if (flags & CPLUG_FLAG_RESCAN_BUS_NAMES)
+        vst_flags |= Steinberg_Vst_RestartFlags_kIoTitlesChanged;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_COUNT)
+        vst_flags |= Steinberg_Vst_RestartFlags_kReloadComponent;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_VALUES)
+        vst_flags |= Steinberg_Vst_RestartFlags_kParamValuesChanged;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_NAMES)
+        vst_flags |= Steinberg_Vst_RestartFlags_kParamTitlesChanged;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_METADATA)
+        vst_flags |= Steinberg_Vst_RestartFlags_kReloadComponent;
+
+    // TODO: Consider adding asserts that check if Component is active or not, which the Steinberg docs tell you to do
+    Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
+    CPLUG_LOG_ASSERT(handler != NULL);
+    if (handler)
+    {
+        handler->lpVtbl->restartComponent(handler, vst_flags);
+    }
+}
+
+_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
 
 static void _cplug_tryDeleteVST3(VST3Plugin* vst3)
 {
@@ -939,7 +971,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionStr
     {
         // here we have to convert a normalized value to a Tuning string representation
         double denormalised = valueNormalized = (240 * valueNormalized) - 120; // compute half Tones
-        swprintf ((wchar_t*)string, 128, L"%.*lf", 2, denormalised);
+        swprintf((wchar_t*)string, 128, L"%.*lf", 2, denormalised);
 
         return Steinberg_kResultTrue;
     }
@@ -2352,7 +2384,8 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
     {
         VST3Plugin* vst3                 = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
         vst3->hostContext.type           = CPLUG_PLUGIN_IS_VST3;
-        vst3->hostContext.sendParamEvent = _cplug_sendParamEvent;
+        vst3->hostContext.sendParamEvent = _cplug_vst3_sendParamEvent;
+        vst3->hostContext.rescan         = _cplug_vst3_rescan;
         vst3->component.lpVtbl           = &vst3->component.base;
         vst3->component.refcounter       = 1;
         // Steinberg_FUnknown

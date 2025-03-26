@@ -14,10 +14,12 @@ typedef struct CLAPPlugin
 #if CPLUG_WANT_GUI
     void* userGUI;
 #endif
-    const clap_host_t*         host;
-    const clap_host_latency_t* host_latency;
-    const clap_host_state_t*   host_state;
-    const clap_host_params_t*  host_params;
+    const clap_host_t*             host;
+    const clap_host_audio_ports_t* host_audio_ports;
+    const clap_host_params_t*      host_params;
+    const clap_host_latency_t*     host_latency;
+    const clap_host_tail_t*        host_tail;
+    const clap_host_state_t*       host_state;
 } CLAPPlugin;
 
 /////////////////////////////
@@ -435,7 +437,37 @@ static const clap_plugin_gui_t s_clap_gui = {
 // clap_plugin //
 /////////////////
 
-static void _cplug_dummySendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+static void _cplug_clap_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+static void _cplug_clap_rescan(CplugHostContext* ctx, uint32_t flags)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+
+    uint32_t bus_flags = 0;
+    if (flags & CPLUG_FLAG_RESCAN_BUS_COUNT)
+        bus_flags |= CLAP_AUDIO_PORTS_RESCAN_LIST;
+    if (flags & CPLUG_FLAG_RESCAN_BUS_NAMES)
+        bus_flags |= CLAP_AUDIO_PORTS_RESCAN_NAMES;
+    if (bus_flags != 0 && clap->host_audio_ports)
+        clap->host_audio_ports->rescan(clap->host, bus_flags);
+
+    uint32_t param_flags = 0;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_COUNT)
+        param_flags |= CLAP_PARAM_RESCAN_ALL;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_VALUES)
+        param_flags |= CLAP_PARAM_RESCAN_VALUES;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_NAMES)
+        param_flags |= CLAP_PARAM_RESCAN_INFO;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_METADATA)
+        param_flags |= CLAP_PARAM_RESCAN_ALL;
+    if (param_flags != 0 && clap->host_params)
+        clap->host_params->rescan(clap->host, param_flags);
+
+    if ((flags & CPLUG_FLAG_RESCAN_LATENCY) && clap->host_latency)
+        clap->host_latency->changed(clap->host);
+    if ((flags & CPLUG_FLAG_RESCAN_TAIL_TIME) && clap->host_tail)
+        clap->host_tail->changed(clap->host);
+}
+_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
 
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
@@ -446,13 +478,19 @@ static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 
     // Fetch host's extensions here
     // Make sure to check that the interface functions are not null pointers
-    clap->host_latency = (const clap_host_latency_t*)clap->host->get_extension(clap->host, CLAP_EXT_LATENCY);
-    clap->host_state   = (const clap_host_state_t*)clap->host->get_extension(clap->host, CLAP_EXT_STATE);
+    clap->host_audio_ports =
+        (const clap_host_audio_ports_t*)clap->host->get_extension(clap->host, CLAP_EXT_AUDIO_PORTS);
     clap->host_params  = (const clap_host_params_t*)clap->host->get_extension(clap->host, CLAP_EXT_PARAMS);
+    clap->host_latency = (const clap_host_latency_t*)clap->host->get_extension(clap->host, CLAP_EXT_LATENCY);
+    clap->host_tail    = (const clap_host_tail_t*)clap->host->get_extension(clap->host, CLAP_EXT_TAIL);
+    clap->host_state   = (const clap_host_state_t*)clap->host->get_extension(clap->host, CLAP_EXT_STATE);
 
-    CPLUG_LOG_ASSERT(clap->host_latency != NULL);
-    CPLUG_LOG_ASSERT(clap->host_state != NULL);
+    CPLUG_LOG_ASSERT(clap->host_audio_ports != NULL);
     CPLUG_LOG_ASSERT(clap->host_params != NULL);
+    CPLUG_LOG_ASSERT(clap->host_latency != NULL);
+    CPLUG_LOG_ASSERT(clap->host_tail != NULL);
+    CPLUG_LOG_ASSERT(clap->host_state != NULL);
+
     return true;
 }
 
@@ -808,7 +846,8 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     clap->clapPlugin.get_extension    = CLAPPlugin_get_extension;
     clap->clapPlugin.on_main_thread   = CLAPPlugin_on_main_thread;
     clap->hostContext.type            = CPLUG_PLUGIN_IS_CLAP;
-    clap->hostContext.sendParamEvent  = _cplug_dummySendParamEvent;
+    clap->hostContext.sendParamEvent  = _cplug_clap_sendParamEvent;
+    clap->hostContext.rescan          = _cplug_clap_rescan;
 
     clap->host = host;
 

@@ -1321,6 +1321,9 @@ static void AUv2HostContext_sendParamEvent(CplugHostContext* ctx, const CplugEve
     AUv2Plugin* auv2 = (AUv2Plugin*)((char*)ctx - offsetof(AUv2Plugin, hostContext));
     AUv2SendParamEvent(auv2, event);
 }
+static void AUv2HostContext_rescan(CplugHostContext* ctx, uint32_t flags) {}
+
+_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
 
 OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInstance)
 {
@@ -1367,6 +1370,7 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     auv2->desc                       = *inDesc;
     auv2->hostContext.type           = CPLUG_PLUGIN_IS_AUV2;
     auv2->hostContext.sendParamEvent = AUv2HostContext_sendParamEvent;
+    auv2->hostContext.rescan         = AUv2HostContext_rescan;
 
     auv2->supportsInPlaceProcessing = 1;
     auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;
