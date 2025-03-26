@@ -50,37 +50,13 @@ enum
 
 enum
 {
-    // VST3 - RestartFlags::kLatencyChanged
-    // AUv2 - support listener for kAudioUnitProperty_Latency
-    // CLAP - clap_host_latency.changed()
-    CPLUG_FLAG_RESCAN_LATENCY = 1 << 0,
-    // VST3 - Unknown, possibly unreported by plugins. Hosts may call getTailSamples() repeatedly
-    // AUv2 - support listener for kAudioUnitProperty_TailTime
-    // CLAP - clap_host_tail.changed()
-    CPLUG_FLAG_RESCAN_TAIL_TIME = 1 << 1,
-    // VST3 - RestartFlags::kIoChanged
-    // AUv2 - support listener for kAudioUnitProperty_ElementCount
-    // CLAP - CLAP_AUDIO_PORTS_RESCAN_LIST
-    CPLUG_FLAG_RESCAN_BUS_COUNT = 1 << 2,
-    // VST3 - RestartFlags::kIoTitlesChanged
-    // AUv2 - Unknown. Try calling AUEventListenerNotify(kAudioUnitProperty_ElementName)
-    // CLAP - CLAP_AUDIO_PORTS_RESCAN_NAMES
-    CPLUG_FLAG_RESCAN_BUS_NAMES = 1 << 3,
-    // VST3 - Unknown. Try calling RestartFlags::kReloadComponent (full reload)
-    // AUv2 - support listener for kAudioUnitProperty_ParameterList
-    // CLAP - CLAP_PARAM_RESCAN_ALL
-    CPLUG_FLAG_RESCAN_PARAM_COUNT = 1 << 4,
-    // VST3 - RestartFlags::kParamValuesChanged
-    // AUv2 - Unknown. probably need to manually call AUEventListenerNotify() on all parameter values
-    // CLAP - CLAP_PARAM_RESCAN_VALUES
-    CPLUG_FLAG_RESCAN_PARAM_VALUES = 1 << 5,
-    // VST3 - RestartFlags::kParamTitlesChanged
-    // AUv2 - support listener for kAudioUnitProperty_ParameterInfo
-    // CLAP - CLAP_PARAM_RESCAN_INFO
-    CPLUG_FLAG_RESCAN_PARAM_NAMES = 1 << 6,
-    // VST3 - RestartFlags::kReloadComponent
-    // AUv2 - support listener for kAudioUnitProperty_ParameterInfo
-    // CLAP - CLAP_PARAM_RESCAN_ALL
+    CPLUG_FLAG_RESCAN_LATENCY        = 1 << 0,
+    CPLUG_FLAG_RESCAN_TAIL_TIME      = 1 << 1,
+    CPLUG_FLAG_RESCAN_BUS_COUNT      = 1 << 2,
+    CPLUG_FLAG_RESCAN_BUS_NAMES      = 1 << 3,
+    CPLUG_FLAG_RESCAN_PARAM_COUNT    = 1 << 4,
+    CPLUG_FLAG_RESCAN_PARAM_VALUES   = 1 << 5,
+    CPLUG_FLAG_RESCAN_PARAM_NAMES    = 1 << 6,
     CPLUG_FLAG_RESCAN_PARAM_METADATA = 1 << 7,
 };
 

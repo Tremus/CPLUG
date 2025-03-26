@@ -174,6 +174,17 @@ typedef struct AUv2Plugin
     CFStringRef* outputBusNames;
     size_t       numOutputBusNames;
 
+    AudioUnitPropertyListenerProc elementCountListenerProc; // Notifies changes to bus count
+    void*                         elementCountListenerData;
+    AudioUnitPropertyListenerProc latencyListenerProc;
+    void*                         latencyListenerData;
+    AudioUnitPropertyListenerProc tailTimeListenerProc;
+    void*                         tailTimeListenerData;
+    AudioUnitPropertyListenerProc parameterListListenerProc; // Notifies changes to parameter count
+    void*                         parameterListListenerData;
+    AudioUnitPropertyListenerProc parameterInfoListenerProc;
+    void*                         parameterInfoListenerData;
+
     // Logic in Rosetta mode breaks if you don't have this
     // Rosetta Logic doesn't seem to support the feature...
     UInt32 supportsInPlaceProcessing;
@@ -927,9 +938,29 @@ static OSStatus AUMethodAddPropertyListener(
 
     switch (prop)
     {
+    case kAudioUnitProperty_ParameterList:
+        auv2->parameterListListenerProc = proc;
+        auv2->parameterListListenerData = userData;
+        break;
+    case kAudioUnitProperty_ParameterInfo:
+        auv2->parameterInfoListenerProc = proc;
+        auv2->parameterInfoListenerData = userData;
+        break;
+    case kAudioUnitProperty_ElementCount:
+        auv2->elementCountListenerProc = proc;
+        auv2->elementCountListenerData = userData;
+        break;
+    case kAudioUnitProperty_Latency:
+        auv2->latencyListenerProc = proc;
+        auv2->latencyListenerData = userData;
+        break;
     case kAudioUnitProperty_MaximumFramesPerSlice:
         auv2->maxFramesListenerProc = proc;
         auv2->maxFramesListenerData = userData;
+        break;
+    case kAudioUnitProperty_TailTime:
+        auv2->tailTimeListenerProc = proc;
+        auv2->tailTimeListenerData = userData;
         break;
     default:
         return kAudioUnitErr_InvalidProperty;
@@ -944,9 +975,29 @@ AUMethodRemovePropertyListener(AUv2Plugin* auv2, AudioUnitPropertyID prop, Audio
 
     switch (prop)
     {
+    case kAudioUnitProperty_ParameterList:
+        auv2->parameterListListenerProc = NULL;
+        auv2->parameterListListenerData = NULL;
+        break;
+    case kAudioUnitProperty_ParameterInfo:
+        auv2->parameterInfoListenerProc = NULL;
+        auv2->parameterInfoListenerData = NULL;
+        break;
+    case kAudioUnitProperty_ElementCount:
+        auv2->elementCountListenerProc = NULL;
+        auv2->elementCountListenerData = NULL;
+        break;
+    case kAudioUnitProperty_Latency:
+        auv2->latencyListenerProc = NULL;
+        auv2->latencyListenerData = NULL;
+        break;
     case kAudioUnitProperty_MaximumFramesPerSlice:
         auv2->maxFramesListenerProc = NULL;
         auv2->maxFramesListenerData = NULL;
+        break;
+    case kAudioUnitProperty_TailTime:
+        auv2->tailTimeListenerProc = NULL;
+        auv2->tailTimeListenerData = NULL;
         break;
     default:
         return kAudioUnitErr_InvalidProperty;
@@ -1321,7 +1372,98 @@ static void AUv2HostContext_sendParamEvent(CplugHostContext* ctx, const CplugEve
     AUv2Plugin* auv2 = (AUv2Plugin*)((char*)ctx - offsetof(AUv2Plugin, hostContext));
     AUv2SendParamEvent(auv2, event);
 }
-static void AUv2HostContext_rescan(CplugHostContext* ctx, uint32_t flags) {}
+static void AUv2HostContext_rescan(CplugHostContext* ctx, uint32_t flags)
+{
+    AUv2Plugin* auv2 = (AUv2Plugin*)((char*)ctx - offsetof(AUv2Plugin, hostContext));
+
+    // CPLUG_FLAG_RESCAN_PARAM_VALUES
+    // CPLUG_FLAG_RESCAN_PARAM_NAMES
+    // CPLUG_FLAG_RESCAN_PARAM_METADATA
+
+    if ((flags & CPLUG_FLAG_RESCAN_BUS_COUNT) && auv2->elementCountListenerProc)
+    {
+        auv2->elementCountListenerProc(
+            auv2->elementCountListenerData,
+            (AudioUnit)auv2,
+            kAudioUnitProperty_ElementCount,
+            kAudioUnitScope_Global,
+            0);
+    }
+    if (flags & CPLUG_FLAG_RESCAN_BUS_NAMES)
+    {
+        // NOTE: Untested. This may not be supported by hosts
+        AudioUnitEvent auevent;
+        auevent.mEventType                      = kAudioUnitEvent_PropertyChange;
+        auevent.mArgument.mProperty.mAudioUnit  = auv2->compInstance;
+        auevent.mArgument.mProperty.mPropertyID = kAudioUnitProperty_ElementName;
+        auevent.mArgument.mProperty.mScope      = kAudioUnitScope_Global;
+        auevent.mArgument.mProperty.mElement    = 0;
+        AUEventListenerNotify(NULL, NULL, &auevent);
+    }
+    if ((flags & CPLUG_FLAG_RESCAN_PARAM_COUNT) && auv2->parameterListListenerProc)
+    {
+        auv2->parameterListListenerProc(
+            auv2->parameterListListenerData,
+            (AudioUnit)auv2,
+            kAudioUnitProperty_ParameterList,
+            kAudioUnitScope_Global,
+            0);
+    }
+    if ((flags & CPLUG_FLAG_RESCAN_PARAM_VALUES))
+    {
+        // NOTE: Unlike other formats, AU doesn't really have an equivalent for this
+        //       Manually updating every parameter is the next best thing
+        //       In future, this may become a call to a listener for kAudioUnitProperty_PresentPreset
+        const uint32_t numParams = cplug_getNumParameters(auv2->userPlugin);
+        AudioUnitEvent auevent;
+        auevent.mArgument.mParameter.mAudioUnit = auv2->compInstance;
+        auevent.mArgument.mParameter.mScope     = kAudioUnitScope_Global;
+        auevent.mArgument.mParameter.mElement   = 0;
+
+        for (uint32_t i = 0; i < numParams; i++)
+        {
+            const uint32_t paramID                    = cplug_getParameterID(auv2->userPlugin, i);
+            auevent.mArgument.mParameter.mParameterID = paramID;
+
+            static const AudioUnitEventType eventTypes[] = {
+                kAudioUnitEvent_BeginParameterChangeGesture,
+                kAudioUnitEvent_ParameterValueChange,
+                kAudioUnitEvent_EndParameterChangeGesture};
+            for (int j = 0; j < CPLUG_ARRSIZE(eventTypes); j++)
+            {
+                auevent.mEventType = eventTypes[j];
+                AUEventListenerNotify(NULL, NULL, &auevent);
+            }
+        }
+    }
+    if (flags & (CPLUG_FLAG_RESCAN_PARAM_NAMES | CPLUG_FLAG_RESCAN_PARAM_METADATA))
+    {
+        auv2->parameterInfoListenerProc(
+            auv2->parameterInfoListenerData,
+            (AudioUnit)auv2,
+            kAudioUnitProperty_ParameterInfo,
+            kAudioUnitScope_Global,
+            0);
+    }
+    if ((flags & CPLUG_FLAG_RESCAN_LATENCY) && auv2->latencyListenerProc)
+    {
+        auv2->latencyListenerProc(
+            auv2->latencyListenerData,
+            (AudioUnit)auv2,
+            kAudioUnitProperty_Latency,
+            kAudioUnitScope_Global,
+            0);
+    }
+    if ((flags & CPLUG_FLAG_RESCAN_TAIL_TIME) && auv2->tailTimeListenerProc)
+    {
+        auv2->tailTimeListenerProc(
+            auv2->tailTimeListenerData,
+            (AudioUnit)auv2,
+            kAudioUnitProperty_TailTime,
+            kAudioUnitScope_Global,
+            0);
+    }
+}
 
 _Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
 
