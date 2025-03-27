@@ -94,7 +94,12 @@ struct CPWIN_Plugin
 void CPWIN_LoadPlugin();
 void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
 void CPWIN_HostContext_Rescan(CplugHostContext* ctx, uint32_t flags) {}
-_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
+bool CPWIN_HostContext_GetHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+{
+    snprintf(buf, buflen, "CPLUG Standalone Windows");
+    return true;
+}
+_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
 
 #ifdef HOTRELOAD_WATCH_DIR
 struct CPWIN_PluginStateContext
@@ -310,12 +315,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     memset(&_gMenus, 0, sizeof(_gMenus));
 
     CPWIN_LoadPlugin();
-    _gCPLUG.libraryLoad();
-    _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-    _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
-    _gCPLUG.HostContext.rescan         = CPWIN_HostContext_Rescan;
-    _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
-    cplug_assert(_gCPLUG.UserPlugin != NULL);
 
     ///////////////
     // INIT MIDI //
@@ -668,12 +667,6 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             else
             {
                 CPWIN_LoadPlugin();
-                _gCPLUG.libraryLoad();
-                _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-                _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
-                _gCPLUG.HostContext.rescan         = CPWIN_HostContext_Rescan;
-                _gCPLUG.UserPlugin                 = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
-                cplug_assert(_gCPLUG.UserPlugin != NULL);
                 _gCPLUG.loadState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_ReadStateProc);
 
                 CPWIN_Audio_Start();
@@ -864,6 +857,15 @@ void CPWIN_LoadPlugin()
     cplug_assert(NULL != _gCPLUG.getSize);
     cplug_assert(NULL != _gCPLUG.checkSize);
     cplug_assert(NULL != _gCPLUG.setSize);
+
+    _gCPLUG.libraryLoad();
+    _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
+    _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
+    _gCPLUG.HostContext.rescan         = CPWIN_HostContext_Rescan;
+    _gCPLUG.HostContext.getHostName    = CPWIN_HostContext_GetHostName;
+
+    _gCPLUG.UserPlugin = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
+    cplug_assert(_gCPLUG.UserPlugin != NULL);
 }
 
 #ifdef HOTRELOAD_WATCH_DIR

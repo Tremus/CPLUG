@@ -66,6 +66,9 @@ struct CplugHostContext
     // VST3 & AUv2 only, UI thread only.
     void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
     void (*rescan)(CplugHostContext* ctx, uint32_t flags /* CPLUG_RESCAN_XXX */);
+    // In VST3 & CLAP, this is available from within cplug_createPlugin.
+    // AUv2 is unpredictable, but should be available at least within cplug_setSampleRateAndBlockSize
+    bool (*getHostName)(CplugHostContext* ctx, char* buf, size_t buflen);
 };
 
 CPLUG_API void* cplug_createPlugin(CplugHostContext* ctx);

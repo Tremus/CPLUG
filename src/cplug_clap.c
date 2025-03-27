@@ -470,7 +470,19 @@ static void _cplug_clap_rescan(CplugHostContext* ctx, uint32_t flags)
     if ((flags & CPLUG_FLAG_RESCAN_TAIL_TIME) && clap->host_tail)
         clap->host_tail->changed(clap->host);
 }
-_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
+static bool _cplug_clap_getHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+{
+    bool        ok   = false;
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+    if (clap->host)
+    {
+        snprintf(buf, buflen, "%s", clap->host->name);
+        ok = true;
+    }
+    return ok;
+}
+
+_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
 
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
@@ -851,6 +863,7 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     clap->hostContext.type            = CPLUG_PLUGIN_IS_CLAP;
     clap->hostContext.sendParamEvent  = _cplug_clap_sendParamEvent;
     clap->hostContext.rescan          = _cplug_clap_rescan;
+    clap->hostContext.getHostName     = _cplug_clap_getHostName;
 
     clap->host = host;
 

@@ -507,7 +507,24 @@ static void _cplug_vst3_rescan(CplugHostContext* ctx, uint32_t flags)
     }
 }
 
-_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
+static bool _cplug_vst3_getHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+{
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+    bool        ok   = false;
+    if (vst3->host)
+    {
+        Steinberg_Vst_String128 name;
+        Steinberg_tresult       result = vst3->host->lpVtbl->getName(vst3->host, name);
+        if (result == Steinberg_kResultOk)
+        {
+            _cplug_utf16To8(buf, name, buflen);
+            ok = true;
+        }
+    }
+    return ok;
+}
+
+_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
 
 static void _cplug_tryDeleteVST3(VST3Plugin* vst3)
 {
@@ -2389,6 +2406,7 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         vst3->hostContext.type           = CPLUG_PLUGIN_IS_VST3;
         vst3->hostContext.sendParamEvent = _cplug_vst3_sendParamEvent;
         vst3->hostContext.rescan         = _cplug_vst3_rescan;
+        vst3->hostContext.getHostName    = _cplug_vst3_getHostName;
         vst3->component.lpVtbl           = &vst3->component.base;
         vst3->component.refcounter       = 1;
         // Steinberg_FUnknown
