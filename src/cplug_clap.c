@@ -451,8 +451,8 @@ static void _cplug_clap_rescan(CplugHostContext* ctx, uint32_t flags)
         clap->host_audio_ports->rescan(clap->host, bus_flags);
 
     uint32_t param_flags = 0;
-    if (flags & CPLUG_FLAG_RESCAN_PARAM_COUNT)
-        param_flags |= CLAP_PARAM_RESCAN_ALL;
+    // if (flags & CPLUG_FLAG_RESCAN_PARAM_COUNT)
+    //     param_flags |= CLAP_PARAM_RESCAN_ALL;
     if (flags & CPLUG_FLAG_RESCAN_PARAM_VALUES)
         param_flags |= CLAP_PARAM_RESCAN_VALUES;
     if (flags & CPLUG_FLAG_RESCAN_PARAM_NAMES)

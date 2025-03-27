@@ -476,6 +476,7 @@ static void _cplug_vst3_sendParamEvent(CplugHostContext* ctx, const CplugEvent* 
 
 static void _cplug_vst3_rescan(CplugHostContext* ctx, uint32_t flags)
 {
+    cplug_log("_cplug_vst3_rescan => %p %u", ctx, flags);
     VST3Plugin* vst3 = (VST3Plugin*)ctx;
 
     Steinberg_int32 vst_flags = 0;
@@ -486,14 +487,17 @@ static void _cplug_vst3_rescan(CplugHostContext* ctx, uint32_t flags)
         vst_flags |= Steinberg_Vst_RestartFlags_kIoChanged;
     if (flags & CPLUG_FLAG_RESCAN_BUS_NAMES)
         vst_flags |= Steinberg_Vst_RestartFlags_kIoTitlesChanged;
-    if (flags & CPLUG_FLAG_RESCAN_PARAM_COUNT)
-        vst_flags |= Steinberg_Vst_RestartFlags_kReloadComponent;
+    // A dynamic parameter count isn't really supported in VST3 at the time of writing. In theory you could call
+    // kReloadComponent, however if you call this from the GUI, for example in the callback of a button click, hosts
+    // such as Reaper will delete your GUI in that button callback.
+    // Instead, it's recommended you allocate a maximum number of parameters at startup.
+    // https://forums.steinberg.net/t/can-i-dynamically-create-parameters/201672
+    // if (flags & CPLUG_FLAG_RESCAN_PARAM_COUNT)
+    //     vst_flags |= Steinberg_Vst_RestartFlags_kReloadComponent;
     if (flags & CPLUG_FLAG_RESCAN_PARAM_VALUES)
         vst_flags |= Steinberg_Vst_RestartFlags_kParamValuesChanged;
-    if (flags & CPLUG_FLAG_RESCAN_PARAM_NAMES)
+    if (flags & (CPLUG_FLAG_RESCAN_PARAM_NAMES | CPLUG_FLAG_RESCAN_PARAM_METADATA))
         vst_flags |= Steinberg_Vst_RestartFlags_kParamTitlesChanged;
-    if (flags & CPLUG_FLAG_RESCAN_PARAM_METADATA)
-        vst_flags |= Steinberg_Vst_RestartFlags_kReloadComponent;
 
     // TODO: Consider adding asserts that check if Component is active or not, which the Steinberg docs tell you to do
     Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;

@@ -1376,10 +1376,6 @@ static void AUv2HostContext_rescan(CplugHostContext* ctx, uint32_t flags)
 {
     AUv2Plugin* auv2 = (AUv2Plugin*)((char*)ctx - offsetof(AUv2Plugin, hostContext));
 
-    // CPLUG_FLAG_RESCAN_PARAM_VALUES
-    // CPLUG_FLAG_RESCAN_PARAM_NAMES
-    // CPLUG_FLAG_RESCAN_PARAM_METADATA
-
     if ((flags & CPLUG_FLAG_RESCAN_BUS_COUNT) && auv2->elementCountListenerProc)
     {
         auv2->elementCountListenerProc(
@@ -1400,15 +1396,15 @@ static void AUv2HostContext_rescan(CplugHostContext* ctx, uint32_t flags)
         auevent.mArgument.mProperty.mElement    = 0;
         AUEventListenerNotify(NULL, NULL, &auevent);
     }
-    if ((flags & CPLUG_FLAG_RESCAN_PARAM_COUNT) && auv2->parameterListListenerProc)
-    {
-        auv2->parameterListListenerProc(
-            auv2->parameterListListenerData,
-            (AudioUnit)auv2,
-            kAudioUnitProperty_ParameterList,
-            kAudioUnitScope_Global,
-            0);
-    }
+    // if ((flags & CPLUG_FLAG_RESCAN_PARAM_COUNT) && auv2->parameterListListenerProc)
+    // {
+    //     auv2->parameterListListenerProc(
+    //         auv2->parameterListListenerData,
+    //         (AudioUnit)auv2,
+    //         kAudioUnitProperty_ParameterList,
+    //         kAudioUnitScope_Global,
+    //         0);
+    // }
     if ((flags & CPLUG_FLAG_RESCAN_PARAM_VALUES))
     {
         // NOTE: Unlike other formats, AU doesn't really have an equivalent for this
