@@ -164,6 +164,8 @@ typedef struct AUv2Plugin
 
     CplugHostContext hostContext;
 
+    AUHostVersionIdentifier hostVersionIdentifier;
+
     void* userPlugin;
     // Despite the name, this is actually used for getting transport state, position, and BPM.
     HostCallbackInfo mHostCallbackInfo;
@@ -454,6 +456,11 @@ OSStatus AUMethodGetPropertyInfo(
 
     case kAudioUnitProperty_ParameterClumpName:
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterNameInfo));
+        break;
+
+    case kAudioUnitProperty_AUHostIdentifier:
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AUHostVersionIdentifier));
+        CPLUG_SAFE_SET_PTR(outWritable, true);
         break;
 
         // TODO: support MIDI out
@@ -918,6 +925,13 @@ static OSStatus AUMethodSetProperty(
 
     case kAudioUnitProperty_InPlaceProcessing:
         auv2->supportsInPlaceProcessing = *(UInt32*)inData;
+        break;
+
+    // Unsupported by Reaper, Ableton 12, and Waveform
+    // Supported by Logic Pro
+    case kAudioUnitProperty_AUHostIdentifier:
+        auv2->hostVersionIdentifier = *(AUHostVersionIdentifier*)inData;
+        CFRetain(auv2->hostVersionIdentifier.hostName);
         break;
 
     default:
@@ -1460,8 +1474,36 @@ static void AUv2HostContext_rescan(CplugHostContext* ctx, uint32_t flags)
             0);
     }
 }
+static bool AUv2HostContext_getHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+{
+    AUv2Plugin* auv2 = (AUv2Plugin*)((char*)ctx - offsetof(AUv2Plugin, hostContext));
+    if (auv2->hostVersionIdentifier.hostName)
+        return CFStringGetCString(auv2->hostVersionIdentifier.hostName, buf, buflen, kCFStringEncodingUTF8);
 
-_Static_assert(sizeof(CplugHostContext) == 24, "You may need to add support for new methods");
+    // This is a 'good enough' backup, but will not account for the case that another plugin is hosting this plugin
+    // You just have to hope a plugin hosting this plugin correctly supports kAudioUnitProperty_AUHostIdentifier.
+    CFBundleRef bundle = CFBundleGetMainBundle();
+    if (bundle)
+    {
+        CFStringRef bundleId      = CFBundleGetIdentifier(bundle);
+        CFStringRef versionString = CFBundleGetValueForInfoDictionaryKey(bundle, kCFBundleVersionKey);
+        if (bundleId && versionString)
+        {
+            char    idBuf[128]  = {0};
+            char    verBuf[128] = {0};
+            Boolean haveId      = CFStringGetCString(bundleId, idBuf, sizeof(idBuf), kCFStringEncodingUTF8);
+            Boolean haveVersion = CFStringGetCString(versionString, verBuf, sizeof(verBuf), kCFStringEncodingUTF8);
+            if (haveId && haveVersion)
+            {
+                snprintf(buf, buflen, "%s %s", idBuf, verBuf);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
 
 OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInstance)
 {
@@ -1476,6 +1518,9 @@ OSStatus ComponentBase_AP_Close(AUv2Plugin* auv2)
 {
     cplug_log("ComponentBase_AP_Close");
     cplug_destroyPlugin(auv2->userPlugin);
+
+    if (auv2->hostVersionIdentifier.hostName)
+        CFRelease(auv2->hostVersionIdentifier.hostName);
 
     AUv2ReleaseStringArray(auv2->inputBusNames, auv2->numInputBusNames);
     AUv2ReleaseStringArray(auv2->outputBusNames, auv2->numOutputBusNames);
@@ -1509,6 +1554,7 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     auv2->hostContext.type           = CPLUG_PLUGIN_IS_AUV2;
     auv2->hostContext.sendParamEvent = AUv2HostContext_sendParamEvent;
     auv2->hostContext.rescan         = AUv2HostContext_rescan;
+    auv2->hostContext.getHostName    = AUv2HostContext_getHostName;
 
     auv2->supportsInPlaceProcessing = 1;
     auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;
