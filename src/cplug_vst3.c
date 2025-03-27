@@ -499,7 +499,6 @@ static void _cplug_vst3_rescan(CplugHostContext* ctx, uint32_t flags)
     if (flags & (CPLUG_FLAG_RESCAN_PARAM_NAMES | CPLUG_FLAG_RESCAN_PARAM_METADATA))
         vst_flags |= Steinberg_Vst_RestartFlags_kParamTitlesChanged;
 
-    // TODO: Consider adding asserts that check if Component is active or not, which the Steinberg docs tell you to do
     Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
     CPLUG_LOG_ASSERT(handler != NULL);
     if (handler)

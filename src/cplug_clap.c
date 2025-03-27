@@ -459,6 +459,9 @@ static void _cplug_clap_rescan(CplugHostContext* ctx, uint32_t flags)
         param_flags |= CLAP_PARAM_RESCAN_INFO;
     if (flags & CPLUG_FLAG_RESCAN_PARAM_METADATA)
         param_flags |= CLAP_PARAM_RESCAN_ALL;
+    // The CLAP docs say that CLAP_PARAM_RESCAN_ALL may only be called when the plugin is deactivated.
+    // My own testing shows that Bitwig, FL and Reaper don't care and just rescan your parameters anyway, then
+    // deactivate/reactivate your plugin.
     if (param_flags != 0 && clap->host_params)
         clap->host_params->rescan(clap->host, param_flags);
 
