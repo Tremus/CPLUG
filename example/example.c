@@ -538,8 +538,8 @@ static void drawGUI(MyGUI* gui)
     my_assert(gui->width > 0);
     my_assert(gui->height > 0);
     const uint32_t bg_col = 0xC0C0C0;
-    // const uint32_t param_col = 0x0C0C0C;
-    const uint32_t param_col = 0x000000;
+    // const uint32_t bg_col    = 0xCF00C0;
+    const uint32_t param_col = 0x0C0C0C;
     drawRect(gui, 0, gui->width, 0, gui->height, bg_col, bg_col);
     drawRect(gui, 10, 40, 10, 40, param_col, bg_col);
 

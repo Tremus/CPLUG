@@ -21,6 +21,7 @@
 
 #include <Windows.h>
 
+#include <Shlwapi.h>
 #include <audioclient.h>
 #include <cfgmgr32.h>
 #include <mmdeviceapi.h>
@@ -32,6 +33,7 @@
 
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "cfgmgr32.lib")
+#pragma comment(lib, "Shlwapi.lib")
 
 #define cplug_assert(cond) (cond) ? (void)0 : __debugbreak()
 
@@ -53,15 +55,18 @@
 #define CPLUG_WTF_IS_A_REFERENCE(obj) &obj
 #endif
 
+#if defined(HOTRELOAD_WATCH_DIR) || defined(HOTRELOAD_LIB_PATH) || defined(HOTRELOAD_BUILD_COMMAND)
+#if !defined(HOTRELOAD_WATCH_DIR) || !defined(HOTRELOAD_LIB_PATH) || !defined(HOTRELOAD_BUILD_COMMAND)
+#error You need to define all 3
+#endif
+#endif
+
 ////////////
 // Plugin //
 ////////////
 
 struct CPWIN_Plugin
 {
-#ifdef HOTRELOAD_LIB_PATH
-    HMODULE Library;
-#endif
     CplugHostContext HostContext;
 
     void* UserPlugin;
@@ -95,7 +100,9 @@ bool CPWIN_HostContext_GetHostName(CplugHostContext* ctx, char* buf, size_t bufl
     snprintf(buf, buflen, "CPLUG Standalone Windows");
     return true;
 }
+#ifdef __clang__
 _Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
+#endif
 
 #ifdef HOTRELOAD_WATCH_DIR
 struct CPWIN_PluginStateContext
@@ -112,8 +119,15 @@ int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytes
 
 // File watch thread
 DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd);
-int          g_FlagExitFileWatchThread;
-HANDLE       g_hFileWatchThread;
+
+struct CPWIN_Hotreload
+{
+    HMODULE hPluginDLL;
+    UINT    Version;
+
+    int    FlagExitFileWatchThread;
+    HANDLE hFileWatchThread;
+} g_Hotreload;
 
 // Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
 struct
@@ -303,6 +317,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     QueryPerformanceFrequency(&g_Timer.freq);
     QueryPerformanceCounter(&g_Timer.start);
     memset(&g_PluginState, 0, sizeof(g_PluginState));
+    memset(&g_Hotreload, 0, sizeof(g_Hotreload));
 #endif
 
     memset(&g_plugin, 0, sizeof(g_plugin));
@@ -450,9 +465,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
 #ifdef HOTRELOAD_WATCH_DIR
     // Setup file watcher
-    g_FlagExitFileWatchThread = 0;
-    g_hFileWatchThread        = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
-    cplug_assert(g_hFileWatchThread != NULL);
+    g_Hotreload.FlagExitFileWatchThread = 0;
+    g_Hotreload.hFileWatchThread        = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
+    cplug_assert(g_Hotreload.hFileWatchThread != NULL);
 #endif
 
     // Window ready
@@ -503,10 +518,10 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         // Destroy plugin
 #ifdef HOTRELOAD_WATCH_DIR
         // Stop file watcher
-        g_FlagExitFileWatchThread = 1;
-        WaitForSingleObject(g_hFileWatchThread, INFINITE);
-        CloseHandle(g_hFileWatchThread);
-        if (g_plugin.Library)
+        g_Hotreload.FlagExitFileWatchThread = 1;
+        WaitForSingleObject(g_Hotreload.hFileWatchThread, INFINITE);
+        CloseHandle(g_Hotreload.hFileWatchThread);
+        if (g_Hotreload.hPluginDLL)
         {
 #endif
             g_plugin.setVisible(g_plugin.UserGUI, false);
@@ -515,7 +530,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             g_plugin.destroyPlugin(g_plugin.UserPlugin);
             g_plugin.libraryUnload();
 #ifdef HOTRELOAD_WATCH_DIR
-            FreeLibrary(g_plugin.Library);
+            FreeLibrary(g_Hotreload.hPluginDLL);
         }
         if (g_PluginState.Data)
             VirtualFree(g_PluginState.Data, g_PluginState.BytesReserved, 0);
@@ -598,12 +613,12 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     {
         switch (wParam)
         {
-#ifdef HOTRELOAD_BUILD_COMMAND
+#ifdef HOTRELOAD_WATCH_DIR
         case IDM_Hotreload:
         {
             UINT64 reloadStart = CPWIN_GetNowNS();
 
-            if (g_plugin.Library)
+            if (g_Hotreload.hPluginDLL)
             {
                 // Deinit
                 g_plugin.setVisible(g_plugin.UserGUI, false);
@@ -618,8 +633,9 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 g_plugin.destroyPlugin(g_plugin.UserPlugin);
                 g_plugin.libraryUnload();
-                BOOL ok = FreeLibrary(g_plugin.Library);
+                BOOL ok = FreeLibrary(g_Hotreload.hPluginDLL);
                 cplug_assert(ok);
+                g_Hotreload.hPluginDLL = NULL;
                 memset(&g_plugin, 0, sizeof(g_plugin));
             }
 
@@ -638,10 +654,11 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             UINT64 buildStart = CPWIN_GetNowNS();
             // Run build command in child process.
-            const LPWSTR cmd = TEXT(HOTRELOAD_BUILD_COMMAND);
-            if (!CreateProcessW(0, cmd, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
+            WCHAR cmdbuf[512];
+            _snwprintf(cmdbuf, ARRAYSIZE(cmdbuf), L"%s", TEXT(HOTRELOAD_BUILD_COMMAND));
+            if (!CreateProcessW(0, cmdbuf, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
             {
-                printf("CreateProcess failed (%lu).\n", GetLastError());
+                fprintf(stderr, "CreateProcess failed (%lu).\n", GetLastError());
                 return 1;
             }
 
@@ -686,17 +703,17 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             fprintf(stderr, "Reload time %.2fms\n", reload_ms);
             break;
         }
-#endif // HOTRELOAD_BUILD_COMMAND
+#endif // HOTRELOAD
         case IDM_SampleRate_44100:
         case IDM_SampleRate_48000:
         case IDM_SampleRate_88200:
         case IDM_SampleRate_96000:
         {
             CPWIN_Audio_Stop();
-            const SIZE_T MaxChars = 8;
-            WCHAR        text[MaxChars];
+            WCHAR text[8];
             // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
-            int numCharsCopied = GetMenuStringW(g_Menus.hSampleRateSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
+            int numCharsCopied =
+                GetMenuStringW(g_Menus.hSampleRateSubmenu, wParam, text, ARRAYSIZE(text), MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             g_Audio.SampleRate = _wtoi(text);
             CPWIN_Audio_Start();
@@ -714,9 +731,8 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_BlockSize_2048:
         {
             CPWIN_Audio_Stop();
-            const SIZE_T MaxChars = 8;
-            WCHAR        text[MaxChars];
-            int numCharsCopied = GetMenuStringW(g_Menus.hBlockSizeSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
+            WCHAR text[8];
+            int numCharsCopied = GetMenuStringW(g_Menus.hBlockSizeSubmenu, wParam, text, ARRAYSIZE(text), MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
             g_Audio.BlockSize = _wtoi(text);
             CPWIN_Audio_Start();
@@ -802,66 +818,6 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     }
     }
     return DefWindowProcW(hWnd, uMsg, wParam, lParam);
-}
-
-void CPWIN_LoadPlugin()
-{
-#ifdef HOTRELOAD_LIB_PATH
-    cplug_assert(g_plugin.Library == NULL);
-#define CPLUG_GET_PROC_ADDR(name) GetProcAddress(g_plugin.Library, #name)
-    g_plugin.Library = LoadLibraryW(TEXT(HOTRELOAD_LIB_PATH));
-    cplug_assert(g_plugin.Library != NULL);
-#else // not a hotrealoding build
-#define CPLUG_GET_PROC_ADDR(func) func
-#endif
-
-    // This looks ugly because of the strict types in C++. C is ironically more elegant
-    *(LONG_PTR*)&g_plugin.libraryLoad               = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryLoad);
-    *(LONG_PTR*)&g_plugin.libraryUnload             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryUnload);
-    *(LONG_PTR*)&g_plugin.createPlugin              = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createPlugin);
-    *(LONG_PTR*)&g_plugin.destroyPlugin             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyPlugin);
-    *(LONG_PTR*)&g_plugin.getOutputBusChannelCount  = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getOutputBusChannelCount);
-    *(LONG_PTR*)&g_plugin.setSampleRateAndBlockSize = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSampleRateAndBlockSize);
-    *(LONG_PTR*)&g_plugin.process                   = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_process);
-    *(LONG_PTR*)&g_plugin.saveState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_saveState);
-    *(LONG_PTR*)&g_plugin.loadState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_loadState);
-
-    *(LONG_PTR*)&g_plugin.createGUI      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createGUI);
-    *(LONG_PTR*)&g_plugin.destroyGUI     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyGUI);
-    *(LONG_PTR*)&g_plugin.setParent      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setParent);
-    *(LONG_PTR*)&g_plugin.setVisible     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setVisible);
-    *(LONG_PTR*)&g_plugin.setScaleFactor = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setScaleFactor);
-    *(LONG_PTR*)&g_plugin.getSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getSize);
-    *(LONG_PTR*)&g_plugin.checkSize      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_checkSize);
-    *(LONG_PTR*)&g_plugin.setSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSize);
-
-    cplug_assert(NULL != g_plugin.libraryLoad);
-    cplug_assert(NULL != g_plugin.libraryUnload);
-    cplug_assert(NULL != g_plugin.createPlugin);
-    cplug_assert(NULL != g_plugin.destroyPlugin);
-    cplug_assert(NULL != g_plugin.getOutputBusChannelCount);
-    cplug_assert(NULL != g_plugin.setSampleRateAndBlockSize);
-    cplug_assert(NULL != g_plugin.process);
-    cplug_assert(NULL != g_plugin.saveState);
-    cplug_assert(NULL != g_plugin.loadState);
-
-    cplug_assert(NULL != g_plugin.createGUI);
-    cplug_assert(NULL != g_plugin.destroyGUI);
-    cplug_assert(NULL != g_plugin.setParent);
-    cplug_assert(NULL != g_plugin.setVisible);
-    cplug_assert(NULL != g_plugin.setScaleFactor);
-    cplug_assert(NULL != g_plugin.getSize);
-    cplug_assert(NULL != g_plugin.checkSize);
-    cplug_assert(NULL != g_plugin.setSize);
-
-    g_plugin.libraryLoad();
-    g_plugin.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-    g_plugin.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
-    g_plugin.HostContext.rescan         = CPWIN_HostContext_Rescan;
-    g_plugin.HostContext.getHostName    = CPWIN_HostContext_GetHostName;
-
-    g_plugin.UserPlugin = g_plugin.createPlugin(&g_plugin.HostContext);
-    cplug_assert(g_plugin.UserPlugin != NULL);
 }
 
 #ifdef HOTRELOAD_WATCH_DIR
@@ -965,7 +921,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
     }
 
     int throttlereload = 0;
-    while (g_FlagExitFileWatchThread == 0)
+    while (g_Hotreload.FlagExitFileWatchThread == 0)
     {
         DWORD result = WaitForSingleObject(overlapped.hEvent, 50);
 
@@ -1019,7 +975,256 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
     }
     return 0;
 }
-#endif // HOTRELOAD_WATCH_DIR
+
+const WCHAR* CPWIN_GetFileNameW(const WCHAR* path)
+{
+    const WCHAR* filename = NULL;
+    for (const WCHAR* c = path; *c != 0; c++)
+    {
+        if (*c == L'\\')
+            filename = c + 1;
+    }
+    return filename;
+}
+const WCHAR* CPWIN_GetFileExtensionW(const WCHAR* path)
+{
+    const WCHAR* ext = NULL;
+    const WCHAR* c   = path;
+    for (c = path; *c != 0; c++)
+    {
+        if (*c == L'.')
+            ext = c;
+    }
+    if (!ext)
+        ext = c;
+    return ext;
+}
+
+void CPWIN_DuplicatePatchAndLoadDll()
+{
+    cplug_assert(g_Hotreload.hPluginDLL == NULL);
+
+    const WCHAR* CurrentDllPath        = TEXT(HOTRELOAD_LIB_PATH);
+    WCHAR        NextDllPath[MAX_PATH] = {0};
+    WCHAR        NextPdbPath[MAX_PATH] = {0};
+
+    HANDLE hFile        = NULL;
+    HANDLE hFileMapping = NULL;
+    LPVOID pFileView    = 0;
+    BOOL   PdbPatched   = FALSE;
+
+    g_Hotreload.Version++;
+
+    // Build paths
+    {
+        cplug_assert(PathFileExistsW(CurrentDllPath));
+        const WCHAR* Ext = CPWIN_GetFileExtensionW(CurrentDllPath);
+        cplug_assert(Ext != NULL);
+
+        // Create paths with the same name, but with a version suffix
+        int len = (int)(Ext - CurrentDllPath);
+        _snwprintf(NextDllPath, MAX_PATH, L"%.*s%u.dll", len, CurrentDllPath, g_Hotreload.Version);
+        _snwprintf(NextPdbPath, MAX_PATH, L"%.*s%u.pdb", len, CurrentDllPath, g_Hotreload.Version);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-copyfilew
+        BOOL ok = CopyFileW(CurrentDllPath, NextDllPath, FALSE);
+        cplug_assert(ok != 0);
+        // User has only supplied the DLL path. The actual .pdb path cannot be guaranteed to share the same filename
+        // However, Windows compilers will embed the associated .pdb path within the generated DLLs.
+        // We will find that path in the DLL, duplicate it, and patch the DLL at the same time
+    }
+
+    // Get file mapping
+    {
+        hFile = CreateFileW(
+            NextDllPath,
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ,
+            NULL,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL);
+        if (hFile == INVALID_HANDLE_VALUE)
+            hFile = NULL;
+        if (hFile)
+            hFileMapping = CreateFileMappingW(hFile, NULL, PAGE_READWRITE, 0, 0, NULL);
+
+        if (hFileMapping)
+            pFileView = MapViewOfFile(hFileMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+        cplug_assert(pFileView);
+    }
+
+    // Algorithm for finding the correct spot to patch the DLL is taken from github.com/fungos.cr, only translated from
+    // C++ to C, refactored, and with more comments.
+    // Further reading: https://github.com/fungos/cr
+    // https://fungos.github.io/cr-simple-c-hot-reload/
+    // http://www.godevtool.com/Other/pdb.htm
+    // https://www.debuginfo.com/articles/debuginfomatch.html
+    if (pFileView)
+    {
+        // https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/System/SystemServices/struct.IMAGE_DOS_HEADER.html
+        const PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)pFileView;
+        cplug_assert(DosHeader->e_magic == IMAGE_DOS_SIGNATURE);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_nt_headers64
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_file_header
+        // e_lfanew = offset of exe in file header
+        const PIMAGE_NT_HEADERS NTHeaders = (PIMAGE_NT_HEADERS)((BYTE*)DosHeader + DosHeader->e_lfanew);
+        cplug_assert(NTHeaders->Signature == IMAGE_NT_SIGNATURE);
+        // Clang appears to use HDR64, while MSVC appears to use HDR32
+        cplug_assert(
+            NTHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+            NTHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_section_header
+        PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(NTHeaders);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_optional_header32
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_data_directory
+        const IMAGE_DATA_DIRECTORY EntryDebug = NTHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+        // Clang will create an entry of size sizeof(IMAGE_DEBUG_DIRECTORY)
+        // MSVC will create an entry of size 2 * sizeof(IMAGE_DEBUG_DIRECTORY)
+        cplug_assert(EntryDebug.VirtualAddress);
+        cplug_assert(EntryDebug.Size >= sizeof(IMAGE_DEBUG_DIRECTORY));
+
+        enum
+        {
+            PDB2_SIGNATURE = '01BN',
+            PDB7_SIGNATURE = 'SDSR',
+        };
+        struct CV_INFO_PDB70
+        {
+            DWORD CvSignature;
+            GUID  Signature;
+            DWORD Age;
+            BYTE  PdbFileName[];
+        };
+
+        struct CV_INFO_PDB70* Info = NULL;
+        for (WORD i = 0; i < NTHeaders->FileHeader.NumberOfSections; i++, section++)
+        {
+            const DWORD pStart = section->VirtualAddress;
+            const DWORD pEnd   = section->VirtualAddress + section->Misc.VirtualSize;
+            if (EntryDebug.VirtualAddress >= pStart && EntryDebug.VirtualAddress < pEnd)
+            {
+                const DWORD diff   = section->VirtualAddress - section->PointerToRawData;
+                const DWORD offset = EntryDebug.VirtualAddress - diff;
+
+                // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_debug_directory
+                const PIMAGE_DEBUG_DIRECTORY dir = (PIMAGE_DEBUG_DIRECTORY)((BYTE*)pFileView + offset);
+
+                cplug_assert(dir->Type == IMAGE_DEBUG_TYPE_CODEVIEW);
+                cplug_assert(dir->SizeOfData >= sizeof(*Info));
+
+                Info = (struct CV_INFO_PDB70*)((BYTE*)pFileView + dir->PointerToRawData);
+                cplug_assert(Info->CvSignature == PDB7_SIGNATURE);
+
+                break;
+            }
+        }
+        cplug_assert(Info);
+        if (Info)
+        {
+            WCHAR CurrentPdbPath[MAX_PATH] = {0};
+
+            // This is the path embedded in the DLL by your compiler (eg. C:\\path\\to\\plugin.pdb)
+            char* EmbeddedPdbPath = (char*)Info->PdbFileName;
+
+            // Duplicate PDB
+            int ok = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, EmbeddedPdbPath, -1, CurrentPdbPath, MAX_PATH);
+            cplug_assert(ok);
+            ok = CopyFileW(CurrentPdbPath, NextPdbPath, FALSE);
+            cplug_assert(ok);
+
+            // Patch DLL with new path
+            // Because we append a version number to the file name, the string length will be longer.
+            // Replacing the path with only the new filename (no directory) appears to work fine
+            const WCHAR* NextPdbFilename    = CPWIN_GetFileNameW(NextPdbPath);
+            size_t       EmbeddedPdbPathLen = 1 + strlen(EmbeddedPdbPath);
+            cplug_assert(EmbeddedPdbPathLen >= wcslen(NextPdbFilename));
+            ok = snprintf(EmbeddedPdbPath, EmbeddedPdbPathLen, "%ls", NextPdbFilename);
+            cplug_assert(ok);
+
+            // Loading the DLL right here doesn't appear to work.
+            // After unmapping the the file & closing all the handles, it works fine
+            PdbPatched = TRUE;
+        }
+    }
+
+    if (pFileView)
+        UnmapViewOfFile(pFileView);
+    if (hFileMapping)
+        CloseHandle(hFileMapping);
+    if (hFile)
+        CloseHandle(hFile);
+
+    if (PdbPatched)
+    {
+        g_Hotreload.hPluginDLL = LoadLibraryW(NextDllPath);
+        // DWORD err              = GetLastError();
+        cplug_assert(g_Hotreload.hPluginDLL != NULL);
+    }
+}
+#endif // HOTRELOAD
+
+void CPWIN_LoadPlugin()
+{
+#ifdef HOTRELOAD_WATCH_DIR
+    CPWIN_DuplicatePatchAndLoadDll();
+    cplug_assert(g_Hotreload.hPluginDLL != NULL);
+#define CPLUG_GET_PROC(name) GetProcAddress(g_Hotreload.hPluginDLL, #name)
+#else // not a hotrealoding build
+#define CPLUG_GET_PROC(func) func
+#endif // Hotreload
+
+    // This looks ugly because of the strict types in C++. C is ironically more elegant
+    *(LONG_PTR*)&g_plugin.libraryLoad               = (LONG_PTR)CPLUG_GET_PROC(cplug_libraryLoad);
+    *(LONG_PTR*)&g_plugin.libraryUnload             = (LONG_PTR)CPLUG_GET_PROC(cplug_libraryUnload);
+    *(LONG_PTR*)&g_plugin.createPlugin              = (LONG_PTR)CPLUG_GET_PROC(cplug_createPlugin);
+    *(LONG_PTR*)&g_plugin.destroyPlugin             = (LONG_PTR)CPLUG_GET_PROC(cplug_destroyPlugin);
+    *(LONG_PTR*)&g_plugin.getOutputBusChannelCount  = (LONG_PTR)CPLUG_GET_PROC(cplug_getOutputBusChannelCount);
+    *(LONG_PTR*)&g_plugin.setSampleRateAndBlockSize = (LONG_PTR)CPLUG_GET_PROC(cplug_setSampleRateAndBlockSize);
+    *(LONG_PTR*)&g_plugin.process                   = (LONG_PTR)CPLUG_GET_PROC(cplug_process);
+    *(LONG_PTR*)&g_plugin.saveState                 = (LONG_PTR)CPLUG_GET_PROC(cplug_saveState);
+    *(LONG_PTR*)&g_plugin.loadState                 = (LONG_PTR)CPLUG_GET_PROC(cplug_loadState);
+
+    *(LONG_PTR*)&g_plugin.createGUI      = (LONG_PTR)CPLUG_GET_PROC(cplug_createGUI);
+    *(LONG_PTR*)&g_plugin.destroyGUI     = (LONG_PTR)CPLUG_GET_PROC(cplug_destroyGUI);
+    *(LONG_PTR*)&g_plugin.setParent      = (LONG_PTR)CPLUG_GET_PROC(cplug_setParent);
+    *(LONG_PTR*)&g_plugin.setVisible     = (LONG_PTR)CPLUG_GET_PROC(cplug_setVisible);
+    *(LONG_PTR*)&g_plugin.setScaleFactor = (LONG_PTR)CPLUG_GET_PROC(cplug_setScaleFactor);
+    *(LONG_PTR*)&g_plugin.getSize        = (LONG_PTR)CPLUG_GET_PROC(cplug_getSize);
+    *(LONG_PTR*)&g_plugin.checkSize      = (LONG_PTR)CPLUG_GET_PROC(cplug_checkSize);
+    *(LONG_PTR*)&g_plugin.setSize        = (LONG_PTR)CPLUG_GET_PROC(cplug_setSize);
+
+    cplug_assert(NULL != g_plugin.libraryLoad);
+    cplug_assert(NULL != g_plugin.libraryUnload);
+    cplug_assert(NULL != g_plugin.createPlugin);
+    cplug_assert(NULL != g_plugin.destroyPlugin);
+    cplug_assert(NULL != g_plugin.getOutputBusChannelCount);
+    cplug_assert(NULL != g_plugin.setSampleRateAndBlockSize);
+    cplug_assert(NULL != g_plugin.process);
+    cplug_assert(NULL != g_plugin.saveState);
+    cplug_assert(NULL != g_plugin.loadState);
+
+    cplug_assert(NULL != g_plugin.createGUI);
+    cplug_assert(NULL != g_plugin.destroyGUI);
+    cplug_assert(NULL != g_plugin.setParent);
+    cplug_assert(NULL != g_plugin.setVisible);
+    cplug_assert(NULL != g_plugin.setScaleFactor);
+    cplug_assert(NULL != g_plugin.getSize);
+    cplug_assert(NULL != g_plugin.checkSize);
+    cplug_assert(NULL != g_plugin.setSize);
+
+    g_plugin.libraryLoad();
+    g_plugin.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
+    g_plugin.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
+    g_plugin.HostContext.rescan         = CPWIN_HostContext_Rescan;
+    g_plugin.HostContext.getHostName    = CPWIN_HostContext_GetHostName;
+
+    g_plugin.UserPlugin = g_plugin.createPlugin(&g_plugin.HostContext);
+    cplug_assert(g_plugin.UserPlugin != NULL);
+}
 
 #pragma region MENUS
 
@@ -1506,13 +1711,13 @@ void CPWIN_Audio_SetDevice(int deviceIdx)
 
 void CPWIN_Audio_Start()
 {
-#ifdef HOTRELOAD_BUILD_COMMAND
-    if (g_plugin.Library == NULL)
+#ifdef HOTRELOAD_WATCH_DIR
+    if (g_Hotreload.hPluginDLL == NULL)
     {
         cplug_log("[FAILED] Called CPWIN_Audio_Start when no plugin is loaded");
         return;
     }
-#endif
+#endif // Hotreload
     cplug_assert(g_Audio.SampleRate != 0);
     cplug_assert(g_Audio.BlockSize != 0);
     static const IID _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};

@@ -1,4 +1,5 @@
 .cache
+.clangd
 .DS_Store
 .ideas
 build
