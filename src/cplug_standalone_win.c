@@ -33,10 +33,6 @@
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "cfgmgr32.lib")
 
-#ifndef ARRSIZE
-#define ARRSIZE(arr) (sizeof(arr) / sizeof(arr[0]))
-#endif
-
 #define cplug_assert(cond) (cond) ? (void)0 : __debugbreak()
 
 #if !defined(CPLUG_MIDI_BUFFER_COUNT) || !defined(CPLUG_MIDI_BUFFER_SIZE) || !defined(CPLUG_MIDI_RINGBUFFER_SIZE)
@@ -320,11 +316,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // INIT MIDI //
     ///////////////
 
-    for (int i = 0; i < ARRSIZE(g_MIDI.SystemBuffers); i++)
+    for (int i = 0; i < ARRAYSIZE(g_MIDI.SystemBuffers); i++)
     {
         MIDIHDR* head        = &g_MIDI.SystemBuffers[i].header;
         head->lpData         = &g_MIDI.SystemBuffers[i].buffer[0];
-        head->dwBufferLength = ARRSIZE(g_MIDI.SystemBuffers[i].buffer);
+        head->dwBufferLength = ARRAYSIZE(g_MIDI.SystemBuffers[i].buffer);
         head->dwUser         = i;
     }
     CPWIN_MIDI_ConnectInput(0);
@@ -1095,7 +1091,7 @@ void CPWIN_Menu_RefreshAudioOutputs()
             if (varName.vt != VT_EMPTY)
             {
                 UINT uFlags = MF_STRING;
-                if (0 == wcsncmp(deviceID, g_Audio.DeviceIDBuffer, ARRSIZE(g_Audio.DeviceIDBuffer)))
+                if (0 == wcsncmp(deviceID, g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer)))
                     uFlags |= MF_CHECKED;
 
                 AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, varName.pwszVal);
@@ -1206,7 +1202,8 @@ void CALLBACK CPWIN_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
 
         g_MIDI.RingBuffer.buffer[writePos] = midi;
         writePos++;
-        writePos = writePos % ARRSIZE(g_MIDI.RingBuffer.buffer);
+        if (writePos == ARRAYSIZE(g_MIDI.RingBuffer.buffer))
+            writePos = 0;
         _InterlockedExchange(&g_MIDI.RingBuffer.writePos, writePos);
     }
     /* handle sysex*/
@@ -1229,7 +1226,7 @@ UINT CPWIN_MIDI_ConnectInput(UINT portNum)
     result = midiInGetDevCapsW(0, (MIDIINCAPSW*)&g_MIDI.LastConnectedInput, sizeof(g_MIDI.LastConnectedInput));
     cplug_assert(result == MMSYSERR_NOERROR);
 
-    for (int i = 0; i < ARRSIZE(g_MIDI.SystemBuffers); i++)
+    for (int i = 0; i < ARRAYSIZE(g_MIDI.SystemBuffers); i++)
     {
         result =
             midiInPrepareHeader(g_MIDI.hInput, &g_MIDI.SystemBuffers[i].header, sizeof(g_MIDI.SystemBuffers[i].header));
@@ -1266,7 +1263,7 @@ void CPWIN_MIDI_DisconnectInput()
         midiInReset(g_MIDI.hInput);
         midiInStop(g_MIDI.hInput);
 
-        for (int i = 0; i < ARRSIZE(g_MIDI.SystemBuffers); i++)
+        for (int i = 0; i < ARRAYSIZE(g_MIDI.SystemBuffers); i++)
         {
             MIDIHDR* head = &g_MIDI.SystemBuffers[i].header;
             result        = midiInUnprepareHeader(g_MIDI.hInput, head, sizeof(*head));
@@ -1307,7 +1304,8 @@ bool CPWIN_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
         event->midi.bytesAsInt = msg->bytesAsInt;
 
         tail++;
-        tail %= CPLUG_MIDI_RINGBUFFER_SIZE;
+        if (tail == CPLUG_MIDI_RINGBUFFER_SIZE)
+            tail = 0;
 
         g_MIDI.RingBuffer.readPos = tail;
         return true;
@@ -1501,8 +1499,8 @@ void CPWIN_Audio_SetDevice(int deviceIdx)
     WCHAR* audioDeviceID = NULL;
     // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid
     g_Audio.pIMMDevice->lpVtbl->GetId(g_Audio.pIMMDevice, &audioDeviceID);
-    wcscpy_s(g_Audio.DeviceIDBuffer, ARRSIZE(g_Audio.DeviceIDBuffer), audioDeviceID);
-    g_Audio.DeviceIDBuffer[ARRSIZE(g_Audio.DeviceIDBuffer) - 1] = 0;
+    wcscpy_s(g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer), audioDeviceID);
+    g_Audio.DeviceIDBuffer[ARRAYSIZE(g_Audio.DeviceIDBuffer) - 1] = 0;
     CoTaskMemFree(audioDeviceID);
 }
 
