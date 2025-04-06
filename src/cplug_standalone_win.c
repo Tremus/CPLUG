@@ -129,6 +129,31 @@ struct CPWIN_Hotreload
     HANDLE hFileWatchThread;
 } g_Hotreload;
 
+const WCHAR* CPWIN_GetFileNameW(const WCHAR* path)
+{
+    const WCHAR* filename = NULL;
+    for (const WCHAR* c = path; *c != 0; c++)
+    {
+        if (*c == L'\\')
+            filename = c + 1;
+    }
+    return filename;
+}
+
+const WCHAR* CPWIN_GetFileExtensionW(const WCHAR* path)
+{
+    const WCHAR* ext = NULL;
+    const WCHAR* c   = path;
+    for (c = path; *c != 0; c++)
+    {
+        if (*c == L'.')
+            ext = c;
+    }
+    if (!ext)
+        ext = c;
+    return ext;
+}
+
 // Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
 struct
 {
@@ -534,6 +559,23 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         }
         if (g_PluginState.Data)
             VirtualFree(g_PluginState.Data, g_PluginState.BytesReserved, 0);
+
+        // Cleanup old versions
+        // Debuggers appear to release their lock on previously loaded DLLs after the WM_CLOSE message is sent
+        for (UINT PrevVersion = g_Hotreload.Version; PrevVersion > 0; PrevVersion--)
+        {
+            const WCHAR* CurrentDllPath            = TEXT(HOTRELOAD_LIB_PATH);
+            const WCHAR* Ext                       = CPWIN_GetFileExtensionW(CurrentDllPath);
+            WCHAR        PrevVersionPath[MAX_PATH] = {0};
+
+            int len = (int)(Ext - CurrentDllPath);
+            _snwprintf(PrevVersionPath, MAX_PATH, L"%.*s%u.dll", len, CurrentDllPath, PrevVersion);
+            BOOL ok = DeleteFileW(PrevVersionPath);
+            cplug_assert(ok);
+            _snwprintf(PrevVersionPath, MAX_PATH, L"%.*s%u.pdb", len, CurrentDllPath, PrevVersion);
+            ok = DeleteFileW(PrevVersionPath);
+            cplug_assert(ok);
+        }
 #endif
         DestroyWindow(hWnd);
         return 0;
@@ -976,30 +1018,8 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
     return 0;
 }
 
-const WCHAR* CPWIN_GetFileNameW(const WCHAR* path)
-{
-    const WCHAR* filename = NULL;
-    for (const WCHAR* c = path; *c != 0; c++)
-    {
-        if (*c == L'\\')
-            filename = c + 1;
-    }
-    return filename;
-}
-const WCHAR* CPWIN_GetFileExtensionW(const WCHAR* path)
-{
-    const WCHAR* ext = NULL;
-    const WCHAR* c   = path;
-    for (c = path; *c != 0; c++)
-    {
-        if (*c == L'.')
-            ext = c;
-    }
-    if (!ext)
-        ext = c;
-    return ext;
-}
-
+// Debuggers on Windows have a tough time loading an updated DLL and PDB with the same name of a previously loaded DLL
+// So we simply duplicate the names
 void CPWIN_DuplicatePatchAndLoadDll()
 {
     cplug_assert(g_Hotreload.hPluginDLL == NULL);
@@ -1029,9 +1049,9 @@ void CPWIN_DuplicatePatchAndLoadDll()
         // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-copyfilew
         BOOL ok = CopyFileW(CurrentDllPath, NextDllPath, FALSE);
         cplug_assert(ok != 0);
-        // User has only supplied the DLL path. The actual .pdb path cannot be guaranteed to share the same filename
-        // However, Windows compilers will embed the associated .pdb path within the generated DLLs.
-        // We will find that path in the DLL, duplicate it, and patch the DLL at the same time
+        // User has only supplied the DLL path with HOTRELOAD_LIB_PATH. The .pdb cannot be guaranteed to share the same
+        // filename However, Windows compilers will embed the associated .pdb path within the generated DLLs. We will
+        // find that path in the DLL, duplicate it, and patch the DLL at the same time
     }
 
     // Get file mapping
@@ -1060,6 +1080,7 @@ void CPWIN_DuplicatePatchAndLoadDll()
     // https://fungos.github.io/cr-simple-c-hot-reload/
     // http://www.godevtool.com/Other/pdb.htm
     // https://www.debuginfo.com/articles/debuginfomatch.html
+    // https://learn.microsoft.com/en-us/previous-versions/ms809762(v=msdn.10)
     if (pFileView)
     {
         // https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/System/SystemServices/struct.IMAGE_DOS_HEADER.html
@@ -1069,23 +1090,22 @@ void CPWIN_DuplicatePatchAndLoadDll()
         // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_nt_headers64
         // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_file_header
         // e_lfanew = offset of exe in file header
-        const PIMAGE_NT_HEADERS NTHeaders = (PIMAGE_NT_HEADERS)((BYTE*)DosHeader + DosHeader->e_lfanew);
-        cplug_assert(NTHeaders->Signature == IMAGE_NT_SIGNATURE);
+        const PIMAGE_NT_HEADERS pNTHeader = (PIMAGE_NT_HEADERS)((BYTE*)DosHeader + DosHeader->e_lfanew);
+        cplug_assert(pNTHeader->Signature == IMAGE_NT_SIGNATURE);
         // Clang appears to use HDR64, while MSVC appears to use HDR32
         cplug_assert(
-            NTHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
-            NTHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC);
-
-        // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_section_header
-        PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(NTHeaders);
+            pNTHeader->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+            pNTHeader->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC);
 
         // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_optional_header32
         // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_data_directory
-        const IMAGE_DATA_DIRECTORY EntryDebug = NTHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+        const DWORD RVA = pNTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG].VirtualAddress;
         // Clang will create an entry of size sizeof(IMAGE_DEBUG_DIRECTORY)
         // MSVC will create an entry of size 2 * sizeof(IMAGE_DEBUG_DIRECTORY)
-        cplug_assert(EntryDebug.VirtualAddress);
-        cplug_assert(EntryDebug.Size >= sizeof(IMAGE_DEBUG_DIRECTORY));
+        cplug_assert(RVA);
+        cplug_assert(
+            pNTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG].VirtualAddress >=
+            sizeof(IMAGE_DEBUG_DIRECTORY));
 
         enum
         {
@@ -1101,14 +1121,17 @@ void CPWIN_DuplicatePatchAndLoadDll()
         };
 
         struct CV_INFO_PDB70* Info = NULL;
-        for (WORD i = 0; i < NTHeaders->FileHeader.NumberOfSections; i++, section++)
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_section_header
+        // https://learn.microsoft.com/en-us/previous-versions/ms809762(v=msdn.10)#the-section-table
+        PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(pNTHeader);
+        for (WORD i = 0; i < pNTHeader->FileHeader.NumberOfSections; i++, section++)
         {
-            const DWORD pStart = section->VirtualAddress;
-            const DWORD pEnd   = section->VirtualAddress + section->Misc.VirtualSize;
-            if (EntryDebug.VirtualAddress >= pStart && EntryDebug.VirtualAddress < pEnd)
+            // https://learn.microsoft.com/en-us/previous-versions/ms809762(v=msdn.10)#win32-and-pe-basic-concepts
+            if (RVA >= section->VirtualAddress && RVA < (section->VirtualAddress + section->Misc.VirtualSize))
             {
                 const DWORD diff   = section->VirtualAddress - section->PointerToRawData;
-                const DWORD offset = EntryDebug.VirtualAddress - diff;
+                const DWORD offset = RVA - diff;
 
                 // https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_debug_directory
                 const PIMAGE_DEBUG_DIRECTORY dir = (PIMAGE_DEBUG_DIRECTORY)((BYTE*)pFileView + offset);
@@ -1146,7 +1169,7 @@ void CPWIN_DuplicatePatchAndLoadDll()
             cplug_assert(ok);
 
             // Loading the DLL right here doesn't appear to work.
-            // After unmapping the the file & closing all the handles, it works fine
+            // After unmapping the file & closing all the handles, it works fine
             PdbPatched = TRUE;
         }
     }
