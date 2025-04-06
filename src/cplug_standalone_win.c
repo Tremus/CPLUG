@@ -89,10 +89,10 @@ struct CPWIN_Plugin
     void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
-} _gCPLUG;
+} g_plugin;
 // Loads the DLL + loads symbols for library functions
 void CPWIN_LoadPlugin();
-void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent*) {}
+void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent* e) {}
 void CPWIN_HostContext_Rescan(CplugHostContext* ctx, uint32_t flags) {}
 bool CPWIN_HostContext_GetHostName(CplugHostContext* ctx, char* buf, size_t buflen)
 {
@@ -110,28 +110,28 @@ struct CPWIN_PluginStateContext
 
     SIZE_T BytesWritten;
     SIZE_T BytesRead;
-} _gPluginState;
+} g_PluginState;
 int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
 int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
 
 // File watch thread
 DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd);
-int          _gFlagExitFileWatchThread;
-HANDLE       _ghWatchThread;
+int          g_FlagExitFileWatchThread;
+HANDLE       g_hFileWatchThread;
 
 // Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
 struct
 {
     LARGE_INTEGER freq, start;
-} _gTimer;
+} g_Timer;
 static inline INT64 CPWIN_GetNowNS()
 {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    now.QuadPart -= _gTimer.start.QuadPart;
-    INT64 q       = now.QuadPart / _gTimer.freq.QuadPart;
-    INT64 r       = now.QuadPart % _gTimer.freq.QuadPart;
-    return q * 1000000000 + r * 1000000000 / _gTimer.freq.QuadPart;
+    now.QuadPart -= g_Timer.start.QuadPart;
+    INT64 q       = now.QuadPart / g_Timer.freq.QuadPart;
+    INT64 r       = now.QuadPart % g_Timer.freq.QuadPart;
+    return q * 1000000000 + r * 1000000000 / g_Timer.freq.QuadPart;
 }
 #endif // HOTRELOAD_WATCH_DIR
 
@@ -176,7 +176,7 @@ struct
         MIDIHDR header;
         char    buffer[CPLUG_MIDI_BUFFER_SIZE];
     } SystemBuffers[CPLUG_MIDI_BUFFER_COUNT];
-} _gMIDI;
+} g_MIDI;
 // Main Thread
 UINT CPWIN_MIDI_ConnectInput(UINT portNum);
 void CPWIN_MIDI_DisconnectInput();
@@ -206,7 +206,7 @@ struct
     UINT32 NumChannels;
     UINT32 SampleRate;
     UINT32 BlockSize;
-} _gAudio;
+} g_Audio;
 // Audio Thread
 DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data);
 // Main Thread
@@ -259,7 +259,7 @@ struct
 
     HMENU hMIDIMenu;
     HMENU hMIDIInputsSubMenu;
-} _gMenus;
+} g_Menus;
 void CPWIN_Menu_RefreshSampleRates();
 void CPWIN_Menu_RefreshBlockSizes();
 void CPWIN_Menu_RefreshAudioOutputs();
@@ -272,7 +272,7 @@ DWORD CALLBACK CPWIN_HandleDeviceChange(
     CM_NOTIFY_ACTION      Action,
     PCM_NOTIFY_EVENT_DATA EventData,
     DWORD                 EventDataSize);
-HCMNOTIFICATION _ghCMNotification;
+HCMNOTIFICATION g_hCMNotification;
 
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -304,15 +304,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     }
 
 #ifdef HOTRELOAD_WATCH_DIR
-    QueryPerformanceFrequency(&_gTimer.freq);
-    QueryPerformanceCounter(&_gTimer.start);
-    memset(&_gPluginState, 0, sizeof(_gPluginState));
+    QueryPerformanceFrequency(&g_Timer.freq);
+    QueryPerformanceCounter(&g_Timer.start);
+    memset(&g_PluginState, 0, sizeof(g_PluginState));
 #endif
 
-    memset(&_gCPLUG, 0, sizeof(_gCPLUG));
-    memset(&_gMIDI, 0, sizeof(_gMIDI));
-    memset(&_gAudio, 0, sizeof(_gAudio));
-    memset(&_gMenus, 0, sizeof(_gMenus));
+    memset(&g_plugin, 0, sizeof(g_plugin));
+    memset(&g_MIDI, 0, sizeof(g_MIDI));
+    memset(&g_Audio, 0, sizeof(g_Audio));
+    memset(&g_Menus, 0, sizeof(g_Menus));
 
     CPWIN_LoadPlugin();
 
@@ -320,11 +320,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // INIT MIDI //
     ///////////////
 
-    for (int i = 0; i < ARRSIZE(_gMIDI.SystemBuffers); i++)
+    for (int i = 0; i < ARRSIZE(g_MIDI.SystemBuffers); i++)
     {
-        MIDIHDR* head        = &_gMIDI.SystemBuffers[i].header;
-        head->lpData         = &_gMIDI.SystemBuffers[i].buffer[0];
-        head->dwBufferLength = ARRSIZE(_gMIDI.SystemBuffers[i].buffer);
+        MIDIHDR* head        = &g_MIDI.SystemBuffers[i].header;
+        head->lpData         = &g_MIDI.SystemBuffers[i].buffer[0];
+        head->dwBufferLength = ARRSIZE(g_MIDI.SystemBuffers[i].buffer);
         head->dwUser         = i;
     }
     CPWIN_MIDI_ConnectInput(0);
@@ -333,10 +333,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // INIT AUDIO //
     ////////////////
 
-    _gAudio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
-    _gAudio.BlockSize   = CPLUG_DEFAULT_BLOCK_SIZE;
-    _gAudio.NumChannels = _gCPLUG.getOutputBusChannelCount(_gCPLUG.UserPlugin, 0);
-    cplug_assert(_gAudio.NumChannels == 1 || _gAudio.NumChannels == 2); // TODO: supported other configurations
+    g_Audio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
+    g_Audio.BlockSize   = CPLUG_DEFAULT_BLOCK_SIZE;
+    g_Audio.NumChannels = g_plugin.getOutputBusChannelCount(g_plugin.UserPlugin, 0);
+    cplug_assert(g_Audio.NumChannels == 1 || g_Audio.NumChannels == 2); // TODO: supported other configurations
 
     // Scan for device
     static const GUID _CLSID_MMDeviceEnumerator =
@@ -348,12 +348,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         0,
         CLSCTX_ALL,
         (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_IID_IMMDeviceEnumerator),
-        (void**)&_gAudio.pIMMDeviceEnumerator);
+        (void**)&g_Audio.pIMMDeviceEnumerator);
     cplug_assert(!FAILED(hr));
 
     CPWIN_Audio_SetDevice(-1); // -1 == default device
     CPWIN_Audio_Start();
-    cplug_assert(_gAudio.ProcessBuffer);
+    cplug_assert(g_Audio.ProcessBuffer);
 
     /////////////////
     // INIT WINDOW //
@@ -382,11 +382,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     DPI_AWARENESS_CONTEXT prevDpiCtx = GetThreadDpiAwarenessContext();
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
 
-    _gCPLUG.UserGUI = _gCPLUG.createGUI(_gCPLUG.UserPlugin);
-    cplug_assert(_gCPLUG.UserGUI != NULL);
+    g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
+    cplug_assert(g_plugin.UserGUI != NULL);
 
     uint32_t guiWidth, guiHeight;
-    _gCPLUG.getSize(_gCPLUG.UserGUI, &guiWidth, &guiHeight);
+    g_plugin.getSize(g_plugin.UserGUI, &guiWidth, &guiHeight);
 
     RECT rect = {0, 0, (LONG)guiWidth, (LONG)guiHeight};
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
@@ -416,29 +416,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // INIT MENU //
     ///////////////
 
-    _gMenus.hMain = CreateMenu();
+    g_Menus.hMain = CreateMenu();
 
-    _gMenus.hAudioMenu          = CreatePopupMenu();
-    _gMenus.hSampleRateSubmenu  = CreatePopupMenu();
-    _gMenus.hBlockSizeSubmenu   = CreatePopupMenu();
-    _gMenus.hAudioOutputSubmenu = CreatePopupMenu();
-    _gMenus.hMIDIMenu           = CreatePopupMenu();
-    _gMenus.hMIDIInputsSubMenu  = CreatePopupMenu();
+    g_Menus.hAudioMenu          = CreatePopupMenu();
+    g_Menus.hSampleRateSubmenu  = CreatePopupMenu();
+    g_Menus.hBlockSizeSubmenu   = CreatePopupMenu();
+    g_Menus.hAudioOutputSubmenu = CreatePopupMenu();
+    g_Menus.hMIDIMenu           = CreatePopupMenu();
+    g_Menus.hMIDIInputsSubMenu  = CreatePopupMenu();
 
-    AppendMenuW(_gMenus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hAudioMenu, L"Audio");
-    AppendMenuW(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hSampleRateSubmenu, L"Sample Rate");
-    AppendMenuW(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hBlockSizeSubmenu, L"Block Size");
-    AppendMenuW(_gMenus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hAudioOutputSubmenu, L"Outputs");
+    AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioMenu, L"Audio");
+    AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hSampleRateSubmenu, L"Sample Rate");
+    AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hBlockSizeSubmenu, L"Block Size");
+    AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioOutputSubmenu, L"Outputs");
 
-    AppendMenuW(_gMenus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hMIDIMenu, L"MIDI");
-    AppendMenuW(_gMenus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)_gMenus.hMIDIInputsSubMenu, L"Inputs");
+    AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIMenu, L"MIDI");
+    AppendMenuW(g_Menus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIInputsSubMenu, L"Inputs");
 
     CPWIN_Menu_RefreshSampleRates();
     CPWIN_Menu_RefreshBlockSizes();
     CPWIN_Menu_RefreshAudioOutputs();
     CPWIN_Menu_RefreshMIDIInputs();
 
-    SetMenu(hWindow, _gMenus.hMain);
+    SetMenu(hWindow, g_Menus.hMain);
 
     // Callback to detect connected/disconnected MIDI/Audio devices
     // Must be initialised afer the menu because the callback changes menu items based on new/removed devices
@@ -448,22 +448,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     notifyFilter.Flags      = CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES;
     notifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
 
-    HRESULT result = CM_Register_Notification(&notifyFilter, hWindow, CPWIN_HandleDeviceChange, &_ghCMNotification);
+    HRESULT result = CM_Register_Notification(&notifyFilter, hWindow, CPWIN_HandleDeviceChange, &g_hCMNotification);
     cplug_assert(result == CR_SUCCESS);
-    cplug_assert(_ghCMNotification != NULL);
+    cplug_assert(g_hCMNotification != NULL);
 
 #ifdef HOTRELOAD_WATCH_DIR
     // Setup file watcher
-    _gFlagExitFileWatchThread = 0;
-    _ghWatchThread            = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
-    cplug_assert(_ghWatchThread != NULL);
+    g_FlagExitFileWatchThread = 0;
+    g_hFileWatchThread        = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
+    cplug_assert(g_hFileWatchThread != NULL);
 #endif
 
     // Window ready
-    _gCPLUG.setParent(_gCPLUG.UserGUI, hWindow);
+    g_plugin.setParent(g_plugin.UserGUI, hWindow);
 
     ShowWindow(hWindow, cmdshow);
-    _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
+    g_plugin.setVisible(g_plugin.UserGUI, true);
     SetForegroundWindow(hWindow);
 
     while (GetMessageW(&msg, NULL, 0, 0))
@@ -489,17 +489,17 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         return 0;
     case WM_CLOSE: // User pressed the window X/Close button
         // Shutdown device notifications
-        CM_Unregister_Notification(_ghCMNotification);
+        CM_Unregister_Notification(g_hCMNotification);
 
         // Shutdown audio
-        if (_gAudio.hAudioEvent)
+        if (g_Audio.hAudioEvent)
             CPWIN_Audio_Stop();
-        cplug_assert(_gAudio.ProcessBuffer != NULL);
-        VirtualFree(_gAudio.ProcessBuffer, _gAudio.ProcessBufferCap, 0);
-        cplug_assert(_gAudio.pIMMDevice != NULL);
-        _gAudio.pIMMDevice->lpVtbl->Release(_gAudio.pIMMDevice);
-        cplug_assert(_gAudio.pIMMDeviceEnumerator != NULL);
-        _gAudio.pIMMDeviceEnumerator->lpVtbl->Release(_gAudio.pIMMDeviceEnumerator);
+        cplug_assert(g_Audio.ProcessBuffer != NULL);
+        VirtualFree(g_Audio.ProcessBuffer, g_Audio.ProcessBufferCap, 0);
+        cplug_assert(g_Audio.pIMMDevice != NULL);
+        g_Audio.pIMMDevice->lpVtbl->Release(g_Audio.pIMMDevice);
+        cplug_assert(g_Audio.pIMMDeviceEnumerator != NULL);
+        g_Audio.pIMMDeviceEnumerator->lpVtbl->Release(g_Audio.pIMMDeviceEnumerator);
 
         // Shutdown MIDI
         CPWIN_MIDI_DisconnectInput();
@@ -507,22 +507,22 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         // Destroy plugin
 #ifdef HOTRELOAD_WATCH_DIR
         // Stop file watcher
-        _gFlagExitFileWatchThread = 1;
-        WaitForSingleObject(_ghWatchThread, INFINITE);
-        CloseHandle(_ghWatchThread);
-        if (_gCPLUG.Library)
+        g_FlagExitFileWatchThread = 1;
+        WaitForSingleObject(g_hFileWatchThread, INFINITE);
+        CloseHandle(g_hFileWatchThread);
+        if (g_plugin.Library)
         {
 #endif
-            _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
-            _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
-            _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
-            _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
-            _gCPLUG.libraryUnload();
+            g_plugin.setVisible(g_plugin.UserGUI, false);
+            g_plugin.setParent(g_plugin.UserGUI, NULL);
+            g_plugin.destroyGUI(g_plugin.UserGUI);
+            g_plugin.destroyPlugin(g_plugin.UserPlugin);
+            g_plugin.libraryUnload();
 #ifdef HOTRELOAD_WATCH_DIR
-            FreeLibrary(_gCPLUG.Library);
+            FreeLibrary(g_plugin.Library);
         }
-        if (_gPluginState.Data)
-            VirtualFree(_gPluginState.Data, _gPluginState.BytesReserved, 0);
+        if (g_PluginState.Data)
+            VirtualFree(g_PluginState.Data, g_PluginState.BytesReserved, 0);
 #endif
         DestroyWindow(hWnd);
         return 0;
@@ -546,7 +546,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         height     -= padding_y;
         uint32_t w  = width < 0 ? 0 : width;
         uint32_t h  = height < 0 ? 0 : height;
-        _gCPLUG.checkSize(_gCPLUG.UserGUI, &w, &h);
+        g_plugin.checkSize(g_plugin.UserGUI, &w, &h);
         width   = w;
         height  = h;
         width  += padding_x;
@@ -567,16 +567,16 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         {
         case SIZE_RESTORED:
         case SIZE_MAXSHOW:
-            _gCPLUG.setSize(_gCPLUG.UserGUI, Width, Height);
-            _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
+            g_plugin.setSize(g_plugin.UserGUI, Width, Height);
+            g_plugin.setVisible(g_plugin.UserGUI, true);
             break;
         case SIZE_MINIMIZED:
         case SIZE_MAXHIDE:
-            _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
+            g_plugin.setVisible(g_plugin.UserGUI, false);
             break;
         case SIZE_MAXIMIZED:
-            _gCPLUG.checkSize(_gCPLUG.UserGUI, &Width, &Height);
-            _gCPLUG.setSize(_gCPLUG.UserGUI, Width, Height);
+            g_plugin.checkSize(g_plugin.UserGUI, &Width, &Height);
+            g_plugin.setSize(g_plugin.UserGUI, Width, Height);
             break;
         }
         return 0;
@@ -585,7 +585,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     {
         int   g_dpi  = HIWORD(wParam);
         FLOAT fscale = (float)g_dpi / USER_DEFAULT_SCREEN_DPI;
-        _gCPLUG.setScaleFactor(_gCPLUG.UserGUI, fscale);
+        g_plugin.setScaleFactor(g_plugin.UserGUI, fscale);
 
         RECT* const prcNewWindow = (RECT*)lParam;
         SetWindowPos(
@@ -607,24 +607,24 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         {
             UINT64 reloadStart = CPWIN_GetNowNS();
 
-            if (_gCPLUG.Library)
+            if (g_plugin.Library)
             {
                 // Deinit
-                _gCPLUG.setVisible(_gCPLUG.UserGUI, false);
-                _gCPLUG.setParent(_gCPLUG.UserGUI, NULL);
-                _gCPLUG.destroyGUI(_gCPLUG.UserGUI);
+                g_plugin.setVisible(g_plugin.UserGUI, false);
+                g_plugin.setParent(g_plugin.UserGUI, NULL);
+                g_plugin.destroyGUI(g_plugin.UserGUI);
 
                 CPWIN_Audio_Stop();
 
-                _gPluginState.BytesWritten = 0;
-                _gPluginState.BytesRead    = 0;
-                _gCPLUG.saveState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_WriteStateProc);
+                g_PluginState.BytesWritten = 0;
+                g_PluginState.BytesRead    = 0;
+                g_plugin.saveState(g_plugin.UserPlugin, &g_PluginState, CPWIN_WriteStateProc);
 
-                _gCPLUG.destroyPlugin(_gCPLUG.UserPlugin);
-                _gCPLUG.libraryUnload();
-                BOOL ok = FreeLibrary(_gCPLUG.Library);
+                g_plugin.destroyPlugin(g_plugin.UserPlugin);
+                g_plugin.libraryUnload();
+                BOOL ok = FreeLibrary(g_plugin.Library);
                 cplug_assert(ok);
-                memset(&_gCPLUG, 0, sizeof(_gCPLUG));
+                memset(&g_plugin, 0, sizeof(g_plugin));
             }
 
             // Using 'system()' to call our build command is way simpler, but creates some stdout buffering problems...
@@ -667,19 +667,19 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             else
             {
                 CPWIN_LoadPlugin();
-                _gCPLUG.loadState(_gCPLUG.UserPlugin, &_gPluginState, CPWIN_ReadStateProc);
+                g_plugin.loadState(g_plugin.UserPlugin, &g_PluginState, CPWIN_ReadStateProc);
 
                 CPWIN_Audio_Start();
 
-                _gCPLUG.UserGUI = _gCPLUG.createGUI(_gCPLUG.UserPlugin);
-                cplug_assert(_gCPLUG.UserGUI != NULL);
+                g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
+                cplug_assert(g_plugin.UserGUI != NULL);
 
                 RECT size;
                 GetClientRect(hWnd, &size);
-                _gCPLUG.setSize(_gCPLUG.UserGUI, size.right - size.left, size.bottom - size.top);
+                g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
 
-                _gCPLUG.setParent(_gCPLUG.UserGUI, hWnd);
-                _gCPLUG.setVisible(_gCPLUG.UserGUI, true);
+                g_plugin.setParent(g_plugin.UserGUI, hWnd);
+                g_plugin.setVisible(g_plugin.UserGUI, true);
             }
 
             UINT64 reloadEnd = CPWIN_GetNowNS();
@@ -700,9 +700,9 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             const SIZE_T MaxChars = 8;
             WCHAR        text[MaxChars];
             // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
-            int numCharsCopied = GetMenuStringW(_gMenus.hSampleRateSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
+            int numCharsCopied = GetMenuStringW(g_Menus.hSampleRateSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
-            _gAudio.SampleRate = _wtoi(text);
+            g_Audio.SampleRate = _wtoi(text);
             CPWIN_Audio_Start();
             CPWIN_Menu_RefreshSampleRates();
             break;
@@ -720,9 +720,9 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             CPWIN_Audio_Stop();
             const SIZE_T MaxChars = 8;
             WCHAR        text[MaxChars];
-            int numCharsCopied = GetMenuStringW(_gMenus.hBlockSizeSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
+            int numCharsCopied = GetMenuStringW(g_Menus.hBlockSizeSubmenu, wParam, text, MaxChars, MF_BYCOMMAND);
             cplug_assert(numCharsCopied > 0);
-            _gAudio.BlockSize = _wtoi(text);
+            g_Audio.BlockSize = _wtoi(text);
             CPWIN_Audio_Start();
             CPWIN_Menu_RefreshBlockSizes();
             break;
@@ -736,7 +736,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_HandleRemovedMIDIDevice:
         {
             fprintf(stderr, "Callback: Removed MIDI input device\n");
-            if (_gMIDI.IsConnected)
+            if (g_MIDI.IsConnected)
             {
                 UINT num = midiInGetNumDevs();
                 if (num == 0)
@@ -754,8 +754,8 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                     {
                         result = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
                         if (result == MMSYSERR_NOERROR &&
-                            memcmp(&caps.NameGuid, &_gMIDI.LastConnectedInput.NameGuid, sizeof(caps.NameGuid)) &&
-                            memcmp(&caps.ProductGuid, &_gMIDI.LastConnectedInput.ProductGuid, sizeof(caps.ProductGuid)))
+                            memcmp(&caps.NameGuid, &g_MIDI.LastConnectedInput.NameGuid, sizeof(caps.NameGuid)) &&
+                            memcmp(&caps.ProductGuid, &g_MIDI.LastConnectedInput.ProductGuid, sizeof(caps.ProductGuid)))
                             break;
                     }
                     // Failed to match our connected device
@@ -775,7 +775,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         }
         case IDM_HandleAddedMIDIDevice:
             fprintf(stderr, "Callback: New MIDI input device\n");
-            if (_gMIDI.IsConnected == 0)
+            if (g_MIDI.IsConnected == 0)
             {
                 fprintf(stderr, "Trying to connect new device\n");
                 CPWIN_MIDI_ConnectInput(0);
@@ -811,61 +811,61 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 void CPWIN_LoadPlugin()
 {
 #ifdef HOTRELOAD_LIB_PATH
-    cplug_assert(_gCPLUG.Library == NULL);
-#define CPLUG_GET_PROC_ADDR(name) GetProcAddress(_gCPLUG.Library, #name)
-    _gCPLUG.Library = LoadLibraryW(TEXT(HOTRELOAD_LIB_PATH));
-    cplug_assert(_gCPLUG.Library != NULL);
+    cplug_assert(g_plugin.Library == NULL);
+#define CPLUG_GET_PROC_ADDR(name) GetProcAddress(g_plugin.Library, #name)
+    g_plugin.Library = LoadLibraryW(TEXT(HOTRELOAD_LIB_PATH));
+    cplug_assert(g_plugin.Library != NULL);
 #else // not a hotrealoding build
 #define CPLUG_GET_PROC_ADDR(func) func
 #endif
 
     // This looks ugly because of the strict types in C++. C is ironically more elegant
-    *(LONG_PTR*)&_gCPLUG.libraryLoad               = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryLoad);
-    *(LONG_PTR*)&_gCPLUG.libraryUnload             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryUnload);
-    *(LONG_PTR*)&_gCPLUG.createPlugin              = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createPlugin);
-    *(LONG_PTR*)&_gCPLUG.destroyPlugin             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyPlugin);
-    *(LONG_PTR*)&_gCPLUG.getOutputBusChannelCount  = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getOutputBusChannelCount);
-    *(LONG_PTR*)&_gCPLUG.setSampleRateAndBlockSize = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSampleRateAndBlockSize);
-    *(LONG_PTR*)&_gCPLUG.process                   = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_process);
-    *(LONG_PTR*)&_gCPLUG.saveState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_saveState);
-    *(LONG_PTR*)&_gCPLUG.loadState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_loadState);
+    *(LONG_PTR*)&g_plugin.libraryLoad               = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryLoad);
+    *(LONG_PTR*)&g_plugin.libraryUnload             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_libraryUnload);
+    *(LONG_PTR*)&g_plugin.createPlugin              = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createPlugin);
+    *(LONG_PTR*)&g_plugin.destroyPlugin             = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyPlugin);
+    *(LONG_PTR*)&g_plugin.getOutputBusChannelCount  = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getOutputBusChannelCount);
+    *(LONG_PTR*)&g_plugin.setSampleRateAndBlockSize = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSampleRateAndBlockSize);
+    *(LONG_PTR*)&g_plugin.process                   = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_process);
+    *(LONG_PTR*)&g_plugin.saveState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_saveState);
+    *(LONG_PTR*)&g_plugin.loadState                 = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_loadState);
 
-    *(LONG_PTR*)&_gCPLUG.createGUI      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createGUI);
-    *(LONG_PTR*)&_gCPLUG.destroyGUI     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyGUI);
-    *(LONG_PTR*)&_gCPLUG.setParent      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setParent);
-    *(LONG_PTR*)&_gCPLUG.setVisible     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setVisible);
-    *(LONG_PTR*)&_gCPLUG.setScaleFactor = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setScaleFactor);
-    *(LONG_PTR*)&_gCPLUG.getSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getSize);
-    *(LONG_PTR*)&_gCPLUG.checkSize      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_checkSize);
-    *(LONG_PTR*)&_gCPLUG.setSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSize);
+    *(LONG_PTR*)&g_plugin.createGUI      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_createGUI);
+    *(LONG_PTR*)&g_plugin.destroyGUI     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_destroyGUI);
+    *(LONG_PTR*)&g_plugin.setParent      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setParent);
+    *(LONG_PTR*)&g_plugin.setVisible     = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setVisible);
+    *(LONG_PTR*)&g_plugin.setScaleFactor = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setScaleFactor);
+    *(LONG_PTR*)&g_plugin.getSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_getSize);
+    *(LONG_PTR*)&g_plugin.checkSize      = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_checkSize);
+    *(LONG_PTR*)&g_plugin.setSize        = (LONG_PTR)CPLUG_GET_PROC_ADDR(cplug_setSize);
 
-    cplug_assert(NULL != _gCPLUG.libraryLoad);
-    cplug_assert(NULL != _gCPLUG.libraryUnload);
-    cplug_assert(NULL != _gCPLUG.createPlugin);
-    cplug_assert(NULL != _gCPLUG.destroyPlugin);
-    cplug_assert(NULL != _gCPLUG.getOutputBusChannelCount);
-    cplug_assert(NULL != _gCPLUG.setSampleRateAndBlockSize);
-    cplug_assert(NULL != _gCPLUG.process);
-    cplug_assert(NULL != _gCPLUG.saveState);
-    cplug_assert(NULL != _gCPLUG.loadState);
+    cplug_assert(NULL != g_plugin.libraryLoad);
+    cplug_assert(NULL != g_plugin.libraryUnload);
+    cplug_assert(NULL != g_plugin.createPlugin);
+    cplug_assert(NULL != g_plugin.destroyPlugin);
+    cplug_assert(NULL != g_plugin.getOutputBusChannelCount);
+    cplug_assert(NULL != g_plugin.setSampleRateAndBlockSize);
+    cplug_assert(NULL != g_plugin.process);
+    cplug_assert(NULL != g_plugin.saveState);
+    cplug_assert(NULL != g_plugin.loadState);
 
-    cplug_assert(NULL != _gCPLUG.createGUI);
-    cplug_assert(NULL != _gCPLUG.destroyGUI);
-    cplug_assert(NULL != _gCPLUG.setParent);
-    cplug_assert(NULL != _gCPLUG.setVisible);
-    cplug_assert(NULL != _gCPLUG.setScaleFactor);
-    cplug_assert(NULL != _gCPLUG.getSize);
-    cplug_assert(NULL != _gCPLUG.checkSize);
-    cplug_assert(NULL != _gCPLUG.setSize);
+    cplug_assert(NULL != g_plugin.createGUI);
+    cplug_assert(NULL != g_plugin.destroyGUI);
+    cplug_assert(NULL != g_plugin.setParent);
+    cplug_assert(NULL != g_plugin.setVisible);
+    cplug_assert(NULL != g_plugin.setScaleFactor);
+    cplug_assert(NULL != g_plugin.getSize);
+    cplug_assert(NULL != g_plugin.checkSize);
+    cplug_assert(NULL != g_plugin.setSize);
 
-    _gCPLUG.libraryLoad();
-    _gCPLUG.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-    _gCPLUG.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
-    _gCPLUG.HostContext.rescan         = CPWIN_HostContext_Rescan;
-    _gCPLUG.HostContext.getHostName    = CPWIN_HostContext_GetHostName;
+    g_plugin.libraryLoad();
+    g_plugin.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
+    g_plugin.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
+    g_plugin.HostContext.rescan         = CPWIN_HostContext_Rescan;
+    g_plugin.HostContext.getHostName    = CPWIN_HostContext_GetHostName;
 
-    _gCPLUG.UserPlugin = _gCPLUG.createPlugin(&_gCPLUG.HostContext);
-    cplug_assert(_gCPLUG.UserPlugin != NULL);
+    g_plugin.UserPlugin = g_plugin.createPlugin(&g_plugin.HostContext);
+    cplug_assert(g_plugin.UserPlugin != NULL);
 }
 
 #ifdef HOTRELOAD_WATCH_DIR
@@ -969,7 +969,7 @@ DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
     }
 
     int throttlereload = 0;
-    while (_gFlagExitFileWatchThread == 0)
+    while (g_FlagExitFileWatchThread == 0)
     {
         DWORD result = WaitForSingleObject(overlapped.hEvent, 50);
 
@@ -1031,47 +1031,47 @@ static inline UINT CPWIN_MenuFlag(UINT a, UINT b) { return a == b ? (MF_STRING |
 
 void CPWIN_Menu_RefreshSampleRates()
 {
-    while (RemoveMenu(_gMenus.hSampleRateSubmenu, 0, MF_BYPOSITION))
+    while (RemoveMenu(g_Menus.hSampleRateSubmenu, 0, MF_BYPOSITION))
     {
     }
 
-    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 44100), IDM_SampleRate_44100, L"44100");
-    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 48000), IDM_SampleRate_48000, L"48000");
-    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 88200), IDM_SampleRate_88200, L"88200");
-    AppendMenuW(_gMenus.hSampleRateSubmenu, CPWIN_MenuFlag(_gAudio.SampleRate, 96000), IDM_SampleRate_96000, L"96000");
+    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 44100), IDM_SampleRate_44100, L"44100");
+    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 48000), IDM_SampleRate_48000, L"48000");
+    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 88200), IDM_SampleRate_88200, L"88200");
+    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 96000), IDM_SampleRate_96000, L"96000");
 }
 
 void CPWIN_Menu_RefreshBlockSizes()
 {
-    while (RemoveMenu(_gMenus.hBlockSizeSubmenu, 0, MF_BYPOSITION))
+    while (RemoveMenu(g_Menus.hBlockSizeSubmenu, 0, MF_BYPOSITION))
     {
     }
 
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 128), IDM_BlockSize_128, L"128");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 192), IDM_BlockSize_192, L"192");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 256), IDM_BlockSize_256, L"256");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 384), IDM_BlockSize_384, L"384");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 448), IDM_BlockSize_448, L"448");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 512), IDM_BlockSize_512, L"512");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 768), IDM_BlockSize_768, L"768");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 1024), IDM_BlockSize_1024, L"1024");
-    AppendMenuW(_gMenus.hBlockSizeSubmenu, CPWIN_MenuFlag(_gAudio.BlockSize, 2048), IDM_BlockSize_2048, L"2048");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 128), IDM_BlockSize_128, L"128");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 192), IDM_BlockSize_192, L"192");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 256), IDM_BlockSize_256, L"256");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 384), IDM_BlockSize_384, L"384");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 448), IDM_BlockSize_448, L"448");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 512), IDM_BlockSize_512, L"512");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 768), IDM_BlockSize_768, L"768");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 1024), IDM_BlockSize_1024, L"1024");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 2048), IDM_BlockSize_2048, L"2048");
 }
 
 void CPWIN_Menu_RefreshAudioOutputs()
 {
-    while (RemoveMenu(_gMenus.hAudioOutputSubmenu, 0, MF_BYPOSITION))
+    while (RemoveMenu(g_Menus.hAudioOutputSubmenu, 0, MF_BYPOSITION))
     {
     }
 
     IMMDeviceCollection* pCollection = NULL;
-    _gAudio.pIMMDeviceEnumerator->lpVtbl
-        ->EnumAudioEndpoints(_gAudio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
+    g_Audio.pIMMDeviceEnumerator->lpVtbl
+        ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
     cplug_assert(pCollection != NULL);
 
-    pCollection->lpVtbl->GetCount(pCollection, &_gMenus.numAudioOutputs);
+    pCollection->lpVtbl->GetCount(pCollection, &g_Menus.numAudioOutputs);
 
-    for (UINT i = 0; i < _gMenus.numAudioOutputs; i++)
+    for (UINT i = 0; i < g_Menus.numAudioOutputs; i++)
     {
         IMMDevice* pDevice = NULL;
 
@@ -1095,10 +1095,10 @@ void CPWIN_Menu_RefreshAudioOutputs()
             if (varName.vt != VT_EMPTY)
             {
                 UINT uFlags = MF_STRING;
-                if (0 == wcsncmp(deviceID, _gAudio.DeviceIDBuffer, ARRSIZE(_gAudio.DeviceIDBuffer)))
+                if (0 == wcsncmp(deviceID, g_Audio.DeviceIDBuffer, ARRSIZE(g_Audio.DeviceIDBuffer)))
                     uFlags |= MF_CHECKED;
 
-                AppendMenuW(_gMenus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, varName.pwszVal);
+                AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, varName.pwszVal);
             }
 
             PropVariantClear(&varName);
@@ -1111,13 +1111,13 @@ void CPWIN_Menu_RefreshAudioOutputs()
 
     pCollection->lpVtbl->Release(pCollection);
 
-    AppendMenuW(_gMenus.hAudioOutputSubmenu, MF_SEPARATOR, IDM_RefreshAudioDeviceList - 1, NULL);
-    AppendMenuW(_gMenus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, L"Refresh list");
+    AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_SEPARATOR, IDM_RefreshAudioDeviceList - 1, NULL);
+    AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, L"Refresh list");
 }
 
 void CPWIN_Menu_RefreshMIDIInputs()
 {
-    while (RemoveMenu(_gMenus.hMIDIInputsSubMenu, 0, MF_BYPOSITION))
+    while (RemoveMenu(g_Menus.hMIDIInputsSubMenu, 0, MF_BYPOSITION))
     {
     }
 
@@ -1132,11 +1132,11 @@ void CPWIN_Menu_RefreshMIDIInputs()
         if (result == MMSYSERR_NOERROR)
         {
             UINT uFlags = MF_STRING;
-            if (0 == memcmp(&caps.NameGuid, &_gMIDI.LastConnectedInput.NameGuid, sizeof(caps.NameGuid)) &&
-                0 == memcmp(&caps.ProductGuid, &_gMIDI.LastConnectedInput.ProductGuid, sizeof(caps.ProductGuid)))
+            if (0 == memcmp(&caps.NameGuid, &g_MIDI.LastConnectedInput.NameGuid, sizeof(caps.NameGuid)) &&
+                0 == memcmp(&caps.ProductGuid, &g_MIDI.LastConnectedInput.ProductGuid, sizeof(caps.ProductGuid)))
                 uFlags |= MF_CHECKED;
 
-            AppendMenuW(_gMenus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, caps.szPname);
+            AppendMenuW(g_Menus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, caps.szPname);
         }
     }
 }
@@ -1202,12 +1202,12 @@ void CALLBACK CPWIN_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
         midi.bytesAsInt  = dwParam1 & 0xffffff;
         midi.timestampMs = (UINT)dwParam2;
 
-        writePos = _InterlockedCompareExchange(&_gMIDI.RingBuffer.writePos, 0, 0);
+        writePos = _InterlockedCompareExchange(&g_MIDI.RingBuffer.writePos, 0, 0);
 
-        _gMIDI.RingBuffer.buffer[writePos] = midi;
+        g_MIDI.RingBuffer.buffer[writePos] = midi;
         writePos++;
-        writePos = writePos % ARRSIZE(_gMIDI.RingBuffer.buffer);
-        _InterlockedExchange(&_gMIDI.RingBuffer.writePos, writePos);
+        writePos = writePos % ARRSIZE(g_MIDI.RingBuffer.buffer);
+        _InterlockedExchange(&g_MIDI.RingBuffer.writePos, writePos);
     }
     /* handle sysex*/
     /* https://www.midi.org/specifications-old/item/table-4-universal-system-exclusive-messages */
@@ -1219,65 +1219,65 @@ UINT CPWIN_MIDI_ConnectInput(UINT portNum)
     UINT result;
 
     // Set up are MIDI reading callback
-    cplug_assert(_gMIDI.hInput == NULL);
-    result = midiInOpen(&_gMIDI.hInput, portNum, (DWORD_PTR)&CPWIN_MIDIInProc, 0, CALLBACK_FUNCTION);
+    cplug_assert(g_MIDI.hInput == NULL);
+    result = midiInOpen(&g_MIDI.hInput, portNum, (DWORD_PTR)&CPWIN_MIDIInProc, 0, CALLBACK_FUNCTION);
 
     if (result != MMSYSERR_NOERROR)
         goto failed;
 
-    memset(&_gMIDI.LastConnectedInput, 0, sizeof(_gMIDI.LastConnectedInput));
-    result = midiInGetDevCapsW(0, (MIDIINCAPSW*)&_gMIDI.LastConnectedInput, sizeof(_gMIDI.LastConnectedInput));
+    memset(&g_MIDI.LastConnectedInput, 0, sizeof(g_MIDI.LastConnectedInput));
+    result = midiInGetDevCapsW(0, (MIDIINCAPSW*)&g_MIDI.LastConnectedInput, sizeof(g_MIDI.LastConnectedInput));
     cplug_assert(result == MMSYSERR_NOERROR);
 
-    for (int i = 0; i < ARRSIZE(_gMIDI.SystemBuffers); i++)
+    for (int i = 0; i < ARRSIZE(g_MIDI.SystemBuffers); i++)
     {
         result =
-            midiInPrepareHeader(_gMIDI.hInput, &_gMIDI.SystemBuffers[i].header, sizeof(_gMIDI.SystemBuffers[i].header));
+            midiInPrepareHeader(g_MIDI.hInput, &g_MIDI.SystemBuffers[i].header, sizeof(g_MIDI.SystemBuffers[i].header));
         if (result != MMSYSERR_NOERROR)
             goto failed;
-        result = midiInAddBuffer(_gMIDI.hInput, &_gMIDI.SystemBuffers[i].header, sizeof(MIDIHDR));
+        result = midiInAddBuffer(g_MIDI.hInput, &g_MIDI.SystemBuffers[i].header, sizeof(MIDIHDR));
         if (result != MMSYSERR_NOERROR)
             goto failed;
     }
 
-    result = midiInStart(_gMIDI.hInput);
+    result = midiInStart(g_MIDI.hInput);
     if (result != MMSYSERR_NOERROR)
         goto failed;
 
-    _gMIDI.IsConnected = 1;
+    g_MIDI.IsConnected = 1;
     fprintf(stderr, "Connected to MIDI input %u\n", portNum);
 
     return result;
 
 failed:
-    if (_gMIDI.hInput)
+    if (g_MIDI.hInput)
     {
-        midiInClose(_gMIDI.hInput);
-        _gMIDI.hInput = 0;
+        midiInClose(g_MIDI.hInput);
+        g_MIDI.hInput = 0;
     }
     return result;
 }
 
 void CPWIN_MIDI_DisconnectInput()
 {
-    if (_gMIDI.IsConnected)
+    if (g_MIDI.IsConnected)
     {
         UINT result;
-        midiInReset(_gMIDI.hInput);
-        midiInStop(_gMIDI.hInput);
+        midiInReset(g_MIDI.hInput);
+        midiInStop(g_MIDI.hInput);
 
-        for (int i = 0; i < ARRSIZE(_gMIDI.SystemBuffers); i++)
+        for (int i = 0; i < ARRSIZE(g_MIDI.SystemBuffers); i++)
         {
-            MIDIHDR* head = &_gMIDI.SystemBuffers[i].header;
-            result        = midiInUnprepareHeader(_gMIDI.hInput, head, sizeof(*head));
+            MIDIHDR* head = &g_MIDI.SystemBuffers[i].header;
+            result        = midiInUnprepareHeader(g_MIDI.hInput, head, sizeof(*head));
 
             if (result != MMSYSERR_NOERROR)
                 break;
         }
-        midiInClose(_gMIDI.hInput);
-        _gMIDI.hInput      = NULL;
-        _gMIDI.IsConnected = 0;
-        memset(&_gMIDI.LastConnectedInput, 0, sizeof(_gMIDI.LastConnectedInput));
+        midiInClose(g_MIDI.hInput);
+        g_MIDI.hInput      = NULL;
+        g_MIDI.IsConnected = 0;
+        memset(&g_MIDI.LastConnectedInput, 0, sizeof(g_MIDI.LastConnectedInput));
     }
 }
 
@@ -1298,18 +1298,18 @@ bool CPWIN_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
     if (frameIdx >= ctx->numFrames)
         return false;
 
-    LONG head = _InterlockedCompareExchange(&_gMIDI.RingBuffer.writePos, 0, 0);
-    LONG tail = _InterlockedCompareExchange(&_gMIDI.RingBuffer.readPos, 0, 0);
+    LONG head = _InterlockedCompareExchange(&g_MIDI.RingBuffer.writePos, 0, 0);
+    LONG tail = _InterlockedCompareExchange(&g_MIDI.RingBuffer.readPos, 0, 0);
     if (head != tail)
     {
-        MIDIMessage* msg       = &_gMIDI.RingBuffer.buffer[tail];
+        MIDIMessage* msg       = &g_MIDI.RingBuffer.buffer[tail];
         event->midi.type       = CPLUG_EVENT_MIDI;
         event->midi.bytesAsInt = msg->bytesAsInt;
 
         tail++;
         tail %= CPLUG_MIDI_RINGBUFFER_SIZE;
 
-        _gMIDI.RingBuffer.readPos = tail;
+        g_MIDI.RingBuffer.readPos = tail;
         return true;
     }
 
@@ -1332,59 +1332,59 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
 {
     BYTE*   outBuffer            = NULL;
     UINT32  remainingBlockFrames = blockSize;
-    HRESULT hr = _gAudio.pIAudioRenderClient->lpVtbl->GetBuffer(_gAudio.pIAudioRenderClient, blockSize, &outBuffer);
+    HRESULT hr = g_Audio.pIAudioRenderClient->lpVtbl->GetBuffer(g_Audio.pIAudioRenderClient, blockSize, &outBuffer);
     cplug_assert(outBuffer != NULL);
     if (FAILED(hr))
         return;
 
-    if (_gAudio.ProcessBufferNumOverprocessedFrames)
+    if (g_Audio.ProcessBufferNumOverprocessedFrames)
     {
         // Our remaining samples are already in a deinterleaved format
-        UINT32 framesToCopy = _gAudio.ProcessBufferNumOverprocessedFrames < remainingBlockFrames
-                                  ? _gAudio.ProcessBufferNumOverprocessedFrames
+        UINT32 framesToCopy = g_Audio.ProcessBufferNumOverprocessedFrames < remainingBlockFrames
+                                  ? g_Audio.ProcessBufferNumOverprocessedFrames
                                   : remainingBlockFrames;
-        SIZE_T bytesToCopy  = sizeof(float) * _gAudio.NumChannels * framesToCopy;
-        memcpy(outBuffer, _gAudio.ProcessBuffer, bytesToCopy);
+        SIZE_T bytesToCopy  = sizeof(float) * g_Audio.NumChannels * framesToCopy;
+        memcpy(outBuffer, g_Audio.ProcessBuffer, bytesToCopy);
 
         remainingBlockFrames                        -= framesToCopy;
-        _gAudio.ProcessBufferNumOverprocessedFrames -= framesToCopy;
+        g_Audio.ProcessBufferNumOverprocessedFrames -= framesToCopy;
         outBuffer                                   += bytesToCopy;
         cplug_assert(remainingBlockFrames < blockSize); // check overflow
     }
 
     WindowsProcessContext ctx;
     memset(&ctx, 0, sizeof(ctx));
-    ctx.cplugContext.numFrames      = _gAudio.BlockSize;
+    ctx.cplugContext.numFrames      = g_Audio.BlockSize;
     ctx.cplugContext.enqueueEvent   = CPWIN_Audio_enqueueEvent;
     ctx.cplugContext.dequeueEvent   = CPWIN_Audio_dequeueEvent;
     ctx.cplugContext.getAudioInput  = CPWIN_Audio_getAudioInput;
     ctx.cplugContext.getAudioOutput = CPWIN_Audio_getAudioOutput;
 
-    SIZE_T processBufferOffset = sizeof(float) * _gAudio.NumChannels * _gAudio.ProcessBufferMaxFrames;
+    SIZE_T processBufferOffset = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferMaxFrames;
     processBufferOffset        = (SIZE_T)CPWIN_RoundUp(processBufferOffset, 32);
-    ctx.output[0]              = (float*)(_gAudio.ProcessBuffer + processBufferOffset);
-    ctx.output[1]              = ctx.output[0] + _gAudio.BlockSize;
+    ctx.output[0]              = (float*)(g_Audio.ProcessBuffer + processBufferOffset);
+    ctx.output[1]              = ctx.output[0] + g_Audio.BlockSize;
 
     while (remainingBlockFrames > 0)
     {
-        cplug_assert(_gAudio.ProcessBufferNumOverprocessedFrames == 0);
+        cplug_assert(g_Audio.ProcessBufferNumOverprocessedFrames == 0);
 
-        _gCPLUG.process(_gCPLUG.UserPlugin, &ctx.cplugContext);
+        g_plugin.process(g_plugin.UserPlugin, &ctx.cplugContext);
 
-        UINT32 framesToCopy = remainingBlockFrames < _gAudio.BlockSize ? remainingBlockFrames : _gAudio.BlockSize;
-        SIZE_T bytesToCopy  = sizeof(float) * _gAudio.NumChannels * framesToCopy;
+        UINT32 framesToCopy = remainingBlockFrames < g_Audio.BlockSize ? remainingBlockFrames : g_Audio.BlockSize;
+        SIZE_T bytesToCopy  = sizeof(float) * g_Audio.NumChannels * framesToCopy;
 
         UINT32 i                 = 0;
         float* outputInterleaved = (float*)outBuffer;
         for (; i < framesToCopy; i++)
-            for (UINT32 ch = 0; ch < _gAudio.NumChannels; ch++)
+            for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
                 *outputInterleaved++ = ctx.output[ch][i];
 
-        float* remainingInterleaved = (float*)_gAudio.ProcessBuffer;
-        for (; i < _gAudio.BlockSize; i++)
-            for (UINT32 ch = 0; ch < _gAudio.NumChannels; ch++)
+        float* remainingInterleaved = (float*)g_Audio.ProcessBuffer;
+        for (; i < g_Audio.BlockSize; i++)
+            for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
                 *remainingInterleaved++ = ctx.output[ch][i];
-        _gAudio.ProcessBufferNumOverprocessedFrames = _gAudio.BlockSize - framesToCopy;
+        g_Audio.ProcessBufferNumOverprocessedFrames = g_Audio.BlockSize - framesToCopy;
 
         remainingBlockFrames -= framesToCopy;
         outBuffer            += bytesToCopy;
@@ -1395,7 +1395,7 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
     // This has a scary name 'Release', however I don't think any resources are deallocated,
     // rather space within a preallocated block is marked reserved/unreserved
     // This is just how you hand the buffer back to windows
-    _gAudio.pIAudioRenderClient->lpVtbl->ReleaseBuffer(_gAudio.pIAudioRenderClient, blockSize, 0);
+    g_Audio.pIAudioRenderClient->lpVtbl->ReleaseBuffer(g_Audio.pIAudioRenderClient, blockSize, 0);
 }
 
 DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
@@ -1407,22 +1407,22 @@ DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
     // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize
     // Unfortunately for us, this means we need to play silly games caching audio within a preallocated buffer to
     // make sure the users App recieves a sensible block size
-    CPWIN_Audio_Process(_gAudio.ProcessBufferMaxFrames);
+    CPWIN_Audio_Process(g_Audio.ProcessBufferMaxFrames);
 
-    _gAudio.pIAudioClient->lpVtbl->Start(_gAudio.pIAudioClient);
+    g_Audio.pIAudioClient->lpVtbl->Start(g_Audio.pIAudioClient);
 
-    while (!_gAudio.FlagExitAudioThread)
+    while (!g_Audio.FlagExitAudioThread)
     {
-        WaitForSingleObject(_gAudio.hAudioEvent, INFINITE);
+        WaitForSingleObject(g_Audio.hAudioEvent, INFINITE);
 
         UINT32  padding = 0;
-        HRESULT hr      = _gAudio.pIAudioClient->lpVtbl->GetCurrentPadding(_gAudio.pIAudioClient, &padding);
+        HRESULT hr      = g_Audio.pIAudioClient->lpVtbl->GetCurrentPadding(g_Audio.pIAudioClient, &padding);
 
         if (FAILED(hr))
             continue;
 
-        cplug_assert(_gAudio.ProcessBufferMaxFrames >= padding);
-        UINT32 blockSize = _gAudio.ProcessBufferMaxFrames - padding;
+        cplug_assert(g_Audio.ProcessBufferMaxFrames >= padding);
+        UINT32 blockSize = g_Audio.ProcessBufferMaxFrames - padding;
         if (blockSize == 0)
             continue;
 
@@ -1434,111 +1434,111 @@ DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
 
 void CPWIN_Audio_Stop()
 {
-    if (_gAudio.hAudioProcessThread == NULL)
+    if (g_Audio.hAudioProcessThread == NULL)
     {
         cplug_log("[WARNING] Called CPWIN_Audio_Stop() when audio is not running");
         return;
     }
-    cplug_assert(_gAudio.FlagExitAudioThread == 0);
-    _gAudio.FlagExitAudioThread = 1;
-    cplug_assert(_gAudio.hAudioEvent);
-    SetEvent(_gAudio.hAudioEvent);
+    cplug_assert(g_Audio.FlagExitAudioThread == 0);
+    g_Audio.FlagExitAudioThread = 1;
+    cplug_assert(g_Audio.hAudioEvent);
+    SetEvent(g_Audio.hAudioEvent);
 
-    cplug_assert(_gAudio.hAudioProcessThread != NULL);
-    WaitForSingleObject(_gAudio.hAudioProcessThread, INFINITE);
-    CloseHandle(_gAudio.hAudioProcessThread);
-    _gAudio.hAudioProcessThread = NULL;
+    cplug_assert(g_Audio.hAudioProcessThread != NULL);
+    WaitForSingleObject(g_Audio.hAudioProcessThread, INFINITE);
+    CloseHandle(g_Audio.hAudioProcessThread);
+    g_Audio.hAudioProcessThread = NULL;
 
-    cplug_assert(_gAudio.pIAudioClient != NULL);
-    _gAudio.pIAudioClient->lpVtbl->Stop(_gAudio.pIAudioClient);
-    cplug_assert(_gAudio.pIAudioRenderClient != NULL);
-    _gAudio.pIAudioRenderClient->lpVtbl->Release(_gAudio.pIAudioRenderClient);
-    cplug_assert(_gAudio.pIAudioClient != NULL);
-    _gAudio.pIAudioClient->lpVtbl->Release(_gAudio.pIAudioClient);
-    _gAudio.pIAudioClient       = NULL;
-    _gAudio.pIAudioRenderClient = NULL;
+    cplug_assert(g_Audio.pIAudioClient != NULL);
+    g_Audio.pIAudioClient->lpVtbl->Stop(g_Audio.pIAudioClient);
+    cplug_assert(g_Audio.pIAudioRenderClient != NULL);
+    g_Audio.pIAudioRenderClient->lpVtbl->Release(g_Audio.pIAudioRenderClient);
+    cplug_assert(g_Audio.pIAudioClient != NULL);
+    g_Audio.pIAudioClient->lpVtbl->Release(g_Audio.pIAudioClient);
+    g_Audio.pIAudioClient       = NULL;
+    g_Audio.pIAudioRenderClient = NULL;
 
-    cplug_assert(_gAudio.hAudioEvent != NULL);
-    CloseHandle(_gAudio.hAudioEvent);
-    _gAudio.hAudioEvent = NULL;
+    cplug_assert(g_Audio.hAudioEvent != NULL);
+    CloseHandle(g_Audio.hAudioEvent);
+    g_Audio.hAudioEvent = NULL;
 }
 
 void CPWIN_Audio_SetDevice(int deviceIdx)
 {
-    cplug_assert(_gAudio.hAudioProcessThread == NULL);
+    cplug_assert(g_Audio.hAudioProcessThread == NULL);
 
-    if (_gAudio.pIMMDevice != NULL)
-        _gAudio.pIMMDevice->lpVtbl->Release(_gAudio.pIMMDevice);
+    if (g_Audio.pIMMDevice != NULL)
+        g_Audio.pIMMDevice->lpVtbl->Release(g_Audio.pIMMDevice);
 
     if (deviceIdx >= 0)
     {
         IMMDeviceCollection* pCollection = NULL;
-        _gAudio.pIMMDeviceEnumerator->lpVtbl
-            ->EnumAudioEndpoints(_gAudio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
+        g_Audio.pIMMDeviceEnumerator->lpVtbl
+            ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
         cplug_assert(pCollection != NULL);
 
         UINT numDevices = 0;
         pCollection->lpVtbl->GetCount(pCollection, &numDevices);
 
         if ((UINT)deviceIdx < numDevices)
-            pCollection->lpVtbl->Item(pCollection, (UINT)deviceIdx, &_gAudio.pIMMDevice);
+            pCollection->lpVtbl->Item(pCollection, (UINT)deviceIdx, &g_Audio.pIMMDevice);
 
         pCollection->lpVtbl->Release(pCollection);
     }
 
-    if (_gAudio.pIMMDevice == NULL)
+    if (g_Audio.pIMMDevice == NULL)
     {
         // eConsole or eMultimedia? Microsoft say console is for games, multimedia for playing live music
         // https://learn.microsoft.com/en-us/windows/win32/coreaudio/device-roles
-        HRESULT hr = _gAudio.pIMMDeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(
-            _gAudio.pIMMDeviceEnumerator,
+        HRESULT hr = g_Audio.pIMMDeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(
+            g_Audio.pIMMDeviceEnumerator,
             eRender,
             eMultimedia,
-            &_gAudio.pIMMDevice);
+            &g_Audio.pIMMDevice);
         cplug_assert(!FAILED(hr));
     }
 
     WCHAR* audioDeviceID = NULL;
     // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid
-    _gAudio.pIMMDevice->lpVtbl->GetId(_gAudio.pIMMDevice, &audioDeviceID);
-    wcscpy_s(_gAudio.DeviceIDBuffer, ARRSIZE(_gAudio.DeviceIDBuffer), audioDeviceID);
-    _gAudio.DeviceIDBuffer[ARRSIZE(_gAudio.DeviceIDBuffer) - 1] = 0;
+    g_Audio.pIMMDevice->lpVtbl->GetId(g_Audio.pIMMDevice, &audioDeviceID);
+    wcscpy_s(g_Audio.DeviceIDBuffer, ARRSIZE(g_Audio.DeviceIDBuffer), audioDeviceID);
+    g_Audio.DeviceIDBuffer[ARRSIZE(g_Audio.DeviceIDBuffer) - 1] = 0;
     CoTaskMemFree(audioDeviceID);
 }
 
 void CPWIN_Audio_Start()
 {
 #ifdef HOTRELOAD_BUILD_COMMAND
-    if (_gCPLUG.Library == NULL)
+    if (g_plugin.Library == NULL)
     {
         cplug_log("[FAILED] Called CPWIN_Audio_Start when no plugin is loaded");
         return;
     }
 #endif
-    cplug_assert(_gAudio.SampleRate != 0);
-    cplug_assert(_gAudio.BlockSize != 0);
+    cplug_assert(g_Audio.SampleRate != 0);
+    cplug_assert(g_Audio.BlockSize != 0);
     static const IID _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};
     static const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT =
         {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
     static const IID _IID_IAudioRenderClient =
         {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
 
-    cplug_assert(_gAudio.pIMMDevice != NULL);
-    cplug_assert(_gAudio.pIAudioClient == NULL);
-    HRESULT hr = _gAudio.pIMMDevice->lpVtbl->Activate(
-        _gAudio.pIMMDevice,
+    cplug_assert(g_Audio.pIMMDevice != NULL);
+    cplug_assert(g_Audio.pIAudioClient == NULL);
+    HRESULT hr = g_Audio.pIMMDevice->lpVtbl->Activate(
+        g_Audio.pIMMDevice,
         CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClient),
         CLSCTX_ALL,
         0,
-        (void**)&_gAudio.pIAudioClient);
+        (void**)&g_Audio.pIAudioClient);
     cplug_assert(!FAILED(hr));
 
     // https://learn.microsoft.com/en-us/windows/win32/api/mmreg/ns-mmreg-waveformatextensible
     WAVEFORMATEXTENSIBLE fmtex;
     memset(&fmtex, 0, sizeof(fmtex));
     fmtex.Format.wFormatTag           = WAVE_FORMAT_EXTENSIBLE;
-    fmtex.Format.nChannels            = _gAudio.NumChannels;
-    fmtex.Format.nSamplesPerSec       = _gAudio.SampleRate;
+    fmtex.Format.nChannels            = g_Audio.NumChannels;
+    fmtex.Format.nSamplesPerSec       = g_Audio.SampleRate;
     fmtex.Format.wBitsPerSample       = 32;
     fmtex.Format.nBlockAlign          = (fmtex.Format.nChannels * fmtex.Format.wBitsPerSample) / 8;
     fmtex.Format.nAvgBytesPerSec      = fmtex.Format.nSamplesPerSec * fmtex.Format.nBlockAlign;
@@ -1552,11 +1552,11 @@ void CPWIN_Audio_Start()
 
     fmtex.SubFormat = _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 
-    REFERENCE_TIME reftime = (REFERENCE_TIME)((double)_gAudio.BlockSize / ((double)_gAudio.SampleRate * 1.e-7));
+    REFERENCE_TIME reftime = (REFERENCE_TIME)((double)g_Audio.BlockSize / ((double)g_Audio.SampleRate * 1.e-7));
 
     // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize
-    hr = _gAudio.pIAudioClient->lpVtbl->Initialize(
-        _gAudio.pIAudioClient,
+    hr = g_Audio.pIAudioClient->lpVtbl->Initialize(
+        g_Audio.pIAudioClient,
         AUDCLNT_SHAREMODE_SHARED,
         AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
             AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
@@ -1566,42 +1566,42 @@ void CPWIN_Audio_Start()
         0);
     cplug_assert(!FAILED(hr));
 
-    hr = _gAudio.pIAudioClient->lpVtbl->GetBufferSize(_gAudio.pIAudioClient, &_gAudio.ProcessBufferMaxFrames);
+    hr = g_Audio.pIAudioClient->lpVtbl->GetBufferSize(g_Audio.pIAudioClient, &g_Audio.ProcessBufferMaxFrames);
     cplug_assert(!FAILED(hr));
 
-    _gAudio.pIAudioClient->lpVtbl->GetService(
-        _gAudio.pIAudioClient,
+    g_Audio.pIAudioClient->lpVtbl->GetService(
+        g_Audio.pIAudioClient,
         CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioRenderClient),
-        (void**)&_gAudio.pIAudioRenderClient);
+        (void**)&g_Audio.pIAudioRenderClient);
 
-    cplug_assert(_gAudio.hAudioEvent == NULL);
-    _gAudio.hAudioEvent = CreateEventW(0, 0, 0, 0);
-    cplug_assert(_gAudio.hAudioEvent != NULL);
-    _gAudio.pIAudioClient->lpVtbl->SetEventHandle(_gAudio.pIAudioClient, _gAudio.hAudioEvent);
+    cplug_assert(g_Audio.hAudioEvent == NULL);
+    g_Audio.hAudioEvent = CreateEventW(0, 0, 0, 0);
+    cplug_assert(g_Audio.hAudioEvent != NULL);
+    g_Audio.pIAudioClient->lpVtbl->SetEventHandle(g_Audio.pIAudioClient, g_Audio.hAudioEvent);
 
-    SIZE_T req_bytes_reserve    = sizeof(float) * _gAudio.NumChannels * _gAudio.ProcessBufferMaxFrames;
-    SIZE_T req_bytes_processing = sizeof(float) * _gAudio.NumChannels * _gAudio.BlockSize;
+    SIZE_T req_bytes_reserve    = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferMaxFrames;
+    SIZE_T req_bytes_processing = sizeof(float) * g_Audio.NumChannels * g_Audio.BlockSize;
     req_bytes_reserve           = (SIZE_T)CPWIN_RoundUp(req_bytes_reserve, 32);
     req_bytes_processing        = (SIZE_T)CPWIN_RoundUp(req_bytes_processing, 32);
 
     SIZE_T requiredCap = (SIZE_T)CPWIN_RoundUp(req_bytes_reserve + req_bytes_processing, 4096);
-    if (requiredCap > _gAudio.ProcessBufferCap)
+    if (requiredCap > g_Audio.ProcessBufferCap)
     {
-        if (_gAudio.ProcessBuffer != NULL)
-            VirtualFree(_gAudio.ProcessBuffer, _gAudio.ProcessBufferCap, 0);
+        if (g_Audio.ProcessBuffer != NULL)
+            VirtualFree(g_Audio.ProcessBuffer, g_Audio.ProcessBufferCap, 0);
 
-        _gAudio.ProcessBufferCap = requiredCap;
-        _gAudio.ProcessBuffer =
-            (BYTE*)VirtualAlloc(NULL, _gAudio.ProcessBufferCap, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        cplug_assert(_gAudio.ProcessBuffer != NULL);
+        g_Audio.ProcessBufferCap = requiredCap;
+        g_Audio.ProcessBuffer =
+            (BYTE*)VirtualAlloc(NULL, g_Audio.ProcessBufferCap, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        cplug_assert(g_Audio.ProcessBuffer != NULL);
     }
 
-    _gCPLUG.setSampleRateAndBlockSize(_gCPLUG.UserPlugin, _gAudio.SampleRate, _gAudio.BlockSize);
+    g_plugin.setSampleRateAndBlockSize(g_plugin.UserPlugin, g_Audio.SampleRate, g_Audio.BlockSize);
 
-    _gAudio.ProcessBufferNumOverprocessedFrames = 0;
-    _gAudio.FlagExitAudioThread                 = 0;
+    g_Audio.ProcessBufferNumOverprocessedFrames = 0;
+    g_Audio.FlagExitAudioThread                 = 0;
 
-    _gAudio.hAudioProcessThread = CreateThread(NULL, 0, CPWIN_Audio_RunProcessThread, NULL, 0, 0);
-    cplug_assert(_gAudio.hAudioProcessThread != NULL);
+    g_Audio.hAudioProcessThread = CreateThread(NULL, 0, CPWIN_Audio_RunProcessThread, NULL, 0, 0);
+    cplug_assert(g_Audio.hAudioProcessThread != NULL);
 }
 #pragma endregion AUDIO

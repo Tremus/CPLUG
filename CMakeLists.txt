@@ -166,22 +166,20 @@ set(HOTRELOAD_LIB_NAME ${PROJECT_NAME}_hotreload_lib)
 
 if (WIN32 AND CMAKE_BUILD_TYPE MATCHES Debug)
     add_library(${HOTRELOAD_LIB_NAME} MODULE example/example.c)
-    add_executable(${PROJECT_NAME}_hotreload WIN32 src/cplug_standalone_win.c)
+    target_compile_definitions(${HOTRELOAD_LIB_NAME} PRIVATE CPLUG_SHARED)
 
     # Windows paths are complicated
-    set(HOTRELOAD_WATCH_DIR_POSIX "${PROJECT_SOURCE_DIR}/example")
-    set(HOTRELOAD_LIB_PATH_POSIX "${CMAKE_BINARY_DIR}/${HOTRELOAD_LIB_NAME}.dll")
-    string(REPLACE "/" "\\\\" HOTRELOAD_WATCH_DIR "${HOTRELOAD_WATCH_DIR_POSIX}")
-    string(REPLACE "/" "\\\\" HOTRELOAD_LIB_PATH "${HOTRELOAD_LIB_PATH_POSIX}")
+    string(REPLACE "/" "\\\\" SOURCE_DIR_WIN ${PROJECT_SOURCE_DIR})
+    string(REPLACE "/" "\\\\" BINARY_DIR_WIN ${CMAKE_BINARY_DIR})
 
-    target_compile_definitions(${HOTRELOAD_LIB_NAME} PRIVATE -DCPLUG_SHARED)
-
+    add_executable(${PROJECT_NAME}_hotreload WIN32 src/cplug_standalone_win.c)
     target_compile_definitions(${PROJECT_NAME}_hotreload PRIVATE
-        -DHOTRELOAD_WATCH_DIR="${HOTRELOAD_WATCH_DIR}"
-        -DHOTRELOAD_LIB_PATH="${HOTRELOAD_LIB_PATH}"
-        -DHOTRELOAD_BUILD_COMMAND="cmake --build ${CMAKE_BINARY_DIR} --config Debug --target ${HOTRELOAD_LIB_NAME}"
-        -DCPLUG_SHARED
+        HOTRELOAD_WATCH_DIR="${SOURCE_DIR_WIN}\\\\example"
+        HOTRELOAD_LIB_PATH="${BINARY_DIR_WIN}\\\\${HOTRELOAD_LIB_NAME}.dll"
+        HOTRELOAD_BUILD_COMMAND="cmake --build ${BINARY_DIR_WIN} --config Debug --target ${HOTRELOAD_LIB_NAME}"
+        CPLUG_SHARED
         )
+    # Forces plugin to be built before the host
     add_dependencies(${PROJECT_NAME}_hotreload ${HOTRELOAD_LIB_NAME})
 elseif (APPLE AND CMAKE_BUILD_TYPE MATCHES Debug)
     add_library(${HOTRELOAD_LIB_NAME} MODULE example/example.m)
@@ -195,10 +193,10 @@ elseif (APPLE AND CMAKE_BUILD_TYPE MATCHES Debug)
     target_link_libraries(${PROJECT_NAME}_hotreload PRIVATE "-framework Cocoa -framework CoreMIDI -framework CoreAudio -framework CoreServices")
 
     target_compile_definitions(${PROJECT_NAME}_hotreload PRIVATE
-        -DHOTRELOAD_WATCH_DIR="${PROJECT_SOURCE_DIR}/example"
-        -DHOTRELOAD_LIB_PATH="${CMAKE_BINARY_DIR}/lib${HOTRELOAD_LIB_NAME}.so"
-        -DHOTRELOAD_BUILD_COMMAND="cmake --build ${CMAKE_BINARY_DIR} --config Debug --target ${HOTRELOAD_LIB_NAME}"
-        -DCPLUG_SHARED
+        HOTRELOAD_WATCH_DIR="${PROJECT_SOURCE_DIR}/example"
+        HOTRELOAD_LIB_PATH="${CMAKE_BINARY_DIR}/lib${HOTRELOAD_LIB_NAME}.so"
+        HOTRELOAD_BUILD_COMMAND="cmake --build ${CMAKE_BINARY_DIR} --config Debug --target ${HOTRELOAD_LIB_NAME}"
+        CPLUG_SHARED
         )
     add_dependencies(${PROJECT_NAME}_hotreload ${HOTRELOAD_LIB_NAME})
 endif()

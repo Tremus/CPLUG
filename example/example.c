@@ -41,7 +41,10 @@ static const uint32_t PARAM_IDS[] = {
     'bool',
     'utf8',
 };
-static const uint32_t NUM_PARAMS = ARRLEN(PARAM_IDS); 
+enum
+{
+    NUM_PARAMS = ARRLEN(PARAM_IDS)
+};
 
 // returns 'CPLUG_NUM_PARAMS' on failure
 uint32_t get_param_index(void* ptr, uint32_t paramId)
@@ -92,8 +95,8 @@ typedef struct MyPlugin
 
 void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramIdx, double value);
 
-void cplug_libraryLoad(){};
-void cplug_libraryUnload(){};
+void cplug_libraryLoad() {};
+void cplug_libraryUnload() {};
 
 void* cplug_createPlugin(CplugHostContext* ctx)
 {
