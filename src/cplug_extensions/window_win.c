@@ -514,10 +514,10 @@ void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
     switch (type)
     {
     case PW_CURSOR_ARROW:
-        cursor = LoadCursorW(NULL, IDC_ARROW);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
         break;
     case PW_CURSOR_IBEAM:
-        cursor = LoadCursorW(NULL, IDC_IBEAM);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_IBEAM);
         break;
     case PW_CURSOR_NO:
     {
@@ -528,7 +528,7 @@ void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
         break;
     }
     case PW_CURSOR_CROSS:
-        cursor = LoadCursorW(NULL, IDC_CROSS);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_CROSS);
         break;
 
     case PW_CURSOR_ARROW_DRAG:
@@ -541,7 +541,7 @@ void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
         break;
     }
     case PW_CURSOR_HAND_POINT:
-        cursor = LoadCursorW(NULL, IDC_HAND);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_HAND);
         break;
     case PW_CURSOR_HAND_DRAGGABLE:
         // clang-format off
@@ -587,16 +587,16 @@ void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
         break;
 
     case PW_CURSOR_RESIZE_WE:
-        cursor = LoadCursorW(NULL, IDC_SIZEWE);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_SIZEWE);
         break;
     case PW_CURSOR_RESIZE_NS:
-        cursor = LoadCursorW(NULL, IDC_SIZENS);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_SIZENS);
         break;
     case PW_CURSOR_RESIZE_NESW:
-        cursor = LoadCursorW(NULL, IDC_SIZENESW);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_SIZENESW);
         break;
     case PW_CURSOR_RESIZE_NWSE:
-        cursor = LoadCursorW(NULL, IDC_SIZENWSE);
+        cursor = LoadCursorW(NULL, (LPCWSTR)IDC_SIZENWSE);
         break;
     }
 
@@ -943,7 +943,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             e.type = PW_EVENT_MOUSE_ENTER;
 
             pw->MouseIsOver = TRUE;
-            SetCursor(LoadCursorW(NULL, IDC_ARROW));
+            SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_ARROW));
         }
         pw_event(&e);
 
