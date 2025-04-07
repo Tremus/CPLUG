@@ -1711,18 +1711,12 @@ void cplug_setParent(void* userGUI, void* newParent)
     if (oldParent)
     {
         KillTimer(pw->hwnd, PW_TIMER_ID);
-
         SetParent(pw->hwnd, NULL);
-        DefWindowProcW(pw->hwnd, WM_UPDATEUISTATE, UIS_CLEAR, WS_CHILD);
-        DefWindowProcW(pw->hwnd, WM_UPDATEUISTATE, UIS_SET, WS_POPUP);
     }
 
     if (newParent)
     {
         SetParent(pw->hwnd, (HWND)newParent);
-
-        DefWindowProcW(pw->hwnd, WM_UPDATEUISTATE, UIS_CLEAR, WS_POPUP);
-        DefWindowProcW(pw->hwnd, WM_UPDATEUISTATE, UIS_SET, WS_CHILD);
 
         if (pw->hCallWndHook == NULL)
         {

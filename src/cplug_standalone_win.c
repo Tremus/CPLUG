@@ -125,8 +125,11 @@ struct CPWIN_Hotreload
     HMODULE hPluginDLL;
     UINT    Version;
 
-    int    FlagExitFileWatchThread;
-    HANDLE hFileWatchThread;
+    HANDLE     hWatchDirectory;
+    OVERLAPPED Overlapped;
+    BYTE       ReadDirectoryBuffer[1024 * 8];
+
+    INT64 ReloadStartNs;
 } g_Hotreload;
 
 const WCHAR* CPWIN_GetFileNameW(const WCHAR* path)
@@ -273,8 +276,6 @@ enum
     IDM_HandleRemovedMIDIDevice,
     IDM_HandleAddedMIDIDevice,
 
-    IDM_Hotreload,
-
     IDM_OFFSET_AUDIO_DEVICES   = 50,
     IDM_RefreshAudioDeviceList = 99,
 
@@ -395,8 +396,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // INIT WINDOW //
     /////////////////
 
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+
     MSG  msg;
-    HWND hWindow;
+    HWND hWindow = NULL;
 
     WNDCLASSEXW wc;
     memset(&wc, 0, sizeof(wc));
@@ -414,9 +418,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         fprintf(stderr, "Could not register window class\n");
         return 1;
     }
-
-    DPI_AWARENESS_CONTEXT prevDpiCtx = GetThreadDpiAwarenessContext();
-    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
 
     g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
     cplug_assert(g_plugin.UserGUI != NULL);
@@ -445,8 +446,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         fprintf(stderr, "Could not create window\n");
         return 1;
     }
-    if (prevDpiCtx)
-        SetThreadDpiAwarenessContext(prevDpiCtx);
 
     ///////////////
     // INIT MENU //
@@ -488,13 +487,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     cplug_assert(result == CR_SUCCESS);
     cplug_assert(g_hCMNotification != NULL);
 
-#ifdef HOTRELOAD_WATCH_DIR
-    // Setup file watcher
-    g_Hotreload.FlagExitFileWatchThread = 0;
-    g_Hotreload.hFileWatchThread        = CreateThread(NULL, 0, &CPWIN_WatchFileChangesProc, hWindow, 0, 0);
-    cplug_assert(g_Hotreload.hFileWatchThread != NULL);
-#endif
-
     // Window ready
     g_plugin.setParent(g_plugin.UserGUI, hWindow);
 
@@ -502,11 +494,213 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     g_plugin.setVisible(g_plugin.UserGUI, true);
     SetForegroundWindow(hWindow);
 
+#ifndef HOTRELOAD_WATCH_DIR
+    // Default event loop
     while (GetMessageW(&msg, NULL, 0, 0))
     {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+#else  // Hotreloading uses different event loop
+    // Setup file watcher
+    // Most this code was taken from here: https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8
+    g_Hotreload.hWatchDirectory = CreateFileW(
+        TEXT(HOTRELOAD_WATCH_DIR),
+        FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
+        NULL);
+    if (g_Hotreload.hWatchDirectory == INVALID_HANDLE_VALUE)
+    {
+        fprintf(stderr, "Failed to get directory handle\n");
+        return 1;
+    }
+    g_Hotreload.Overlapped.hEvent = CreateEventW(NULL, FALSE, 0, NULL);
+    cplug_assert(g_Hotreload.Overlapped.hEvent);
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
+    BOOL ok = ReadDirectoryChangesW(
+        g_Hotreload.hWatchDirectory,
+        g_Hotreload.ReadDirectoryBuffer,
+        sizeof(g_Hotreload.ReadDirectoryBuffer),
+        TRUE,
+        FILE_NOTIFY_CHANGE_LAST_WRITE,
+        NULL,
+        &g_Hotreload.Overlapped,
+        NULL);
+    cplug_assert(ok);
+    if (!ok)
+    {
+        fprintf(stderr, "Failed to queue info buffer\n");
+        return 1;
+    }
+    fprintf(stderr, "Watching folder %s\n", HOTRELOAD_WATCH_DIR);
+    BOOL  running          = TRUE;
+    INT64 LastFileChangeNs = 0;
+    while (running)
+    {
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            if (msg.message == WM_QUIT)
+                running = false;
+        }
+
+        // Check file change
+        DWORD code = WaitForSingleObject(g_Hotreload.Overlapped.hEvent, 0);
+        if (code == WAIT_OBJECT_0)
+        {
+            DWORD NumberOfBytesTransferred;
+            GetOverlappedResult(g_Hotreload.hWatchDirectory, &g_Hotreload.Overlapped, &NumberOfBytesTransferred, TRUE);
+            FILE_NOTIFY_INFORMATION* Info = (FILE_NOTIFY_INFORMATION*)g_Hotreload.ReadDirectoryBuffer;
+
+            INT64 NowNs = CPWIN_GetNowNS();
+            while (TRUE)
+            {
+                DWORD name_len = Info->FileNameLength / sizeof(wchar_t);
+
+                if (Info->Action == FILE_ACTION_MODIFIED)
+                {
+                    if (g_Hotreload.ReloadStartNs == 0)
+                        g_Hotreload.ReloadStartNs = NowNs;
+                    LastFileChangeNs = NowNs;
+                    fwprintf(stderr, L"File changed at %lld: %.*s\n", NowNs, name_len, Info->FileName);
+                }
+
+                // Iterate events
+                if (Info->NextEntryOffset)
+                    *((BYTE**)&Info) += Info->NextEntryOffset;
+                else
+                    break;
+            }
+
+            // Queue next event
+            ok = ReadDirectoryChangesW(
+                g_Hotreload.hWatchDirectory,
+                g_Hotreload.ReadDirectoryBuffer,
+                sizeof(g_Hotreload.ReadDirectoryBuffer),
+                TRUE,
+                FILE_NOTIFY_CHANGE_LAST_WRITE,
+                NULL,
+                &g_Hotreload.Overlapped,
+                NULL);
+
+            if (!ok)
+            {
+                fprintf(stderr, "Failed to queue info buffer\n");
+                return 1;
+            }
+        }
+
+        // Throttle hotreload
+        INT64 Now  = CPWIN_GetNowNS();
+        INT64 diff = Now - LastFileChangeNs;
+        // Add 50ms latency to account for multiple files being changed in quick succession
+        // This accounts for things like mass renaming of variables by an IDE, clang-format, etc.
+        if (LastFileChangeNs && diff > 50000000)
+        {
+            LastFileChangeNs = 0;
+
+            if (g_Hotreload.hPluginDLL)
+            {
+                // Deinit
+                g_plugin.setVisible(g_plugin.UserGUI, false);
+                g_plugin.setParent(g_plugin.UserGUI, NULL);
+                g_plugin.destroyGUI(g_plugin.UserGUI);
+
+                DefWindowProcA(
+                    hWindow,
+                    WM_CHANGEUISTATE,
+                    UIS_INITIALIZE | UISF_ACTIVE | UISF_HIDEACCEL | UISF_HIDEFOCUS,
+                    0);
+
+                CPWIN_Audio_Stop();
+
+                g_PluginState.BytesWritten = 0;
+                g_PluginState.BytesRead    = 0;
+                g_plugin.saveState(g_plugin.UserPlugin, &g_PluginState, CPWIN_WriteStateProc);
+
+                g_plugin.destroyPlugin(g_plugin.UserPlugin);
+                g_plugin.libraryUnload();
+                ok = FreeLibrary(g_Hotreload.hPluginDLL);
+                cplug_assert(ok);
+                g_Hotreload.hPluginDLL = NULL;
+                memset(&g_plugin, 0, sizeof(g_plugin));
+            }
+
+            // Using 'system()' to call our build command is way simpler, but creates some stdout buffering problems...
+            // Windows prefer that you use CreateProcessW.
+            // The idea is we create a new process using CREATE_NEW_CONSOLE while setting HIDE falgs in the STARTUPINFO
+            // https://learn.microsoft.com/en-us/windows/win32/procthread/creating-processes
+            STARTUPINFO         si;
+            PROCESS_INFORMATION pi;
+            memset(&si, 0, sizeof(si));
+            memset(&pi, 0, sizeof(pi));
+
+            si.cb      = sizeof(si);
+            si.dwFlags = STARTF_USESHOWWINDOW; // These flags are necessarry to stop a terminal window popping up as it
+            si.wShowWindow = SW_HIDE;          // runs the command
+
+            const UINT64 buildStart = CPWIN_GetNowNS();
+            // Run build command in child process.
+            WCHAR cmdbuf[512];
+            _snwprintf(cmdbuf, ARRAYSIZE(cmdbuf), L"%s", TEXT(HOTRELOAD_BUILD_COMMAND));
+            if (!CreateProcessW(0, cmdbuf, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
+            {
+                fprintf(stderr, "CreateProcess failed (%lu).\n", GetLastError());
+                return 1;
+            }
+
+            // Wait until child process exits
+            WaitForSingleObject(pi.hProcess, INFINITE);
+
+            DWORD exitCode = 0;
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+
+            const UINT64 buildEnd = CPWIN_GetNowNS();
+            // Cleanup build process
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+
+            if (exitCode != 0)
+            {
+                cplug_log("[WARNING] Rebuild failed. Exited with code: %lu", exitCode);
+            }
+            else
+            {
+                CPWIN_LoadPlugin();
+                g_plugin.loadState(g_plugin.UserPlugin, &g_PluginState, CPWIN_ReadStateProc);
+
+                CPWIN_Audio_Start();
+
+                g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
+                cplug_assert(g_plugin.UserGUI != NULL);
+
+                RECT size;
+                GetClientRect(hWindow, &size);
+                g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
+
+                g_plugin.setParent(g_plugin.UserGUI, hWindow);
+                g_plugin.setVisible(g_plugin.UserGUI, true);
+            }
+
+            const UINT64 reloadEnd = CPWIN_GetNowNS();
+
+            double rebuild_ms = (double)(buildEnd - buildStart) / 1.e6;
+            double reload_ms  = (double)(reloadEnd - g_Hotreload.ReloadStartNs) / 1.e6;
+            fprintf(stderr, "Rebuild time %.2fms\n", rebuild_ms);
+            fprintf(stderr, "Reload time %.2fms\n", reload_ms);
+            g_Hotreload.ReloadStartNs = 0;
+        }
+
+        Sleep(5);
+    }
+    CloseHandle(g_Hotreload.Overlapped.hEvent);
+    CloseHandle(g_Hotreload.hWatchDirectory);
+#endif // Main loop
 
     OleUninitialize();
     ReleaseMutex(hMutexOneInstance);
@@ -542,10 +736,6 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
         // Destroy plugin
 #ifdef HOTRELOAD_WATCH_DIR
-        // Stop file watcher
-        g_Hotreload.FlagExitFileWatchThread = 1;
-        WaitForSingleObject(g_Hotreload.hFileWatchThread, INFINITE);
-        CloseHandle(g_Hotreload.hFileWatchThread);
         if (g_Hotreload.hPluginDLL)
         {
 #endif
@@ -655,97 +845,6 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     {
         switch (wParam)
         {
-#ifdef HOTRELOAD_WATCH_DIR
-        case IDM_Hotreload:
-        {
-            UINT64 reloadStart = CPWIN_GetNowNS();
-
-            if (g_Hotreload.hPluginDLL)
-            {
-                // Deinit
-                g_plugin.setVisible(g_plugin.UserGUI, false);
-                g_plugin.setParent(g_plugin.UserGUI, NULL);
-                g_plugin.destroyGUI(g_plugin.UserGUI);
-
-                CPWIN_Audio_Stop();
-
-                g_PluginState.BytesWritten = 0;
-                g_PluginState.BytesRead    = 0;
-                g_plugin.saveState(g_plugin.UserPlugin, &g_PluginState, CPWIN_WriteStateProc);
-
-                g_plugin.destroyPlugin(g_plugin.UserPlugin);
-                g_plugin.libraryUnload();
-                BOOL ok = FreeLibrary(g_Hotreload.hPluginDLL);
-                cplug_assert(ok);
-                g_Hotreload.hPluginDLL = NULL;
-                memset(&g_plugin, 0, sizeof(g_plugin));
-            }
-
-            // Using 'system()' to call our build command is way simpler, but creates some stdout buffering problems...
-            // Windows prefer that you use CreateProcessA.
-            // The idea is we create a new process using CREATE_NEW_CONSOLE while setting HIDE falgs in the STARTUPINFO
-            // https://learn.microsoft.com/en-us/windows/win32/procthread/creating-processes
-            STARTUPINFO         si;
-            PROCESS_INFORMATION pi;
-            memset(&si, 0, sizeof(si));
-            memset(&pi, 0, sizeof(pi));
-
-            si.cb      = sizeof(si);
-            si.dwFlags = STARTF_USESHOWWINDOW; // These flags are necessarry to stop a terminal window popping up as it
-            si.wShowWindow = SW_HIDE;          // runs the command
-
-            UINT64 buildStart = CPWIN_GetNowNS();
-            // Run build command in child process.
-            WCHAR cmdbuf[512];
-            _snwprintf(cmdbuf, ARRAYSIZE(cmdbuf), L"%s", TEXT(HOTRELOAD_BUILD_COMMAND));
-            if (!CreateProcessW(0, cmdbuf, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
-            {
-                fprintf(stderr, "CreateProcess failed (%lu).\n", GetLastError());
-                return 1;
-            }
-
-            // Wait until child process exits
-            WaitForSingleObject(pi.hProcess, INFINITE);
-
-            DWORD exitCode = 0;
-            GetExitCodeProcess(pi.hProcess, &exitCode);
-
-            UINT64 buildEnd = CPWIN_GetNowNS();
-            // Cleanup build process
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-
-            if (exitCode != 0)
-            {
-                cplug_log("[WARNING] Rebuild failed. Exited with code: %lu", exitCode);
-            }
-            else
-            {
-                CPWIN_LoadPlugin();
-                g_plugin.loadState(g_plugin.UserPlugin, &g_PluginState, CPWIN_ReadStateProc);
-
-                CPWIN_Audio_Start();
-
-                g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
-                cplug_assert(g_plugin.UserGUI != NULL);
-
-                RECT size;
-                GetClientRect(hWnd, &size);
-                g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
-
-                g_plugin.setParent(g_plugin.UserGUI, hWnd);
-                g_plugin.setVisible(g_plugin.UserGUI, true);
-            }
-
-            UINT64 reloadEnd = CPWIN_GetNowNS();
-
-            double rebuild_ms = (double)(buildEnd - buildStart) / 1.e6;
-            double reload_ms  = (double)(reloadEnd - reloadStart) / 1.e6;
-            fprintf(stderr, "Rebuild time %.2fms\n", rebuild_ms);
-            fprintf(stderr, "Reload time %.2fms\n", reload_ms);
-            break;
-        }
-#endif // HOTRELOAD
         case IDM_SampleRate_44100:
         case IDM_SampleRate_48000:
         case IDM_SampleRate_88200:
@@ -924,102 +1023,9 @@ int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytes
 }
 #pragma endregion PLUGIN_STATE
 
-DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd)
-{
-    // Most this code was taken from here: https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8
-    fprintf(stderr, "Watching folder %s\n", HOTRELOAD_WATCH_DIR);
-
-    HANDLE hDirectory = CreateFileW(
-        TEXT(HOTRELOAD_WATCH_DIR),
-        FILE_LIST_DIRECTORY,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
-        NULL);
-    if (hDirectory == INVALID_HANDLE_VALUE)
-    {
-        fprintf(stderr, "Failed to get directory handle\n");
-        return 1;
-    }
-    OVERLAPPED overlapped;
-    overlapped.hEvent = CreateEventW(NULL, FALSE, 0, NULL);
-
-    BYTE infobuffer[1024];
-    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
-    BOOL success = ReadDirectoryChangesW(
-        hDirectory,
-        infobuffer,
-        sizeof(infobuffer),
-        TRUE,
-        FILE_NOTIFY_CHANGE_LAST_WRITE,
-        NULL,
-        &overlapped,
-        NULL);
-    if (!success)
-    {
-        fprintf(stderr, "Failed to queue info buffer\n");
-        return 1;
-    }
-
-    int throttlereload = 0;
-    while (g_Hotreload.FlagExitFileWatchThread == 0)
-    {
-        DWORD result = WaitForSingleObject(overlapped.hEvent, 50);
-
-        if (result == WAIT_TIMEOUT)
-        {
-            if (throttlereload != 0)
-                PostMessageW((HWND)hwnd, WM_COMMAND, IDM_Hotreload, 0);
-            throttlereload = 0;
-        }
-        else if (result == WAIT_OBJECT_0)
-        {
-            DWORD bytes_transferred;
-            GetOverlappedResult(hDirectory, &overlapped, &bytes_transferred, TRUE);
-
-            FILE_NOTIFY_INFORMATION* event = (FILE_NOTIFY_INFORMATION*)infobuffer;
-
-            while (TRUE)
-            {
-                DWORD name_len = event->FileNameLength / sizeof(wchar_t);
-
-                if (event->Action == FILE_ACTION_MODIFIED)
-                {
-                    fwprintf(stderr, L"File changed: %.*s\n", name_len, event->FileName);
-                    throttlereload++;
-                }
-
-                // Iterate events
-                if (event->NextEntryOffset)
-                    *((BYTE**)&event) += event->NextEntryOffset;
-                else
-                    break;
-            }
-
-            // Queue next event
-            success = ReadDirectoryChangesW(
-                hDirectory,
-                infobuffer,
-                sizeof(infobuffer),
-                TRUE,
-                FILE_NOTIFY_CHANGE_LAST_WRITE,
-                NULL,
-                &overlapped,
-                NULL);
-
-            if (!success)
-            {
-                fprintf(stderr, "Failed to queue info buffer\n");
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
 // Debuggers on Windows have a tough time loading an updated DLL and PDB with the same name of a previously loaded DLL
-// So we simply duplicate the names
+// So we simply duplicate the file, add a version suffix to the name, then load that
+// A quirk of Windows DLLs is the associated PDB will be embedded within the file. We patch this with the new PDB name
 void CPWIN_DuplicatePatchAndLoadDll()
 {
     cplug_assert(g_Hotreload.hPluginDLL == NULL);
@@ -1050,8 +1056,7 @@ void CPWIN_DuplicatePatchAndLoadDll()
         BOOL ok = CopyFileW(CurrentDllPath, NextDllPath, FALSE);
         cplug_assert(ok != 0);
         // User has only supplied the DLL path with HOTRELOAD_LIB_PATH. The .pdb cannot be guaranteed to share the same
-        // filename However, Windows compilers will embed the associated .pdb path within the generated DLLs. We will
-        // find that path in the DLL, duplicate it, and patch the DLL at the same time
+        // filename. We will find that path in the DLL, duplicate the file at that path, then patch the DLL
     }
 
     // Get file mapping
@@ -1163,7 +1168,7 @@ void CPWIN_DuplicatePatchAndLoadDll()
             // Because we append a version number to the file name, the string length will be longer.
             // Replacing the path with only the new filename (no directory) appears to work fine
             const WCHAR* NextPdbFilename    = CPWIN_GetFileNameW(NextPdbPath);
-            size_t       EmbeddedPdbPathLen = 1 + strlen(EmbeddedPdbPath);
+            const size_t EmbeddedPdbPathLen = 1 + strlen(EmbeddedPdbPath);
             cplug_assert(EmbeddedPdbPathLen >= wcslen(NextPdbFilename));
             ok = snprintf(EmbeddedPdbPath, EmbeddedPdbPathLen, "%ls", NextPdbFilename);
             cplug_assert(ok);

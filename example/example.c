@@ -762,18 +762,15 @@ void cplug_setParent(void* userGUI, void* newParent)
     if (oldParent)
     {
         KillTimer((HWND)gui->window, MY_TIMER_ID);
-
         SetParent((HWND)gui->window, NULL);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_CHILD);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_POPUP);
     }
 
     if (newParent)
     {
-        SetParent((HWND)gui->window, (HWND)newParent);
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent
+        HWND prev = SetParent((HWND)gui->window, (HWND)newParent);
+        my_assert(prev != 0);
         memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_POPUP);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_CHILD);
 
         SetTimer((HWND)gui->window, MY_TIMER_ID, 10, NULL);
     }
@@ -802,14 +799,9 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     gui->width  = width;
     gui->height = height;
     gui->img    = (uint32_t*)realloc(gui->img, width * height * sizeof(*gui->img));
-    return SetWindowPos(
-        (HWND)gui->window,
-        HWND_TOP,
-        0,
-        0,
-        width,
-        height,
-        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOMOVE);
+
+    const UINT uFlags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOMOVE;
+    return SetWindowPos((HWND)gui->window, HWND_TOP, 0, 0, width, height, uFlags);
 }
 
 #endif // _WIN32
