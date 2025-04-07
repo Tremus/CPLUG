@@ -633,22 +633,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
             // Using 'system()' to call our build command is way simpler, but creates some stdout buffering problems...
             // Windows prefer that you use CreateProcessW.
-            // The idea is we create a new process using CREATE_NEW_CONSOLE while setting HIDE falgs in the STARTUPINFO
             // https://learn.microsoft.com/en-us/windows/win32/procthread/creating-processes
+            // https://learn.microsoft.com/en-au/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output?redirectedfrom=MSDN
             STARTUPINFO         si;
             PROCESS_INFORMATION pi;
+            SECURITY_ATTRIBUTES sa;
             memset(&si, 0, sizeof(si));
             memset(&pi, 0, sizeof(pi));
+            memset(&sa, 0, sizeof(sa));
 
-            si.cb      = sizeof(si);
-            si.dwFlags = STARTF_USESHOWWINDOW; // These flags are necessarry to stop a terminal window popping up as it
-            si.wShowWindow = SW_HIDE;          // runs the command
+            sa.nLength              = sizeof(sa);
+            sa.bInheritHandle       = TRUE;
+            sa.lpSecurityDescriptor = NULL;
+
+            HANDLE hChildStdoutRd, hChildStdoutWr;
+            if (!CreatePipe(&hChildStdoutRd, &hChildStdoutWr, &sa, 0) ||
+                !SetHandleInformation(hChildStdoutRd, HANDLE_FLAG_INHERIT, 0))
+            {
+                fprintf(stderr, "Failed to create pipes.");
+                cplug_assert(false);
+                return -1;
+            }
+
+            si.cb          = sizeof(si);
+            si.dwFlags    |= STARTF_USESHOWWINDOW; // Stops a terminal window popping up as it runs the command
+            si.hStdOutput  = hChildStdoutWr;
+            si.dwFlags    |= STARTF_USESTDHANDLES; // Lets us use the stdout pipe
 
             const UINT64 buildStart = CPWIN_GetNowNS();
             // Run build command in child process.
             WCHAR cmdbuf[512];
             _snwprintf(cmdbuf, ARRAYSIZE(cmdbuf), L"%s", TEXT(HOTRELOAD_BUILD_COMMAND));
-            if (!CreateProcessW(0, cmdbuf, 0, 0, FALSE, CREATE_NEW_CONSOLE, 0, 0, &si, &pi))
+            if (!CreateProcessW(0, cmdbuf, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
             {
                 fprintf(stderr, "CreateProcess failed (%lu).\n", GetLastError());
                 return 1;
@@ -657,17 +673,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
             // Wait until child process exits
             WaitForSingleObject(pi.hProcess, INFINITE);
 
+            char  buffer[4096] = {0};
+            DWORD bytesRead    = 0;
+
+            do
+            {
+                ok = ReadFile(hChildStdoutRd, buffer, sizeof(buffer) - 1, &bytesRead, NULL);
+                if (ok)
+                    fwrite(buffer, 1, bytesRead, stderr);
+            }
+            while (bytesRead == sizeof(buffer) - 1);
+            // TODO: get stderr also working. Currently it hangs forever when you call ReadFile
+
             DWORD exitCode = 0;
             GetExitCodeProcess(pi.hProcess, &exitCode);
-
-            const UINT64 buildEnd = CPWIN_GetNowNS();
             // Cleanup build process
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
+            CloseHandle(hChildStdoutWr);
+
+            const UINT64 buildEnd = CPWIN_GetNowNS();
 
             if (exitCode != 0)
             {
-                cplug_log("[WARNING] Rebuild failed. Exited with code: %lu", exitCode);
+                fprintf(stderr, "[WARNING] Rebuild failed. Exited with code: %lu\n", exitCode);
             }
             else
             {
@@ -1667,7 +1696,7 @@ void CPWIN_Audio_Stop()
 {
     if (g_Audio.hAudioProcessThread == NULL)
     {
-        cplug_log("[WARNING] Called CPWIN_Audio_Stop() when audio is not running");
+        fprintf(stderr, "[WARNING] Called CPWIN_Audio_Stop() when audio is not running\n");
         return;
     }
     cplug_assert(g_Audio.FlagExitAudioThread == 0);
@@ -1742,7 +1771,7 @@ void CPWIN_Audio_Start()
 #ifdef HOTRELOAD_WATCH_DIR
     if (g_Hotreload.hPluginDLL == NULL)
     {
-        cplug_log("[FAILED] Called CPWIN_Audio_Start when no plugin is loaded");
+        fprintf(stderr, "[FAILED] Called CPWIN_Audio_Start when no plugin is loaded\n");
         return;
     }
 #endif // Hotreload

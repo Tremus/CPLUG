@@ -22,6 +22,8 @@ endif()
 if (CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC" OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     add_compile_options(/W3 /FI ${CMAKE_CURRENT_SOURCE_DIR}/example/config.h)
     set(WINDOWS_EXPORT_ALL_SYMBOLS FALSE)
+else()
+    add_compile_options(-include${CMAKE_CURRENT_SOURCE_DIR}/example/config.h)
 endif()
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     add_compile_options(
@@ -33,8 +35,6 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "Ap
         -Wno-multichar
         -Wno-nullability-completeness
         -Wno-writable-strings
-
-        -include${CMAKE_CURRENT_SOURCE_DIR}/example/config.h
     )
 endif()
 
