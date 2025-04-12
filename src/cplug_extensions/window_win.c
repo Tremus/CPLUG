@@ -31,6 +31,8 @@
 #ifdef PW_DX11
 #include <d3d11.h>
 #include <dxgi.h>
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxguid.lib")
 
 #define PW_DX11_RELEASE(ptr)                                                                                           \
     if (ptr)                                                                                                           \
