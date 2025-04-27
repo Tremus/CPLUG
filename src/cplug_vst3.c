@@ -534,7 +534,7 @@ static void _cplug_tryDeleteVST3(VST3Plugin* vst3)
     int ref_noteexp    = cplug_atomic_load_i32(&vst3->noteExpression.refcounter);
     int ref_processor  = cplug_atomic_load_i32(&vst3->processor.refcounter);
     cplug_log(
-        "_cplug_tryDeleteVST3 %p | component: %d, controller: %d, midimapping: %d, processor: %d",
+        "_cplug_tryDeleteVST3 %p | component: %d, controller: %d, midimapping: %d, noteExpression: %d, processor: %d",
         vst3,
         ref_component,
         ref_controller,
@@ -1048,6 +1048,7 @@ VST3Controller_queryInterface(void* const self, const Steinberg_TUID iid, void**
         *iface = self;
         return Steinberg_kResultOk;
     }
+#if CPLUG_WANT_MIDI_INPUT
     if (tuid_match(iid, Steinberg_Vst_IMidiMapping_iid))
     {
         cplug_log("VST3Controller_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
@@ -1062,6 +1063,7 @@ VST3Controller_queryInterface(void* const self, const Steinberg_TUID iid, void**
         *iface = &vst3->noteExpression;
         return Steinberg_kResultOk;
     }
+#endif
 
     cplug_log("VST3Controller_queryInterface => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
     *iface = NULL;
@@ -1084,9 +1086,6 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_release(void* const self)
 
     if (refcount == 0)
     {
-        if (vst3->controller.componentHandler)
-            vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
-
         cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from IMidiMapping extension");
         vst3->midiMapping.lpVtbl->release(&vst3->midiMapping);
         cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from "
@@ -1335,12 +1334,6 @@ VST3Controller_setComponentHandler(void* self, Steinberg_Vst_IComponentHandler* 
     cplug_log("VST3Controller_setComponentHandler => %p %p", self, handler);
     // NOTE: Ableton 10, FL Studio & Cubase have been spotted trying to pass NULL here.
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
-
-    if (vst3->controller.componentHandler)
-        vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
-
-    if (handler != NULL)
-        handler->lpVtbl->addRef(handler);
 
     vst3->controller.componentHandler = handler;
 
@@ -2085,6 +2078,9 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_terminate(void* co
 
     if (vst3->host)
         vst3->host->lpVtbl->release(vst3->host);
+
+    if (vst3->controller.componentHandler)
+        vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
 
     return Steinberg_kResultOk;
 }
