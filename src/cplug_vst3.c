@@ -344,8 +344,6 @@ typedef struct VST3Factory
     Steinberg_IPluginFactory3Vtbl* lpVtbl;
     Steinberg_IPluginFactory3Vtbl  base;
     cplug_atomic_i32               refcounter;
-    // We don't use this, but it's here in case you need it...
-    Steinberg_Vst_IHostApplication* host;
 } VST3Factory;
 
 typedef struct VST3Plugin
@@ -401,7 +399,6 @@ typedef struct VST3Plugin
         cplug_atomic_i32                   refcounter;
     } processor;
 
-    // We don't use this, but it's here in case you need it...
     Steinberg_Vst_IHostApplication* host;
 
     // Structure of arrays format. The index of the ID (key) matches the midi note (value)
@@ -2055,11 +2052,7 @@ VST3Component_initialize(void* const self, Steinberg_FUnknown* const context)
     // check if already initialized
     CPLUG_LOG_ASSERT_RETURN(vst3->host == NULL, Steinberg_kInvalidArgument);
 
-    // query for host application
-    if (vst3->host == NULL && context != NULL)
-        ((Steinberg_FUnknown*)context)
-            ->lpVtbl
-            ->queryInterface((Steinberg_FUnknown*)context, Steinberg_Vst_IHostApplication_iid, (void**)&vst3->host);
+    vst3->host = (Steinberg_Vst_IHostApplication*)context;
 
     cplug_log("VST3Component_initialize => %p %p | hostApplication %p", self, context, vst3->host);
 
@@ -2075,9 +2068,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_terminate(void* co
 
     cplug_destroyPlugin(vst3->userPlugin);
     vst3->userPlugin = NULL;
-
-    if (vst3->host)
-        vst3->host->lpVtbl->release(vst3->host);
+    vst3->host       = NULL;
 
     if (vst3->controller.componentHandler)
         vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
@@ -2341,10 +2332,6 @@ uint32_t SMTG_STDMETHODCALLTYPE VST3Factory_release(void* const self)
     {
         cplug_log("VST3Factory_release => %p | refcount is zero, deleting factory", self);
 
-        // unref old context if there is one
-        if (factory->host != NULL)
-            factory->host->lpVtbl->release(factory->host);
-
         free(factory);
     }
 
@@ -2534,20 +2521,7 @@ VST3Factory_getClassInfoUnicode(void* self, const int32_t idx, struct Steinberg_
 Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Factory_setHostContext(void* const self, Steinberg_FUnknown* const context)
 {
     cplug_log("VST3Factory_setHostContext => %p %p", self, context);
-    VST3Factory* const factory = (VST3Factory*)self;
-
-    if (factory->host != NULL)
-    {
-        factory->host->lpVtbl->release(factory->host);
-        factory->host = NULL;
-    }
-
-    if (factory->host == NULL && context != NULL)
-        ((Steinberg_FUnknown*)context)
-            ->lpVtbl
-            ->queryInterface((Steinberg_FUnknown*)context, Steinberg_Vst_IHostApplication_iid, (void**)&factory->host);
-
-    return Steinberg_kResultOk;
+    return Steinberg_kNotImplemented;
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -2594,7 +2568,6 @@ const void* GetPluginFactory(void)
     factory->base.setHostContext      = VST3Factory_setHostContext;
 
     factory->refcounter = 1;
-    factory->host       = NULL;
     return factory;
 }
 
