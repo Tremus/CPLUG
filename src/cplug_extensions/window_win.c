@@ -142,6 +142,8 @@ __declspec(dllexport) BOOL WINAPI DllMain(
     DWORD     fdwReason, // reason for calling function
     LPVOID    lpvReserved)  // reserved
 {
+    // cplug_log("DllMain => %p %lu %p", hinstDLL, fdwReason, lpvReserved);
+
     // Perform actions based on the reason for calling.
     switch (fdwReason)
     {
@@ -247,11 +249,13 @@ static inline CplugWindow* PWDropTargetShiftPtr(IDropTarget* pDropTarget)
 // https://learn.microsoft.com/en-us/windows/win32/com/component-object-model--com--portal
 HRESULT STDMETHODCALLTYPE PWDropTarget_QueryInterface(IDropTarget* This, REFIID riid, void** ppvObject)
 {
+    // cplug_log("PWDropTarget_QueryInterface => %p %p %p", This, riid, ppvObject);
     return E_NOINTERFACE;
 }
 
 ULONG STDMETHODCALLTYPE PWDropTarget_AddRef(IDropTarget* This)
 {
+    // cplug_log("PWDropTarget_AddRef => %p", This);
     // NOTE: called after RegisterDragDrop()
     CplugWindow* pw = PWDropTargetShiftPtr(This);
     // https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-_inlineinterlockedadd
@@ -260,6 +264,7 @@ ULONG STDMETHODCALLTYPE PWDropTarget_AddRef(IDropTarget* This)
 
 ULONG STDMETHODCALLTYPE PWDropTarget_Release(IDropTarget* This)
 {
+    // cplug_log("PWDropTarget_Release => %p", This);
     // NOTE: Should be called after RevokeDragDrop(), that's what the docs say, but my testing shows it doesn't get
     // called if you first clicked the windows X close button.
     CplugWindow* pw = PWDropTargetShiftPtr(This);
@@ -272,6 +277,7 @@ ULONG STDMETHODCALLTYPE PWDropTarget_Release(IDropTarget* This)
 HRESULT STDMETHODCALLTYPE
 PWDropTarget_DragEnter(IDropTarget* This, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
 {
+    // cplug_log("PWDropTarget_DragEnter => %p %p %ld %ld %ld %p", This, pDataObj, grfKeyState, pt.x, pt.y, pdwEffect);
     CplugWindow* pw = PWDropTargetShiftPtr(This);
 
     FORMATETC Format   = {0};
@@ -380,6 +386,7 @@ error:
 // https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nf-oleidl-idroptarget-dragover
 HRESULT STDMETHODCALLTYPE PWDropTarget_DragOver(IDropTarget* This, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
 {
+    // cplug_log("PWDropTarget_DragOver => %p %ld %ld %ld %p", This, grfKeyState, pt.x, pt.y, pdwEffect);
     CplugWindow* pw = PWDropTargetShiftPtr(This);
     PW_ASSERT(pw->DropTarget.NumPaths);
     PW_ASSERT(pw->DropTarget.pFilePaths);
@@ -407,6 +414,7 @@ HRESULT STDMETHODCALLTYPE PWDropTarget_DragOver(IDropTarget* This, DWORD grfKeyS
 // https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nf-oleidl-idroptarget-dragleave
 HRESULT STDMETHODCALLTYPE PWDropTarget_DragLeave(IDropTarget* This)
 {
+    // cplug_log("PWDropTarget_Drop => %p", This);
     CplugWindow* pw = PWDropTargetShiftPtr(This);
     PW_ASSERT(pw->DropTarget.NumPaths);
     PW_ASSERT(pw->DropTarget.pFilePaths);
@@ -425,6 +433,7 @@ HRESULT STDMETHODCALLTYPE PWDropTarget_DragLeave(IDropTarget* This)
 HRESULT STDMETHODCALLTYPE
 PWDropTarget_Drop(IDropTarget* This, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
 {
+    // cplug_log("PWDropTarget_Drop => %p %p %ld %ld %ld %p", This, pDataObj, grfKeyState, pt.x, pt.y, pdwEffect);
     CplugWindow* pw = PWDropTargetShiftPtr(This);
     PW_ASSERT(pw->DropTarget.NumPaths);
     PW_ASSERT(pw->DropTarget.pFilePaths);
@@ -462,6 +471,7 @@ static inline CplugWindow* PWDropSourceShiftPtr(IDropSource* pDropSource)
 
 HRESULT STDMETHODCALLTYPE PWDropSource_QueryInterface(IDropSource* This, REFIID riid, void** ppvObject)
 {
+    // cplug_log("PWDropSource_QueryInterface => %p %p %p", This, riid, ppvObject);
     if (0 == memcmp(riid, &IID_IDropSource, sizeof(*riid)) || 0 == memcmp(riid, &IID_IUnknown, sizeof(*riid)))
     {
         This->lpVtbl->AddRef(This);
@@ -474,12 +484,14 @@ HRESULT STDMETHODCALLTYPE PWDropSource_QueryInterface(IDropSource* This, REFIID 
 
 ULONG STDMETHODCALLTYPE PWDropSource_AddRef(IDropSource* This)
 {
+    // cplug_log("PWDropSource_Release => %p", This);
     CplugWindow* pw = PWDropSourceShiftPtr(This);
     return _InlineInterlockedAdd(&pw->DropSource.RefCount, 1);
 }
 
 ULONG STDMETHODCALLTYPE PWDropSource_Release(IDropSource* This)
 {
+    // cplug_log("PWDropSource_Release => %p", This);
     CplugWindow* pw = PWDropSourceShiftPtr(This);
     return _InlineInterlockedAdd(&pw->DropSource.RefCount, -1);
 }
@@ -488,6 +500,7 @@ ULONG STDMETHODCALLTYPE PWDropSource_Release(IDropSource* This)
 HRESULT STDMETHODCALLTYPE
 PWDropSource_QueryContinueDrag(IDropSource* This, _In_ BOOL fEscapePressed, _In_ DWORD grfKeyState)
 {
+    // cplug_log("PWDropSource_QueryContinueDrag => %p %d %lu", This, fEscapePressed, grfKeyState);
     if (fEscapePressed)
         return DRAGDROP_S_CANCEL;
 
@@ -500,11 +513,13 @@ PWDropSource_QueryContinueDrag(IDropSource* This, _In_ BOOL fEscapePressed, _In_
 // https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nf-oleidl-idropsource-givefeedback
 HRESULT STDMETHODCALLTYPE PWDropSource_GiveFeedback(IDropSource* This, _In_ DWORD dwEffect)
 {
+    // cplug_log("PWDropSource_GiveFeedback => %p %lu", This, dwEffect);
     return DRAGDROP_S_USEDEFAULTCURSORS;
 }
 
 void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
 {
+    // cplug_log("pw_set_mouse_cursor => %p %u", _pw, type);
     CplugWindow* pw = _pw;
 
     HCURSOR cursor = NULL;
@@ -659,6 +674,7 @@ uint32_t PWGetKeyModifiers()
 
 void pw_set_clipboard_text(void* _pw, const char* text)
 {
+    // cplug_log("pw_set_clipboard_text => %p %p %p", _pw, text);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-closeclipboard
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-emptyclipboard
@@ -707,6 +723,7 @@ void pw_set_clipboard_text(void* _pw, const char* text)
 
 bool pw_get_clipboard_text(void* _pw, char** ptext, size_t* len)
 {
+    // cplug_log("pw_get_clipboard_text => %p %p %p", _pw, ptext, len);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-closeclipboard
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclipboarddata
@@ -757,12 +774,14 @@ cleanup:
 
 void pw_free_clipboard_text(char* ptr)
 {
+    // cplug_log("pw_free_clipboard_text => %p %p", ptr);
     PW_ASSERT(ptr != NULL);
     PW_FREE(ptr);
 }
 
 void pw_get_screen_size(uint32_t* width, uint32_t* height)
 {
+    // cplug_log("pw_get_screen_size => %p %p", width, height);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdesktopwindow
     RECT Rect;
@@ -774,12 +793,14 @@ void pw_get_screen_size(uint32_t* width, uint32_t* height)
 
 float pw_get_dpi(void* _pw)
 {
+    // cplug_log("pw_get_dpi => %p", _pw);
     CplugWindow* pw = _pw;
     return pw->dpi;
 }
 
 void* pw_get_native_window(void* _pw)
 {
+    // cplug_log("pw_get_native_window => %p", _pw);
     CplugWindow* pw = _pw;
     return pw->hwnd;
 }
@@ -787,28 +808,34 @@ void* pw_get_native_window(void* _pw)
 #ifdef PW_DX11
 void* pw_get_dx11_device(void* _pw)
 {
+    // cplug_log("pw_get_dx11_device => %p", _pw);
     CplugWindow* pw = _pw;
     return pw->pDevice;
 }
 
 void* pw_get_dx11_device_context(void* _pw)
 {
+    // cplug_log("pw_get_dx11_device_context => %p", _pw);
     CplugWindow* pw = _pw;
     return pw->pDeviceContext;
 }
 void* pw_get_dx11_render_target_view(void* _pw)
 {
+    // cplug_log("pw_get_dx11_render_target_view => %p", _pw);
     CplugWindow* pw = _pw;
     return pw->pRenderTargetView;
 }
 void* pw_get_dx11_depth_stencil_view(void* _pw)
 {
+    // cplug_log("pw_get_dx11_depth_stencil_view => %p", _pw);
     CplugWindow* pw = _pw;
     return pw->pDepthStencilView;
 }
 
 HRESULT pw_dx11_create_render_target(CplugWindow* pw)
 {
+    // cplug_log("pw_dx11_create_render_target => %p", pw);
+
     PW_ASSERT(pw->pSwapchain);
 
     HRESULT hr = pw->pSwapchain->lpVtbl->GetBuffer(pw->pSwapchain, 0, &IID_ID3D11Texture2D, (void**)&pw->pRenderTarget);
@@ -867,6 +894,7 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
 // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nc-winuser-wndproc
 LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    // cplug_log("PWWndProc => %p %u %llu %lld", hwnd, uMsg, wParam, lParam);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowlongptrw
     // NOTE: Might be NULL during initialisation
     CplugWindow* pw = (void*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -1064,6 +1092,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 // https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/ms644981(v=vs.85)
 LRESULT CALLBACK PWGetMsgProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
+    // cplug_log("PWGetMsgProc => %d %llu %lld", nCode, wParam, lParam);
     MSG* msg = (MSG*)lParam;
 
     // Check application is trying to dequeue a message
@@ -1099,6 +1128,7 @@ LRESULT CALLBACK PWGetMsgProc(int nCode, WPARAM wParam, LPARAM lParam)
 // https://learn.microsoft.com/en-us/windows/win32/winmsg/callwndproc
 LRESULT CALLBACK PWCallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
+    // cplug_log("PWCallWndProc => %d %llu %lld", nCode, wParam, lParam);
     if (nCode == HC_ACTION)
     {
         CWPSTRUCT* cwp = (CWPSTRUCT*)lParam;
@@ -1118,6 +1148,7 @@ LRESULT CALLBACK PWCallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
 
 void pw_get_keyboard_focus(void* _pw)
 {
+    // cplug_log("pw_get_keyboard_focus => %p", _pw);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setfocus
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowshookexw
     CplugWindow* pw = _pw;
@@ -1136,6 +1167,7 @@ void pw_get_keyboard_focus(void* _pw)
 
 bool pw_check_keyboard_focus(const void* _pw)
 {
+    // cplug_log("pw_check_keyboard_focus => %p", _pw);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getfocus
     const CplugWindow* pw = _pw;
     return GetFocus() == pw->hwnd;
@@ -1143,6 +1175,7 @@ bool pw_check_keyboard_focus(const void* _pw)
 
 void pw_release_keyboard_focus(void* _pw)
 {
+    // cplug_log("pw_release_keyboard_focus => %p", _pw);
     CplugWindow* pw = _pw;
 #ifndef CPLUG_BUILD_STANDALONE
     PW_ASSERT(pw->hGetMessageHook != NULL);
@@ -1171,6 +1204,7 @@ typedef struct PWDraggedFiles
 
 HRESULT STDMETHODCALLTYPE PWDraggedFiles_QueryInterface(IDataObject* This, REFIID riid, _COM_Outptr_ void** ppvObject)
 {
+    // cplug_log("PWDraggedFiles_QueryInterface => %p %p %p", This, riid, ppvObject);
     if (0 == memcmp(riid, &IID_IDataObject, sizeof(*riid)) || 0 == memcmp(riid, &IID_IUnknown, sizeof(*riid)))
     {
         *ppvObject = This;
@@ -1183,12 +1217,14 @@ HRESULT STDMETHODCALLTYPE PWDraggedFiles_QueryInterface(IDataObject* This, REFII
 
 ULONG STDMETHODCALLTYPE PWDraggedFiles_AddRef(IDataObject* This)
 {
+    // cplug_log("PWDraggedFiles_AddRef => %p", This);
     PWDraggedFiles* obj = (PWDraggedFiles*)This;
     return _InlineInterlockedAdd(&obj->RefCount, 1);
 }
 
 ULONG STDMETHODCALLTYPE PWDraggedFiles_Release(IDataObject* This)
 {
+    // cplug_log("PWDraggedFiles_Release => %p", This);
     PWDraggedFiles* obj       = (PWDraggedFiles*)This;
     LONG            NextCount = _InlineInterlockedAdd(&obj->RefCount, -1);
     if (NextCount == 0)
@@ -1205,6 +1241,7 @@ ULONG STDMETHODCALLTYPE PWDraggedFiles_Release(IDataObject* This)
 HRESULT STDMETHODCALLTYPE
 PWDraggedFiles_GetData(IDataObject* This, _In_ FORMATETC* pformatetcIn, _Out_ STGMEDIUM* pmedium)
 {
+    // cplug_log("PWDraggedFiles_GetData => %p %p %p", This, pformatetcIn, pmedium);
     BOOL ok = pformatetcIn->cfFormat == CF_HDROP && (pformatetcIn->dwAspect & DVASPECT_CONTENT) &&
               (pformatetcIn->tymed & TYMED_HGLOBAL);
     if (!ok)
@@ -1235,12 +1272,14 @@ PWDraggedFiles_GetData(IDataObject* This, _In_ FORMATETC* pformatetcIn, _Out_ ST
 // https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-idataobject-getdatahere
 HRESULT STDMETHODCALLTYPE PWDraggedFiles_GetDataHere(IDataObject* This, FORMATETC* pformatetc, STGMEDIUM* pmedium)
 {
+    // cplug_log("PWDraggedFiles_GetDataHere => %p %p %p", This, pformatetc, pmedium);
     return E_NOTIMPL;
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-idataobject-querygetdata
 HRESULT STDMETHODCALLTYPE PWDraggedFiles_QueryGetData(IDataObject* This, FORMATETC* pformatetc)
 {
+    // cplug_log("PWDraggedFiles_QueryGetData => %p %p", This, pformatetc);
     BOOL ok = pformatetc->cfFormat == CF_HDROP && (pformatetc->dwAspect & DVASPECT_CONTENT) &&
               (pformatetc->tymed & TYMED_HGLOBAL);
     return ok ? S_OK : DV_E_FORMATETC;
@@ -1250,6 +1289,7 @@ HRESULT STDMETHODCALLTYPE PWDraggedFiles_QueryGetData(IDataObject* This, FORMATE
 HRESULT STDMETHODCALLTYPE
 PWDraggedFiles_GetCanonicalFormatEtc(IDataObject* This, FORMATETC* pformatectIn, FORMATETC* pformatetcOut)
 {
+    // cplug_log("PWDraggedFiles_GetCanonicalFormatEtc => %p %p %p", This, pformatectIn, pformatetcOut);
     pformatetcOut->ptd = NULL;
     return E_NOTIMPL;
 }
@@ -1258,6 +1298,7 @@ PWDraggedFiles_GetCanonicalFormatEtc(IDataObject* This, FORMATETC* pformatectIn,
 HRESULT STDMETHODCALLTYPE
 PWDraggedFiles_SetData(IDataObject* This, FORMATETC* pformatetc, STGMEDIUM* pmedium, BOOL fRelease)
 {
+    // cplug_log("PWDraggedFiles_SetData => %p %p %p %d", This, pformatetc, pmedium, fRelease);
     return E_NOTIMPL;
 }
 
@@ -1265,6 +1306,7 @@ PWDraggedFiles_SetData(IDataObject* This, FORMATETC* pformatetc, STGMEDIUM* pmed
 HRESULT STDMETHODCALLTYPE
 PWDraggedFiles_EnumFormatEtc(IDataObject* This, DWORD dwDirection, IEnumFORMATETC** ppenumFormatEtc)
 {
+    // cplug_log("PWDraggedFiles_EnumFormatEtc => %p %lu %p", This, dwDirection, ppenumFormatEtc);
     if (dwDirection == DATADIR_GET)
     {
         // https://learn.microsoft.com/en-us/windows/win32/api/objidl/nn-objidl-ienumformatetc
@@ -1283,23 +1325,27 @@ HRESULT STDMETHODCALLTYPE PWDraggedFiles_DAdvise(
     IAdviseSink* pAdvSink,
     DWORD*       pdwConnection)
 {
+    // cplug_log("PWDraggedFiles_DAdvise => %p %p %lu %p %p", This, pformatetc, advf, pAdvSink, pdwConnection);
     return OLE_E_ADVISENOTSUPPORTED;
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-idataobject-dunadvise
 HRESULT STDMETHODCALLTYPE PWDraggedFiles_DUnadvise(IDataObject* This, DWORD dwConnection)
 {
+    // cplug_log("PWDraggedFiles_DUnadvise => %p %lu", This, dwConnection);
     return OLE_E_ADVISENOTSUPPORTED;
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-idataobject-enumdadvise
 HRESULT STDMETHODCALLTYPE PWDraggedFiles_EnumDAdvise(IDataObject* This, IEnumSTATDATA** ppenumAdvise)
 {
+    // cplug_log("PWDraggedFiles_EnumDAdvise => %p %p", This, ppenumAdvise);
     return OLE_E_ADVISENOTSUPPORTED;
 }
 
 void pw_drag_files(void* _pw, const char* const* paths, uint32_t num_paths)
 {
+    // cplug_log("pw_drag_files => %p %p %u", _pw, paths, num_paths);
     // https://devblogs.microsoft.com/oldnewthing/20041206-00/?p=37133
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-dodragdrop
     // https://learn.microsoft.com/en-us/windows/win32/com/dropeffect-constants
@@ -1382,6 +1428,7 @@ void pw_drag_files(void* _pw, const char* const* paths, uint32_t num_paths)
 
 void* cplug_createGUI(void* userPlugin)
 {
+    // cplug_log("cplug_createGUI => %p", userPlugin);
     CplugWindow* pw = (void*)PW_MALLOC(sizeof(CplugWindow));
     memset(pw, 0, sizeof(*pw));
     pw->plugin = userPlugin;
@@ -1645,6 +1692,7 @@ void* cplug_createGUI(void* userPlugin)
 
 void cplug_destroyGUI(void* userGUI)
 {
+    // cplug_log("cplug_destroyGUI => %p", userGUI);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindow
     CplugWindow* pw = userGUI;
     PW_ASSERT(IsWindow(pw->hwnd));
@@ -1702,6 +1750,7 @@ void cplug_destroyGUI(void* userGUI)
 
 void cplug_setParent(void* userGUI, void* newParent)
 {
+    // cplug_log("cplug_setParent => %p %p", userGUI, newParent);
     CplugWindow* pw = userGUI;
 
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getparent
@@ -1738,6 +1787,7 @@ void cplug_setParent(void* userGUI, void* newParent)
 
 void cplug_setVisible(void* userGUI, bool visible)
 {
+    // cplug_log("cplug_setVisible => %p %llu", userGUI, visible);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow
     CplugWindow* pw = userGUI;
     ShowWindow(pw->hwnd, visible ? SW_SHOW : SW_HIDE);
@@ -1745,6 +1795,7 @@ void cplug_setVisible(void* userGUI, bool visible)
 
 void cplug_setScaleFactor(void* userGUI, float scale)
 {
+    // cplug_log("cplug_setScaleFactor => %p %f", userGUI, scale);
     CplugWindow* pw = userGUI;
     pw->dpi         = scale;
 
@@ -1758,6 +1809,7 @@ void cplug_setScaleFactor(void* userGUI, float scale)
 
 void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
 {
+    // cplug_log("cplug_getSize => %p %p %p", userGUI, width, height);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect
     CplugWindow* pw = userGUI;
     RECT         rect;
@@ -1768,6 +1820,7 @@ void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
 
 void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
 {
+    // cplug_log("cplug_checkSize => %p %p %p", userGUI, width, height);
     CplugWindow* pw   = (CplugWindow*)userGUI;
     PWGetInfo    Info = {
            .type                     = PW_INFO_CONSTRAIN_SIZE,
@@ -1783,6 +1836,7 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
 
 bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 {
+    // cplug_log("cplug_setSize => %p %u %u", userGUI, width, height);
     CplugWindow* pw = userGUI;
     PW_ASSERT(width > 0);
     PW_ASSERT(height > 0);
@@ -1829,6 +1883,7 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 
 DWORD PWChooseFileThread(_In_ LPVOID lpParameter)
 {
+    // cplug_log("PWChooseFileThread => %p %p %p", lpParameter);
     CplugWindow* pw = lpParameter;
 
     HRESULT               hr        = 0;
@@ -2018,6 +2073,7 @@ error:
 
 bool pw_choose_file(const PWChooseFileArgs* args)
 {
+    // cplug_log("pw_choose_file => %p", args);
     CplugWindow* pw  = args->pw;
     int          num = 0;
     PW_ASSERT(pw->ChooseFile.hThread == NULL); // Is thread running?
