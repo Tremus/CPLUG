@@ -21,7 +21,6 @@
 
 #include <Windows.h>
 
-#include <Shlwapi.h>
 #include <audioclient.h>
 #include <cfgmgr32.h>
 #include <mmdeviceapi.h>
@@ -1051,6 +1050,9 @@ int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytes
     return bytesToActualyRead;
 }
 #pragma endregion PLUGIN_STATE
+
+// This avoids having to inlcude <Shlwapi.h>, which causes some issues when trying to build in both C & C++
+EXTERN_C __declspec(dllimport) BOOL __stdcall PathFileExistsW(_In_ LPCWSTR pszPath);
 
 // Debuggers on Windows have a tough time loading an updated DLL and PDB with the same name of a previously loaded DLL
 // So we simply duplicate the file, add a version suffix to the name, then load that

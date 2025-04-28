@@ -1496,9 +1496,8 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements
     VST3Plugin* const vst3 = _cplug_pointerShiftProcessor(self);
 
     bool input_ok = true;
-#if CPLUG_NUM_INPUT_BUSSES
     CPLUG_LOG_ASSERT_RETURN(num_inputs >= 0, Steinberg_kInvalidArgument);
-    for (int i = 0; i < num_inputs && i < CPLUG_NUM_INPUT_BUSSES; i++)
+    for (int i = 0; i < num_inputs; i++)
     {
         uint32_t              num_channels      = cplug_getInputBusChannelCount(vst3->userPlugin, i);
         Steinberg_Vst_Speaker requested_speaker = inputs[i];
@@ -1507,12 +1506,10 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements
 
         input_ok = input_ok && (requested_speaker == 0 || requested_speaker == accepted_speaker);
     }
-#endif
 
     bool output_ok = true;
-#if CPLUG_NUM_OUTPUT_BUSSES
     CPLUG_LOG_ASSERT_RETURN(num_outputs >= 0, Steinberg_kInvalidArgument);
-    for (int i = 0; i < num_outputs && i < CPLUG_NUM_OUTPUT_BUSSES; i++)
+    for (int i = 0; i < num_outputs; i++)
     {
         uint32_t              num_channels      = cplug_getOutputBusChannelCount(vst3->userPlugin, i);
         Steinberg_Vst_Speaker requested_speaker = outputs[i];
@@ -1521,7 +1518,6 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements
 
         output_ok = output_ok && (requested_speaker == 0 || requested_speaker == accepted_speaker);
     }
-#endif
 
     return (input_ok && output_ok) ? Steinberg_kResultTrue : Steinberg_kResultFalse;
 }
