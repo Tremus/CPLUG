@@ -1446,7 +1446,7 @@ static void AUv2HostContext_rescan(CplugHostContext* ctx, uint32_t flags)
             }
         }
     }
-    // NOTE: Reaper does not appear to support listeners for kAudioUnitProperty_ParameterInfo at the time of writing
+    // NOTE: Reaper and Ableton do not support listeners for kAudioUnitProperty_ParameterInfo
     if ((flags & (CPLUG_FLAG_RESCAN_PARAM_NAMES | CPLUG_FLAG_RESCAN_PARAM_METADATA)) && auv2->parameterInfoListenerProc)
     {
         auv2->parameterInfoListenerProc(
