@@ -1486,7 +1486,7 @@ static bool AUv2HostContext_getHostName(CplugHostContext* ctx, char* buf, size_t
     if (bundle)
     {
         CFStringRef bundleId      = CFBundleGetIdentifier(bundle);
-        CFStringRef versionString = CFBundleGetValueForInfoDictionaryKey(bundle, kCFBundleVersionKey);
+        CFStringRef versionString = (CFStringRef)CFBundleGetValueForInfoDictionaryKey(bundle, kCFBundleVersionKey);
         if (bundleId && versionString)
         {
             char    idBuf[128]  = {0};

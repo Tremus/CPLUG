@@ -9,13 +9,7 @@
 #define my_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
 #endif
 
-// Apparently denormals aren't a problem on ARM & M1?
-// https://en.wikipedia.org/wiki/Subnormal_number
-// https://www.kvraudio.com/forum/viewtopic.php?t=575799
-#if __arm64__
-#define DISABLE_DENORMALS
-#define RESTORE_DENORMALS
-#elif defined(_WIN32)
+#if defined(_WIN32) && defined(__x86_64__)
 // https://softwareengineering.stackexchange.com/a/337251
 #include <immintrin.h>
 #define DISABLE_DENORMALS                                                                                              \
@@ -25,10 +19,16 @@
 #define RESTORE_DENORMALS _mm_setcsr(oldMXCSR);
 #else
 #include <fenv.h>
+#if defined(__x86_64__)
+#define DISABLE_DENORMS_ENV &_FE_DFL_DISABLE_SSE_DENORMS_ENV
+#elif defined(__arm64__)
+#define DISABLE_DENORMS_ENV &_FE_DFL_DISABLE_DENORMS_ENV
+#endif // x84, ARM64
+
 #define DISABLE_DENORMALS                                                                                              \
     fenv_t _fenv;                                                                                                      \
     fegetenv(&_fenv);                                                                                                  \
-    fesetenv(FE_DFL_DISABLE_SSE_DENORMS_ENV);
+    fesetenv(DISABLE_DENORMS_ENV);
 #define RESTORE_DENORMALS fesetenv(&_fenv);
 #endif
 
@@ -418,9 +418,9 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
 
                 for (; frame < event.processAudio.endFrame; frame++)
                 {
-                    static const float pi = 3.141592653589793f;
+                    static const float mypi = 3.141592653589793f;
 
-                    float sample = vol * sinf(2 * pi * phase);
+                    float sample = vol * sinf(2 * mypi * phase);
 
                     for (int ch = 0; ch < 2; ch++)
                         output[ch][frame] = sample;
