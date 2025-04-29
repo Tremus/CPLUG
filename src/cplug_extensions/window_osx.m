@@ -130,6 +130,7 @@ uint64_t pwTranslateModifierFlags(NSEvent* event)
 PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
 {
     NSPoint point = [event locationInWindow];
+    point         = [pw convertPoint:point fromView:nil];
 
     PWEvent e = {
         .gui                            = pw->gui,
