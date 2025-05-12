@@ -372,10 +372,15 @@ PWDropTarget_DragEnter(IDropTarget* This, IDataObject* pDataObj, DWORD grfKeySta
             .file.num_paths = pw->DropTarget.NumPaths,
         };
 
-        bool ok = pw_event(&event);
+        bool interested = pw_event(&event);
 
-        *pdwEffect = ok ? DROPEFFECT_COPY : DROPEFFECT_NONE;
-        return ok ? 0 : -1;
+        // If user is not interested, they will not receive any file drag move or exit events
+        // Cleanup is required
+        if (!interested)
+            PWFreeDropTarget(pw);
+
+        *pdwEffect = interested ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        return interested ? 0 : -1;
     }
 
 error:
@@ -414,7 +419,7 @@ HRESULT STDMETHODCALLTYPE PWDropTarget_DragOver(IDropTarget* This, DWORD grfKeyS
 // https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nf-oleidl-idroptarget-dragleave
 HRESULT STDMETHODCALLTYPE PWDropTarget_DragLeave(IDropTarget* This)
 {
-    // cplug_log("PWDropTarget_Drop => %p", This);
+    // cplug_log("PWDropTarget_DragLeave => %p", This);
     CplugWindow* pw = PWDropTargetShiftPtr(This);
     PW_ASSERT(pw->DropTarget.NumPaths);
     PW_ASSERT(pw->DropTarget.pFilePaths);
