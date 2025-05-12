@@ -791,8 +791,8 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             BOOL ok = DeleteFileW(PrevVersionPath);
             cplug_assert(ok);
             _snwprintf(PrevVersionPath, MAX_PATH, L"%.*s%u.pdb", len, CurrentDllPath, PrevVersion);
-            ok = DeleteFileW(PrevVersionPath);
-            cplug_assert(ok);
+            // Some (not all) debuggers hold a lock on pdb files which causes deleting the file to fail
+            DeleteFileW(PrevVersionPath);
         }
 #endif
         DestroyWindow(hWnd);
@@ -991,7 +991,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 #ifdef HOTRELOAD_WATCH_DIR
 #pragma region PLUGIN_STATE
-int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
     cplug_assert(stateCtx != NULL);
     cplug_assert(writePos != NULL);
