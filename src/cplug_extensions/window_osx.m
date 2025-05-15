@@ -782,11 +782,19 @@ void pw_set_mouse_cursor(void* gui, enum PWCursorType type)
     [cursor set];
 }
 
+// From my current understanding of Cocoa, keyboard focus is something you can set on one window at a time
+// You can't tell macOS "remove keyboard focus from my window". It's set only.
+// NSWindows use what they call a "responder chain", where the first responder gets all new events. All child NSViews
+// are responders in NSWindows chain.
+// When we want to remove keyboard focus, the best we can do is ask for a lower priority in the chain.
+// https://developer.apple.com/documentation/appkit/nswindow/firstresponder?language=objc
 void pw_get_keyboard_focus(void* _pw)
 {
     CplugWindow* pw = (CplugWindow*)_pw;
     if (pw.window && pw.window.keyWindow == false)
         [pw.window makeKeyWindow];
+
+    [pw.window makeFirstResponder:pw];
 }
 
 bool pw_check_keyboard_focus(const void* _pw)
@@ -802,8 +810,9 @@ bool pw_check_keyboard_focus(const void* _pw)
 void pw_release_keyboard_focus(void* _pw)
 {
     CplugWindow* pw = (CplugWindow*)_pw;
-    if (pw.window && pw.window.keyWindow)
-        [pw.window resignKeyWindow];
+
+    if (pw.window)
+        [pw.window resignFirstResponder];
 }
 
 void pw_beep() { NSBeep(); }
