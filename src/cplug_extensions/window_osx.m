@@ -47,6 +47,15 @@
     bool isDragging;
     bool isMouseOver;
 
+    // Logic Pro steals the modifier flag for the Command key in [NSView keyDown]
+    // Luckily, it doesn't steal it in [NSView flagsChanged], so we sneakily keep it here.
+    // I'm currently unaware of any trick to steal the command key from Logic. When I use the text editors in other
+    // plugins, the CmdA, Cmd+C, Cmd+V hotkeys all appear to trigger an event within logic, but fail to select, copy or
+    // paste anything, likely beuase the current focus in the plugin window.
+    // Be careful about how you set your hotkeys within your plugin, and expect your plugin and logic to react to all
+    // events containing Cmd + some other key.
+    NSEventModifierFlags modifierFlags;
+
     UInt32          numDraggedFiles;
     char**          draggedFiles;
     NSTrackingArea* trackingArea;
@@ -95,11 +104,11 @@ enum PWResizeDirection pwTranslateResizeFlags(uint32_t flags)
     return flags;
 }
 
-uint64_t pwTranslateModifierFlags(NSEvent* event)
+uint64_t pwTranslateModifierFlags(CplugWindow* pw, NSEvent* event)
 {
     uint32_t mods = 0;
 
-    NSEventModifierFlags nsflags = [event modifierFlags];
+    NSEventModifierFlags nsflags = pw->modifierFlags;
 
     if (nsflags & NSEventModifierFlagShift)
         mods |= PW_MOD_KEY_SHIFT;
@@ -136,7 +145,7 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
         .gui                            = pw->gui,
         .mouse.x                        = point.x,
         .mouse.y                        = pw.frame.size.height - point.y,
-        .mouse.modifiers                = pwTranslateModifierFlags(event),
+        .mouse.modifiers                = pwTranslateModifierFlags(pw, event),
         .mouse.time_ms                  = (uint32_t)([event timestamp] * 1000),
         .mouse.double_click_interval_ms = (uint32_t)([NSEvent doubleClickInterval] * 1000),
     };
@@ -499,14 +508,15 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
     PWEvent e = {.gui = gui};
     _Static_assert(offsetof(PWEvent, key.modifiers) == offsetof(PWEvent, text.modifiers), "");
     e.type            = PW_EVENT_KEY_DOWN;
-    e.key.modifiers   = pwTranslateModifierFlags(event);
+    e.key.modifiers   = pwTranslateModifierFlags(self, event);
     e.key.virtual_key = [event keyCode];
 
     bool consumed = pw_event(&e);
 
     if (pw_check_keyboard_focus(self))
     {
-        e.type = PW_EVENT_TEXT;
+        e.type           = PW_EVENT_TEXT;
+        e.text.codepoint = 0;
 
         NSString* nsstring = [event characters];
 
@@ -515,7 +525,7 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
             unichar firstchar = [nsstring characterAtIndex:0];
             // check macos reserved key 0xF700..0xF8FF
             if (firstchar >= NSUpArrowFunctionKey && firstchar <= 0xF8FF)
-                return;
+                goto end;
         }
 
         const char* str = [nsstring UTF8String];
@@ -524,15 +534,16 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
         strncpy((char*)&e.text.codepoint, str, sizeof(e.text.codepoint));
 
         if (e.text.modifiers & PW_MOD_KEY_CMD) // not a text event
-            return;
+            goto end;
         // ASCII DEL (backspace). Not renderable text. Should be handled by virtual key code
         if (e.text.codepoint == 0x7f)
-            return;
+            goto end;
 
         if (e.text.codepoint)
-            consumed = pw_event(&e) || consumed;
+            consumed |= pw_event(&e);
     }
 
+end:
     if (!consumed)
         [super keyDown:event];
 }
@@ -544,11 +555,16 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
         .type = PW_EVENT_KEY_UP,
     };
     e.key.virtual_key = [event keyCode];
-    e.key.modifiers   = pwTranslateModifierFlags(event);
+    e.key.modifiers   = pwTranslateModifierFlags(self, event);
 
     bool consumed = pw_event((&e));
     if (!consumed)
         [super keyUp:event];
+}
+
+- (void)flagsChanged:(NSEvent*)event
+{
+    self->modifierFlags = event.modifierFlags;
 }
 
 // DRAGGING
