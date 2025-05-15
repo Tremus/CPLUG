@@ -47,14 +47,11 @@
     bool isDragging;
     bool isMouseOver;
 
-    // Logic Pro steals the modifier flag for the Command key in [NSView keyDown]
-    // Luckily, it doesn't steal it in [NSView flagsChanged], so we sneakily keep it here.
-    // I'm currently unaware of any trick to steal the command key from Logic. When I use the text editors in other
-    // plugins, the CmdA, Cmd+C, Cmd+V hotkeys all appear to trigger an event within logic, but fail to select, copy or
-    // paste anything, likely beuase the current focus in the plugin window.
-    // Be careful about how you set your hotkeys within your plugin, and expect your plugin and logic to react to all
-    // events containing Cmd + some other key.
-    NSEventModifierFlags modifierFlags;
+    // Logic Pro and Ableton steal [NSView keyDown] events when you use the command key.
+    // We use a hack to steal them back using [NSEvent addLocalMonitorForEventsMatchingMask]
+    // Currently Reaper still manages to steal these events, as well as the Space key.
+    // TODO: Outsmart the Cockos team
+    id keyEventMonitor;
 
     UInt32          numDraggedFiles;
     char**          draggedFiles;
@@ -108,7 +105,7 @@ uint64_t pwTranslateModifierFlags(CplugWindow* pw, NSEvent* event)
 {
     uint32_t mods = 0;
 
-    NSEventModifierFlags nsflags = pw->modifierFlags;
+    NSEventModifierFlags nsflags = event.modifierFlags;
 
     if (nsflags & NSEventModifierFlagShift)
         mods |= PW_MOD_KEY_SHIFT;
@@ -134,6 +131,65 @@ uint64_t pwTranslateModifierFlags(CplugWindow* pw, NSEvent* event)
         mods |= PW_MOD_MIDDLE_BUTTON;
 
     return mods;
+}
+
+bool pwHandleKeyDown(CplugWindow* pw, NSEvent* event)
+{
+    bool    eventConsumed = false;
+    PWEvent e             = {.gui = pw->gui};
+    _Static_assert(offsetof(PWEvent, key.modifiers) == offsetof(PWEvent, text.modifiers), "");
+    e.type            = PW_EVENT_KEY_DOWN;
+    e.key.modifiers   = pwTranslateModifierFlags(pw, event);
+    e.key.virtual_key = [event keyCode];
+
+    eventConsumed = pw_event(&e);
+
+    if (pw_check_keyboard_focus(pw))
+    {
+        e.type           = PW_EVENT_TEXT;
+        e.text.codepoint = 0;
+
+        NSString* nsstring = [event characters];
+
+        if ([nsstring length] == 1)
+        {
+            unichar firstchar = [nsstring characterAtIndex:0];
+            // check macos reserved key 0xF700..0xF8FF
+            if (firstchar >= NSUpArrowFunctionKey && firstchar <= 0xF8FF)
+                return eventConsumed;
+        }
+
+        const char* str = [nsstring UTF8String];
+        PW_ASSERT(str != NULL);
+
+        strncpy((char*)&e.text.codepoint, str, sizeof(e.text.codepoint));
+
+        if (e.text.modifiers & PW_MOD_KEY_CMD) // not a text event
+            return eventConsumed;
+        // ASCII DEL (backspace). Not renderable text. Should be handled by virtual key code
+        if (e.text.codepoint == 0x7f)
+            return eventConsumed;
+
+        if (e.text.codepoint)
+            eventConsumed |= pw_event(&e);
+    }
+
+    return eventConsumed;
+}
+
+bool pwHandleKeyUp(CplugWindow* pw, NSEvent* event)
+{
+    bool eventConsumed = false;
+
+    PWEvent e = {
+        .gui  = pw->gui,
+        .type = PW_EVENT_KEY_UP,
+    };
+    e.key.virtual_key = [event keyCode];
+    e.key.modifiers   = pwTranslateModifierFlags(pw, event);
+
+    eventConsumed = pw_event((&e));
+    return eventConsumed;
 }
 
 PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
@@ -219,6 +275,21 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
 
         [window makeFirstResponder:self];
 
+        // Used for consuming key events before some DAWs try and steal them
+        // https://developer.apple.com/documentation/appkit/nsevent/addlocalmonitorforevents(matching:handler:)?language=objc
+        self->keyEventMonitor =
+            [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskKeyUp)
+                                                  handler:^NSEvent* _Nullable(NSEvent* _Nonnull event) {
+                                                    bool eventConsumed = false;
+                                                    if (event.type == NSEventTypeKeyDown)
+                                                        eventConsumed = pwHandleKeyDown(self, event);
+                                                    else if (event.type == NSEventTypeKeyUp)
+                                                        eventConsumed = pwHandleKeyUp(self, event);
+                                                    if (eventConsumed)
+                                                        return nil;
+                                                    return event;
+                                                  }];
+
         gui = pw_create_gui(plugin, self);
         PW_ASSERT(gui);
 
@@ -259,6 +330,12 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
         [center removeObserver:self name:NSWindowWillStartLiveResizeNotification object:nil];
         [center removeObserver:self name:NSWindowDidEndLiveResizeNotification object:nil];
         [center removeObserver:self name:NSWindowDidResignKeyNotification object:nil];
+
+        if (self->keyEventMonitor)
+        {
+            [NSEvent removeMonitor:keyEventMonitor];
+            self->keyEventMonitor = NULL;
+        }
 
         void* ptr = gui;
         gui       = NULL;
@@ -501,70 +578,6 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
         e.mouse.y = CGEventGetIntegerValueField(cgevent, kCGScrollWheelEventDeltaAxis1) * 120;
     }
     pw_event(&e);
-}
-
-- (void)keyDown:(NSEvent*)event
-{
-    PWEvent e = {.gui = gui};
-    _Static_assert(offsetof(PWEvent, key.modifiers) == offsetof(PWEvent, text.modifiers), "");
-    e.type            = PW_EVENT_KEY_DOWN;
-    e.key.modifiers   = pwTranslateModifierFlags(self, event);
-    e.key.virtual_key = [event keyCode];
-
-    bool consumed = pw_event(&e);
-
-    if (pw_check_keyboard_focus(self))
-    {
-        e.type           = PW_EVENT_TEXT;
-        e.text.codepoint = 0;
-
-        NSString* nsstring = [event characters];
-
-        if ([nsstring length] == 1)
-        {
-            unichar firstchar = [nsstring characterAtIndex:0];
-            // check macos reserved key 0xF700..0xF8FF
-            if (firstchar >= NSUpArrowFunctionKey && firstchar <= 0xF8FF)
-                goto end;
-        }
-
-        const char* str = [nsstring UTF8String];
-        PW_ASSERT(str != NULL);
-
-        strncpy((char*)&e.text.codepoint, str, sizeof(e.text.codepoint));
-
-        if (e.text.modifiers & PW_MOD_KEY_CMD) // not a text event
-            goto end;
-        // ASCII DEL (backspace). Not renderable text. Should be handled by virtual key code
-        if (e.text.codepoint == 0x7f)
-            goto end;
-
-        if (e.text.codepoint)
-            consumed |= pw_event(&e);
-    }
-
-end:
-    if (!consumed)
-        [super keyDown:event];
-}
-
-- (void)keyUp:(NSEvent*)event
-{
-    PWEvent e = {
-        .gui  = gui,
-        .type = PW_EVENT_KEY_UP,
-    };
-    e.key.virtual_key = [event keyCode];
-    e.key.modifiers   = pwTranslateModifierFlags(self, event);
-
-    bool consumed = pw_event((&e));
-    if (!consumed)
-        [super keyUp:event];
-}
-
-- (void)flagsChanged:(NSEvent*)event
-{
-    self->modifierFlags = event.modifierFlags;
 }
 
 // DRAGGING
@@ -810,7 +823,7 @@ void pw_get_keyboard_focus(void* _pw)
     if (pw.window && pw.window.keyWindow == false)
         [pw.window makeKeyWindow];
 
-    [pw.window makeFirstResponder:pw];
+    BOOL ok = [pw.window makeFirstResponder:pw];
 }
 
 bool pw_check_keyboard_focus(const void* _pw)
