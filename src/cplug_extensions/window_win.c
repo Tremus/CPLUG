@@ -1198,6 +1198,105 @@ void pw_release_keyboard_focus(void* _pw)
     }
 }
 
+typedef struct PWEnumFORMATETC
+{
+    struct IEnumFORMATETCVtbl* lpVtbl;
+    struct IEnumFORMATETCVtbl  Vtbl;
+    volatile LONG              RefCount;
+
+    ULONG Index;
+} PWEnumFORMATETC;
+
+HRESULT STDMETHODCALLTYPE
+PWEnumFORMATETC_QueryInterface(IEnumFORMATETC* This, REFIID riid, _COM_Outptr_ void** ppvObject)
+{
+    // cplug_log("PWEnumFORMATETC_QueryInterface => %p %p %p", This, riid, ppvObject);
+    if (0 == memcmp(riid, &IID_IEnumFORMATETC, sizeof(*riid)) || 0 == memcmp(riid, &IID_IUnknown, sizeof(*riid)))
+    {
+        *ppvObject = This;
+        This->lpVtbl->AddRef(This);
+        return S_OK;
+    }
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
+}
+
+ULONG STDMETHODCALLTYPE PWEnumFORMATETC_AddRef(IEnumFORMATETC* This)
+{
+    // cplug_log("PWEnumFORMATETC_AddRef => %p", This);
+    PWEnumFORMATETC* obj = (PWEnumFORMATETC*)This;
+    return _InlineInterlockedAdd(&obj->RefCount, 1);
+}
+
+ULONG STDMETHODCALLTYPE PWEnumFORMATETC_Release(IEnumFORMATETC* This)
+{
+    // cplug_log("PWEnumFORMATETC_Release => %p", This);
+    PWEnumFORMATETC* obj       = (PWEnumFORMATETC*)This;
+    LONG             NextCount = _InlineInterlockedAdd(&obj->RefCount, -1);
+    if (NextCount == 0)
+    {
+        PW_FREE(obj);
+    }
+    return NextCount;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-ienumformatetc-clone
+HRESULT PWEnumFORMATETC_Clone(IEnumFORMATETC* This, __RPC__out IEnumFORMATETC** ppenum)
+{
+    // cplug_log("PWEnumFORMATETC_Clone => %p %p", This, ppenum);
+    PWEnumFORMATETC* obj    = (PWEnumFORMATETC*)This;
+    PWEnumFORMATETC* newobj = PW_MALLOC(sizeof(*obj));
+
+    memcpy(newobj, obj, sizeof(*obj));
+    newobj->RefCount = 1;
+
+    *ppenum = (IEnumFORMATETC*)newobj;
+    return S_OK;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-ienumformatetc-next
+HRESULT PWEnumFORMATETC_Next(
+    IEnumFORMATETC*       This,
+    __RPC__in ULONG       NumItems,
+    __RPC__out FORMATETC* pItems,
+    __RPC__inout ULONG*   pNumItemsFetched)
+{
+    // cplug_log("PWEnumFORMATETC_Next => %p %lu %p %p", This, NumItems, pItems, pNumItemsFetched);
+    PWEnumFORMATETC* obj = (PWEnumFORMATETC*)This;
+    if (NumItems != 1 || obj->Index != 0)
+        return S_FALSE;
+
+    pItems->cfFormat = CF_HDROP;
+    pItems->ptd      = NULL;
+    pItems->dwAspect = DVASPECT_CONTENT;
+    pItems->lindex   = -1;
+    pItems->tymed    = TYMED_HGLOBAL;
+    obj->Index++;
+
+    // Docs say this may be null of NumItems (celt) is 1, which is all we accept
+    if (pNumItemsFetched)
+        *pNumItemsFetched = 1;
+
+    return S_OK;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-ienumformatetc-reset
+HRESULT PWEnumFORMATETC_Reset(IEnumFORMATETC* This)
+{
+    // cplug_log("PWEnumFORMATETC_Reset => %p", This);
+    PWEnumFORMATETC* obj = (PWEnumFORMATETC*)This;
+    obj->Index           = 0;
+    return S_OK;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/api/objidl/nf-objidl-ienumformatetc-skip
+HRESULT PWEnumFORMATETC_Skip(IEnumFORMATETC* This, __RPC__in ULONG celt)
+{
+    // cplug_log("PWEnumFORMATETC_Skip => %p %lu", This, celt);
+    // We only support 1 value. Skipping impossible
+    return S_FALSE;
+}
+
 typedef struct PWDraggedFiles
 {
     struct IDataObjectVtbl* lpVtbl;
@@ -1315,10 +1414,23 @@ PWDraggedFiles_EnumFormatEtc(IDataObject* This, DWORD dwDirection, IEnumFORMATET
     if (dwDirection == DATADIR_GET)
     {
         // https://learn.microsoft.com/en-us/windows/win32/api/objidl/nn-objidl-ienumformatetc
-        // Other implementations of IDataObject I've seem to implement and return IEnumFORMATETC here, however  apps
-        // I've tested like File Explorer, Abelton Live 12, Bitwig 5, Reaper, and likely many more all don't seem to
-        // care if I skip it...
+        // Most apps like File Explorer, Abelton Live 12, Bitwig 5, Reaper, and likely many more all don't seem to care
+        // if you if you don't implement this method. FL Studio is the only app I've found that requires it.
+        PWEnumFORMATETC* fmt     = PW_MALLOC(sizeof(PWEnumFORMATETC));
+        fmt->lpVtbl              = &fmt->Vtbl;
+        fmt->Vtbl.QueryInterface = PWEnumFORMATETC_QueryInterface;
+        fmt->Vtbl.AddRef         = PWEnumFORMATETC_AddRef;
+        fmt->Vtbl.Release        = PWEnumFORMATETC_Release;
+        fmt->Vtbl.Clone          = PWEnumFORMATETC_Clone;
+        fmt->Vtbl.Next           = PWEnumFORMATETC_Next;
+        fmt->Vtbl.Reset          = PWEnumFORMATETC_Reset;
+        fmt->Vtbl.Skip           = PWEnumFORMATETC_Skip;
+        fmt->RefCount            = 1;
+
+        *ppenumFormatEtc = (IEnumFORMATETC*)&fmt->lpVtbl;
+        return S_OK;
     }
+    *ppenumFormatEtc = NULL;
     return E_NOTIMPL;
 }
 
@@ -1375,9 +1487,11 @@ void pw_drag_files(void* _pw, const char* const* paths, uint32_t num_paths)
     }
 
     HGLOBAL hMem = GlobalAlloc(GHND | GMEM_SHARE, sizeof(DROPFILES) + NumChars * sizeof(WCHAR));
+    PW_ASSERT(hMem);
     if (hMem)
     {
         DROPFILES* pDrop = GlobalLock(hMem);
+        PW_ASSERT(pDrop);
         if (pDrop)
         {
             pDrop->pFiles = sizeof(DROPFILES);
