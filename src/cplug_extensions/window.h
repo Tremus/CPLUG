@@ -330,8 +330,16 @@ enum PWCursorType
 enum PWVirtualKey
 {
     PW_KEY_BACKSPACE = 0x08,
+    PW_KEY_TAB,
 
-    PW_KEY_PAGE_UP   = 0x21,
+    PW_KEY_CLEAR = 0x0C,
+    PW_KEY_ENTER,
+
+    PW_KEY_PLATFORM_ENTER  = PW_KEY_ENTER,
+    PW_KEY_PLATFORM_RETURN = PW_KEY_ENTER,
+
+    PW_KEY_SPACEBAR   = 0x20,
+    PW_KEY_PAGE_UP,
     PW_KEY_PAGE_DOWN,
     PW_KEY_END,
     PW_KEY_HOME,
@@ -491,7 +499,7 @@ enum PWVirtualKey
     PW_KEY_KeypadDecimal        = 0x41,
     PW_KEY_KeypadMultiply       = 0x43,
     PW_KEY_KeypadPlus           = 0x45,
-    PW_KEY_KeypadClear          = 0x47,
+    PW_KEY_CLEAR                = 0x47,
     PW_KEY_KeypadDivide         = 0x4B,
     PW_KEY_KeypadEnter          = 0x4C,
     PW_KEY_KeypadMinus          = 0x4E,
@@ -509,8 +517,12 @@ enum PWVirtualKey
 
     // Layout independent
     PW_KEY_Return                    = 0x24,
-    PW_KEY_Tab                       = 0x30,
-    PW_KEY_Space                     = 0x31,
+
+    PW_KEY_PLATFORM_ENTER            = PW_KEY_Return,
+    PW_KEY_PLATFORM_RETURN           = PW_KEY_Return,
+
+    PW_KEY_TAB                       = 0x30,
+    PW_KEY_SPACEBAR                  = 0x31,
     PW_KEY_BACKSPACE                 = 0x33,
     PW_KEY_Escape                    = 0x35,
     PW_KEY_Command                   = 0x37,
