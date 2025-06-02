@@ -158,6 +158,8 @@ bool pw_event(const PWEvent* event)
 >>>>>>>>>>>
 > Roadmap >
 >>>>>>>>>>>
+- Add some kind of "Monitor changed" notification
+- Detect pixel layout eg. BGR horizontal & vertical
 - Support other dialogue boxes, eg. alerts and colour pickers
 - Support optional OpenGL or nah?
 

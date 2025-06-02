@@ -52,9 +52,21 @@
 
 #define PW_TIMER_ID 1
 
+// This is required by a hack to tag our window within a Hook Proc
 static UINT_PTR PW_UNIQUE_INT_ID = 0;
-
+// This is required by a hack to detect how the parent window is resizing.
 static PWResizeDirection g_ResizeDirection = PW_RESIZE_UNKNOWN;
+#ifdef PW_DX11
+// This is required by a hack that detects when the window and moved to a new monitor
+// It's also a lazy solution to avoid managing a dynamic array of pointers
+// Each new window searches for a free 0 bit inside "g_OpenWindowFlags", sets the bit, and stores a copy of that bit
+// within its own instance.
+// When our hook procedure detects a window moved, it sets g_WindowMovedFlags to g_OpenWindowFlags, then when the plugin
+// redraws, it can check and clear the flag amd poll for a monitor change.
+// An limitation is that this only supports a maximum of 64 open windows, while a benefit is we don't juggle pointers
+static UINT64 g_OpenWindowFlags  = 0;
+static UINT64 g_WindowMovedFlags = 0;
+#endif
 
 enum PW_WM_COMMAND
 {
@@ -99,6 +111,9 @@ typedef struct CplugWindow
 
 #ifdef PW_DX11
     BOOL IsWindows10OrGreater;
+
+    UINT64   OpenWindowBit;
+    HMONITOR LastMonitor;
 
     DXGI_SWAP_CHAIN_DESC SwapChainDesc;
     IDXGISwapChain*      pSwapchain;
@@ -894,6 +909,44 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
     }
     return hr;
 }
+
+DWORD pw_get_monitor_display_frequency(CplugWindow* pw)
+{
+    DWORD DisplayFrequency = 60; // Default
+    if (pw->LastMonitor)
+    {
+        // https://stackoverflow.com/questions/15583294/how-to-get-current-display-mode-resolution-refresh-rate-of-a-monitor-output-i
+        // DXGI_OUTPUT_DESC OutputDesc;
+        MONITORINFOEXW MonitorInfo;
+        DEVMODE        DevMode;
+
+        DevMode.dmSize        = sizeof(DEVMODE);
+        DevMode.dmDriverExtra = 0;
+        MonitorInfo.cbSize    = sizeof(MONITORINFOEX);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow
+        BOOL ok = GetMonitorInfoW(pw->LastMonitor, (LPMONITORINFO)&MonitorInfo);
+        PW_ASSERT(ok);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaysettingsw
+        ok = EnumDisplaySettingsW(MonitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &DevMode);
+        PW_ASSERT(ok);
+
+        DisplayFrequency = DevMode.dmDisplayFrequency;
+
+        // Makes any 144/288 fps monitor refresh at 72 fps
+        // High refresh rates look great in games, but will often be wasted in audio software.
+        // Metering of live audio benefits from high refresh rates, but it depends on new audio data
+        // Consider common audio settings of sample rate = 48k & block size = 512 samples
+        // With these settings, new audio can only be sent to the gui at a rate of 93.75/s (48000 / 512)
+        // Also we lazily render on the main thread and we don't want to hog it too much.
+        while (DisplayFrequency >= 100)
+        {
+            DisplayFrequency /= 2;
+        }
+    }
+    return DisplayFrequency;
+}
 #endif
 
 // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nc-winuser-wndproc
@@ -1076,6 +1129,31 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_TIMER:
     {
         PW_ASSERT(pw->gui != NULL);
+#ifdef PW_DX11
+        // Check if the window has moved to a new monitor...
+        if (g_WindowMovedFlags & pw->OpenWindowBit)
+        {
+            g_WindowMovedFlags ^= pw->OpenWindowBit;
+
+            // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-monitorfromwindow
+            // https://stackoverflow.com/questions/65677032/is-there-a-notification-when-a-window-is-moved-to-another-monitor
+            HMONITOR CurrentMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
+            if (CurrentMonitor != pw->LastMonitor)
+            {
+                pw->LastMonitor = CurrentMonitor;
+
+                DWORD NewDisplayFrequency = pw_get_monitor_display_frequency(pw);
+                if (NewDisplayFrequency != pw->SwapChainDesc.BufferDesc.RefreshRate.Numerator)
+                {
+                    pw->SwapChainDesc.BufferDesc.RefreshRate.Numerator = NewDisplayFrequency;
+
+                    // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizetarget
+                    HRESULT hr = pw->pSwapchain->lpVtbl->ResizeTarget(pw->pSwapchain, &pw->SwapChainDesc.BufferDesc);
+                    PW_ASSERT(SUCCEEDED(hr));
+                }
+            }
+        }
+#endif
         pw_tick(pw->gui);
 
 #ifdef PW_DX11
@@ -1705,43 +1783,17 @@ void* cplug_createGUI(void* userPlugin)
 
     if (pFactory)
     {
-        // Get current refresh rate
-        DWORD DisplayFrequency = 60;
+        // Get default monitor
         if (pOutput)
         {
             // https://stackoverflow.com/questions/15583294/how-to-get-current-display-mode-resolution-refresh-rate-of-a-monitor-output-i
             DXGI_OUTPUT_DESC OutputDesc;
-            MONITORINFOEXW   MonitorInfo;
-            DEVMODE          DevMode;
-
-            DevMode.dmSize        = sizeof(DEVMODE);
-            DevMode.dmDriverExtra = 0;
-            MonitorInfo.cbSize    = sizeof(MONITORINFOEX);
-
             hr = pOutput->lpVtbl->GetDesc(pOutput, &OutputDesc);
             PW_ASSERT(SUCCEEDED(hr));
-
-            // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow
-            ok = GetMonitorInfoW(OutputDesc.Monitor, (LPMONITORINFO)&MonitorInfo);
-            PW_ASSERT(ok);
-
-            // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaysettingsw
-            ok = EnumDisplaySettingsW(MonitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &DevMode);
-            PW_ASSERT(ok);
-
-            DisplayFrequency = DevMode.dmDisplayFrequency;
-
-            // Makes any 144/288 fps monitor refresh at 72 fps
-            // High refresh rates look great in games, but will often be wasted in audio software.
-            // Metering of live audio benefits from high refresh rates, but it depends on new audio data
-            // Consider common audio settings of sample rate = 48k & block size = 512 samples
-            // With these settings, new audio can only be sent to the gui at a rate of 93.75/s (48000 / 512)
-            // Also we lazily render on the main thread and we don't want to hog it too much.
-            while (DisplayFrequency >= 100)
-            {
-                DisplayFrequency /= 2;
-            }
+            pw->LastMonitor = OutputDesc.Monitor;
         }
+
+        DWORD DisplayFrequency = pw_get_monitor_display_frequency(pw);
 
         // https://stackoverflow.com/questions/29944745/get-osversion-in-windows-using-c
         // https://stackoverflow.com/questions/71250924/how-to-get-osversioninfo-for-windows-11
@@ -1882,6 +1934,12 @@ void cplug_setParent(void* userGUI, void* newParent)
     {
         KillTimer(pw->hwnd, PW_TIMER_ID);
         SetParent(pw->hwnd, NULL);
+#ifdef PW_DX11
+        g_OpenWindowFlags  &= ~pw->OpenWindowBit;
+        g_WindowMovedFlags &= ~pw->OpenWindowBit;
+        pw->OpenWindowBit   = 0;
+        pw->LastMonitor     = NULL;
+#endif
     }
 
     if (newParent)
@@ -1890,6 +1948,20 @@ void cplug_setParent(void* userGUI, void* newParent)
 
         if (pw->hCallWndHook == NULL)
         {
+#ifdef PW_DX11
+            for (UINT64 i = 0; i < 64; i++)
+            {
+                UINT64 bit = 1LLU << i;
+                if (!(g_OpenWindowFlags & bit))
+                {
+                    g_OpenWindowFlags  |= bit;
+                    g_WindowMovedFlags |= bit;
+                    pw->OpenWindowBit   = bit;
+                    break;
+                }
+            }
+#endif
+
             // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocessid
             // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid
             DWORD pid = GetCurrentProcessId();
