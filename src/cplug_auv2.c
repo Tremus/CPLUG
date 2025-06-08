@@ -248,14 +248,26 @@ static OSStatus AUv2SendParamEvent(AUv2Plugin* auv2, const CplugEvent* event)
     return status;
 }
 
+struct AUv2WriteStateContext
+{
+    UInt8* data;
+    size_t len;
+    size_t cap;
+};
+
 int64_t AUv2WriteProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
-    CFMutableDataRef* dataRef = (CFMutableDataRef*)stateCtx;
+    struct AUv2WriteStateContext* ctx = (struct AUv2WriteStateContext*)stateCtx;
 
-    if (*dataRef == NULL)
-        *dataRef = CFDataCreateMutable(NULL, numBytesToWrite);
+    size_t nextLen = ctx->len + numBytesToWrite;
+    if (nextLen > ctx->cap)
+    {
+        ctx->cap = nextLen * 2;
+        ctx->data = realloc(ctx->data, ctx->cap);
+    }
+    memcpy(ctx->data + ctx->len, writePos, numBytesToWrite);
+    ctx->len = nextLen;
 
-    CFDataAppendBytes(*dataRef, (const UInt8*)writePos, numBytesToWrite);
     return numBytesToWrite;
 }
 
@@ -551,16 +563,24 @@ static OSStatus AUMethodGetProperty(
         CFNumberRef      subtypeRef      = CFNumberCreate(0, kCFNumberSInt32Type, &subtype);
         CFNumberRef      manufacturerRef = CFNumberCreate(0, kCFNumberSInt32Type, &manufacturer);
         CFStringRef      presetNameRef   = CFStringCreateWithCString(0, "state", 0);
-        CFMutableDataRef presetDataRef   = NULL;
-        cplug_saveState(auv2->userPlugin, &presetDataRef, AUv2WriteProc);
+
+        struct AUv2WriteStateContext writeCtx;
+        memset(&writeCtx, 0, sizeof(writeCtx));
+        cplug_saveState(auv2->userPlugin, &writeCtx, AUv2WriteProc);
 
         CFDictionarySetValue(dict, versionKey, versionRef);
         CFDictionarySetValue(dict, typeKey, typeRef);
         CFDictionarySetValue(dict, subtypeKey, subtypeRef);
         CFDictionarySetValue(dict, manufacturerKey, manufacturerRef);
         CFDictionarySetValue(dict, presetNameKey, presetNameRef);
-        if (presetDataRef)
+
+        CFDataRef presetDataRef = NULL;
+        if (writeCtx.data)
+        {
+            presetDataRef = CFDataCreate(NULL, writeCtx.data, writeCtx.len);
             CFDictionarySetValue(dict, presetDataKey, presetDataRef);
+            free(writeCtx.data);
+        }
 
         CFRelease(versionKey);
         CFRelease(typeKey);
