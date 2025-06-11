@@ -1040,7 +1040,6 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel
     case WM_MOUSEWHEEL:
     {
-        // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel
         PWEvent e = PWTranslateMouseEvent(pw, wParam, lParam);
         e.type    = PW_EVENT_MOUSE_SCROLL_WHEEL;
         e.mouse.x = 0;
@@ -1082,8 +1081,8 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-syskeydown
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-syskeyup
-    // case WM_SYSKEYDOWN: // not supported or needed
-    // case WM_SYSKEYUP:
+    case WM_SYSKEYDOWN: // Required when apps use the ALT key
+    case WM_SYSKEYUP:
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-keydown
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-keyup
     case WM_KEYDOWN:
