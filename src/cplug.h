@@ -270,12 +270,6 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
 #define static_assert _Static_assert
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
-#define cplug_unlikely(x) __builtin_expect(x, 0)
-#else
-#define cplug_unlikely(x) x
-#endif
-
 #ifndef cplug_log
 #ifdef NDEBUG
 #define cplug_log(...)
@@ -299,13 +293,13 @@ static inline void cplug_printf(const char* const fmt, ...)
 #ifdef NDEBUG
 #define CPLUG_LOG_ASSERT(...)
 #else
-#define CPLUG_LOG_ASSERT(cond) if (cplug_unlikely(!(cond))) { cplug_log("FAIL ASSERT: " #cond " - %s:%d", __FILE__, __LINE__); }
+#define CPLUG_LOG_ASSERT(cond) if (!(cond)) { cplug_log("FAIL ASSERT: " #cond " - %s:%d", __FILE__, __LINE__); }
 #endif // NDEBUG
 #endif // CPLUG_LOG_ASSERT
 
 #define CPLUG_LOG_ASSERT_RETURN(cond, ret)                                                                             \
     CPLUG_LOG_ASSERT(cond)                                                                                             \
-    if (cplug_unlikely(!(cond))) return ret;
+    if (!(cond)) return ret;
 
 // clang-format on
 
