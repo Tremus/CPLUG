@@ -363,8 +363,7 @@ typedef struct VST3Plugin
         Steinberg_Vst_IEditControllerVtbl* lpVtbl;
         Steinberg_Vst_IEditControllerVtbl  base;
         cplug_atomic_i32                   refcounter;
-        // TODO: support changing param count & other cool things
-        Steinberg_Vst_IComponentHandler* componentHandler;
+        Steinberg_Vst_IComponentHandler*   componentHandler;
     } controller;
 
     // NOTE: You're not allowed to simply receive MIDI data
@@ -414,7 +413,26 @@ typedef struct VST3Plugin
     // NOTE: We only assume that hosts aren't doubly stupid and only send these messages on the audio thread.
     size_t   midiContollerQueueSize;
     uint32_t midiContollerQueue[CPLUG_EVENT_QUEUE_SIZE];
+
+    // Param updates sent through IAudioProcessor::process() are sent in a very inconvenient way
+    // They are ordered by paramID first, and sample position second
+    // Also Steinberg pseudo MIDI (IEventList) events come through a seperate queue
+    // Also some versions of Ableton send MIDI parameters hough ::setParamNormalized(),
+    // It's a giant mess to order correctly and maintain these 3 queues, so we stuff everything in this big buffer
+    // and sort them in the ::process() callback.
+    size_t     num_events;
+    CplugEvent events[CPLUG_EVENT_QUEUE_SIZE];
 } VST3Plugin;
+
+void _cplug_vst3_push_event(VST3Plugin* vst3, CplugEvent event, uint32_t frameIdx)
+{
+    if (vst3->num_events < CPLUG_ARRLEN(vst3->events))
+    {
+        event.type                     |= frameIdx << 4; // pack frame index in type. We will unpack later
+        vst3->events[vst3->num_events]  = event;
+        vst3->num_events++;
+    }
+}
 
 // Naughty pointer shifting for VST3 classes
 static inline VST3Plugin* _cplug_pointerShiftComponent(void* const ptr)
@@ -1613,10 +1631,7 @@ typedef struct VST3ProcessContextTranslator
     VST3Plugin*                       vst3;
     struct Steinberg_Vst_ProcessData* data;
 
-    uint32_t midiControlQueueIdx;
-    uint32_t midiEventIdx;
-    uint32_t paramIdx;
-    uint32_t nextEventFrame;
+    uint32_t eventIdx;
 } VST3ProcessContextTranslator;
 
 bool VST3ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const CplugEvent* event, uint32_t frameIdx)
@@ -1659,218 +1674,25 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
     if (frameIdx >= translator->cplugContext.numFrames)
         return false;
 
-    if (translator->midiControlQueueIdx < translator->vst3->midiContollerQueueSize)
+    uint32_t nextFrameIdx = ctx->numFrames;
+    if (translator->eventIdx < translator->vst3->num_events)
     {
-        event->type            = CPLUG_EVENT_MIDI;
-        event->midi.frame      = frameIdx;
-        event->midi.bytesAsInt = translator->vst3->midiContollerQueue[translator->midiControlQueueIdx];
+        VST3Plugin* vst3       = translator->vst3;
+        CplugEvent* next_event = &vst3->events[translator->eventIdx];
 
-        translator->midiControlQueueIdx++;
-        return true;
-    }
-
-    // Studio One has been spotted sending a NULL IEventList
-    Steinberg_Vst_IEventList* const inEvents = translator->data->inputEvents;
-    if (inEvents)
-    {
-        int numMidiEvents = inEvents->lpVtbl->getEventCount(inEvents);
-        if (translator->midiEventIdx < numMidiEvents)
+        nextFrameIdx = next_event->type >> 4;
+        if (nextFrameIdx == frameIdx)
         {
-            struct Steinberg_Vst_Event vst3Midi;
-            inEvents->lpVtbl->getEvent(inEvents, translator->midiEventIdx, &vst3Midi);
+            *event       = *next_event;
+            event->type &= 0xf; // Remove packed frameIdx in type
 
-            if (vst3Midi.sampleOffset == frameIdx)
-            {
-                translator->midiEventIdx++;
-
-                event->type       = CPLUG_EVENT_MIDI;
-                event->midi.frame = vst3Midi.sampleOffset;
-                switch (vst3Midi.type)
-                {
-                case Steinberg_Vst_Event_EventTypes_kNoteOnEvent:
-                {
-                    event->midi.status = 0x90 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.channel;
-                    event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
-                    event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOn.velocity * 127.0f);
-
-                    // Add to noteId > pitch map
-                    struct VST3Plugin* vst3 = translator->vst3;
-
-                    if (vst3->noteidmap.size < CPLUG_ARRLEN(vst3->noteidmap.ids))
-                    {
-                        const size_t idx           = vst3->noteidmap.size;
-                        vst3->noteidmap.ids[idx]   = vst3Midi.Steinberg_Vst_Event_noteOn.noteId;
-                        vst3->noteidmap.pitch[idx] = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
-                        vst3->noteidmap.size++;
-                    }
-                    break;
-                }
-                case Steinberg_Vst_Event_EventTypes_kNoteOffEvent:
-                {
-                    event->midi.status = 0x80 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.channel;
-                    event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.pitch;
-                    event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOff.velocity * 127.0f);
-
-                    // Remove from noteId > pitch map
-                    struct VST3Plugin* vst3 = translator->vst3;
-                    if (vst3->noteidmap.size > 0)
-                    {
-                        bool   do_copy = false;
-                        size_t idx     = 0;
-                        for (; idx < vst3->noteidmap.size; idx++)
-                        {
-                            if (vst3Midi.Steinberg_Vst_Event_noteOff.noteId == vst3->noteidmap.ids[idx])
-                                do_copy = true;
-                            if (do_copy)
-                            {
-                                size_t next_idx = idx + 1;
-                                if (next_idx < vst3->noteidmap.size)
-                                {
-                                    vst3->noteidmap.ids[idx]   = vst3->noteidmap.ids[next_idx];
-                                    vst3->noteidmap.pitch[idx] = vst3->noteidmap.pitch[next_idx];
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-                case Steinberg_Vst_Event_EventTypes_kPolyPressureEvent:
-                    event->midi.status = 0xA0 | (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.channel;
-                    event->midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.pitch;
-                    event->midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_polyPressure.pressure * 127.0f);
-                    break;
-                case Steinberg_Vst_Event_EventTypes_kNoteExpressionValueEvent:
-                {
-                    // Find pitch in map
-                    const VST3Plugin*                                    vst3 = translator->vst3;
-                    const struct Steinberg_Vst_NoteExpressionValueEvent* noteExp =
-                        &vst3Midi.Steinberg_Vst_Event_noteExpressionValue;
-
-                    int32_t key = -1;
-                    size_t  idx = 0;
-                    for (; idx < vst3->noteidmap.size; idx++)
-                    {
-                        if (noteExp->noteId == vst3->noteidmap.ids[idx])
-                        {
-                            key = vst3->noteidmap.pitch[idx];
-                            break;
-                        }
-                    }
-
-                    if (key != -1 && noteExp->typeId == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
-                    {
-                        // Denormalise value to range -120 - 120 semitones
-                        const double norm            = noteExp->value;
-                        event->note_expression.type  = CPLUG_EVENT_NOTE_EXPRESSION_TUNING;
-                        event->note_expression.key   = key;
-                        event->note_expression.value = -120.0 + norm * 240;
-                    }
-                    else
-                    {
-                        event->type = CPLUG_EVENT_UNHANDLED_EVENT;
-                    }
-                    break;
-                }
-                case Steinberg_Vst_Event_EventTypes_kDataEvent: // TODO: support SYSEX
-                case Steinberg_Vst_Event_EventTypes_kNoteExpressionTextEvent:
-                case Steinberg_Vst_Event_EventTypes_kChordEvent:
-                case Steinberg_Vst_Event_EventTypes_kScaleEvent:
-                case Steinberg_Vst_Event_EventTypes_kLegacyMIDICCOutEvent:
-                    cplug_log("Unhandled MIDI event: %hu", vst3Midi.type);
-                    break;
-                }
-                return true;
-            }
-
-            if ((uint32_t)vst3Midi.sampleOffset < translator->nextEventFrame)
-                translator->nextEventFrame = (uint32_t)vst3Midi.sampleOffset;
-        }
-    }
-
-    Steinberg_Vst_IParameterChanges* inParams = translator->data->inputParameterChanges;
-    CPLUG_LOG_ASSERT(inParams != NULL);
-
-    uint32_t numParams = inParams->lpVtbl->getParameterCount(inParams);
-    while (translator->paramIdx < numParams)
-    {
-        Steinberg_Vst_IParamValueQueue* queue = inParams->lpVtbl->getParameterData(inParams, translator->paramIdx);
-        translator->paramIdx++;
-
-        int pointIdx  = 0;
-        int numPoints = queue->lpVtbl->getPointCount(queue);
-
-        int eventFrame  = 0;
-        int endQuantize = frameIdx + CPLUG_EVENT_FRAME_QUANTISE;
-        if (endQuantize > translator->nextEventFrame)
-            endQuantize = translator->nextEventFrame;
-
-        Steinberg_Vst_ParamValue value = 0;
-        queue->lpVtbl->getPoint(queue, pointIdx, &eventFrame, &value);
-        // Skip to next frame within our quantize region
-        pointIdx++;
-        while (pointIdx < numPoints && eventFrame < endQuantize)
-        {
-            queue->lpVtbl->getPoint(queue, pointIdx, &eventFrame, &value);
-            pointIdx++;
-        }
-        pointIdx--;
-
-        queue->lpVtbl->getPoint(queue, pointIdx, &eventFrame, &value);
-
-        if (eventFrame >= frameIdx && eventFrame < endQuantize)
-        {
-            Steinberg_Vst_ParamID paramId = queue->lpVtbl->getParameterId(queue);
-            if (cplug_is_midi_param(paramId))
-            {
-                event->midi.type  = CPLUG_EVENT_MIDI;
-                event->midi.frame = frameIdx;
-
-                uint32_t diff    = paramId - CPLUG_MIDI_PARAMID_START;
-                uint8_t  channel = diff / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
-                uint8_t  control = diff % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
-
-                switch (control)
-                {
-                case Steinberg_Vst_ControllerNumbers_kAfterTouch:
-                    event->midi.status = 0xd0 | channel;
-                    event->midi.data1  = (uint8_t)(value * 127.0);
-                    break;
-                case Steinberg_Vst_ControllerNumbers_kPitchBend:
-                {
-                    uint16_t pb        = (uint16_t)(value * 16383);
-                    event->midi.status = 0xe0 | channel;
-                    event->midi.data1  = pb & 127;
-                    event->midi.data2  = (pb >> 7) & 127;
-                    break;
-                }
-                default:
-                    event->midi.status = 0xb0 | channel;
-                    event->midi.data1  = control;
-                    event->midi.data2  = (uint8_t)(value * 127.0);
-                    break;
-                }
-            }
-            else
-            {
-                event->parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
-                event->parameter.id    = paramId;
-                event->parameter.value = cplug_denormaliseParameterValue(translator->vst3->userPlugin, paramId, value);
-            }
-
+            translator->eventIdx++;
             return true;
         }
-
-        if (eventFrame > frameIdx && eventFrame < translator->nextEventFrame)
-            translator->nextEventFrame = eventFrame;
     }
-
-    CPLUG_LOG_ASSERT(translator->nextEventFrame > 0);
-    translator->paramIdx = 0;
-
     event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
-    event->processAudio.endFrame = translator->nextEventFrame;
+    event->processAudio.endFrame = nextFrameIdx;
 
-    translator->nextEventFrame = translator->cplugContext.numFrames;
     return true;
 }
 
@@ -1941,13 +1763,205 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
     translator.cplugContext.getAudioOutput = VST3ProcessContextTranslator_getAudioOutput;
     translator.vst3                        = vst3;
     translator.data                        = data;
-    translator.midiControlQueueIdx         = 0;
-    translator.midiEventIdx                = 0;
-    translator.paramIdx                    = 0;
-    translator.nextEventFrame              = data->numSamples;
+    translator.eventIdx                    = 0;
+
+    for (int i = 0; i < vst3->midiContollerQueueSize; i++)
+    {
+        CplugEvent event;
+        event.type            = CPLUG_EVENT_MIDI;
+        event.midi.frame      = 0;
+        event.midi.bytesAsInt = vst3->midiContollerQueue[i];
+        _cplug_vst3_push_event(vst3, event, 0);
+    }
+    Steinberg_Vst_IEventList* const inEvents = data->inputEvents;
+    if (inEvents)
+    {
+        struct Steinberg_Vst_Event vst3Midi;
+        int                        numMidiEvents = inEvents->lpVtbl->getEventCount(inEvents);
+
+        for (int i = 0; i < numMidiEvents; i++)
+        {
+            CplugEvent event;
+            inEvents->lpVtbl->getEvent(inEvents, i, &vst3Midi);
+
+            event.type       = CPLUG_EVENT_MIDI;
+            event.midi.frame = vst3Midi.sampleOffset;
+            switch (vst3Midi.type)
+            {
+            case Steinberg_Vst_Event_EventTypes_kNoteOnEvent:
+            {
+                event.midi.status = 0x90 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.channel;
+                event.midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
+                event.midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOn.velocity * 127.0f);
+
+                // Add to noteId > pitch map
+
+                if (vst3->noteidmap.size < CPLUG_ARRLEN(vst3->noteidmap.ids))
+                {
+                    const size_t idx           = vst3->noteidmap.size;
+                    vst3->noteidmap.ids[idx]   = vst3Midi.Steinberg_Vst_Event_noteOn.noteId;
+                    vst3->noteidmap.pitch[idx] = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOn.pitch;
+                    vst3->noteidmap.size++;
+                }
+                break;
+            }
+            case Steinberg_Vst_Event_EventTypes_kNoteOffEvent:
+            {
+                event.midi.status = 0x80 | (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.channel;
+                event.midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_noteOff.pitch;
+                event.midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_noteOff.velocity * 127.0f);
+
+                // Remove from noteId > pitch map
+                if (vst3->noteidmap.size > 0)
+                {
+                    bool   do_copy = false;
+                    size_t idx     = 0;
+                    for (; idx < vst3->noteidmap.size; idx++)
+                    {
+                        if (vst3Midi.Steinberg_Vst_Event_noteOff.noteId == vst3->noteidmap.ids[idx])
+                            do_copy = true;
+                        if (do_copy)
+                        {
+                            size_t next_idx = idx + 1;
+                            if (next_idx < vst3->noteidmap.size)
+                            {
+                                vst3->noteidmap.ids[idx]   = vst3->noteidmap.ids[next_idx];
+                                vst3->noteidmap.pitch[idx] = vst3->noteidmap.pitch[next_idx];
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case Steinberg_Vst_Event_EventTypes_kPolyPressureEvent:
+                event.midi.status = 0xA0 | (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.channel;
+                event.midi.data1  = (uint8_t)vst3Midi.Steinberg_Vst_Event_polyPressure.pitch;
+                event.midi.data2  = (uint8_t)(vst3Midi.Steinberg_Vst_Event_polyPressure.pressure * 127.0f);
+                break;
+            case Steinberg_Vst_Event_EventTypes_kNoteExpressionValueEvent:
+            {
+                // Find pitch in map
+                const struct Steinberg_Vst_NoteExpressionValueEvent* noteExp =
+                    &vst3Midi.Steinberg_Vst_Event_noteExpressionValue;
+
+                int32_t key = -1;
+                size_t  idx = 0;
+                for (; idx < vst3->noteidmap.size; idx++)
+                {
+                    if (noteExp->noteId == vst3->noteidmap.ids[idx])
+                    {
+                        key = vst3->noteidmap.pitch[idx];
+                        break;
+                    }
+                }
+
+                if (key != -1 && noteExp->typeId == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
+                {
+                    // Denormalise value to range -120 - 120 semitones
+                    const double norm           = noteExp->value;
+                    event.note_expression.type  = CPLUG_EVENT_NOTE_EXPRESSION_TUNING;
+                    event.note_expression.key   = key;
+                    event.note_expression.value = -120.0 + norm * 240;
+                }
+                else
+                {
+                    event.type = CPLUG_EVENT_UNHANDLED_EVENT;
+                }
+                break;
+            }
+            case Steinberg_Vst_Event_EventTypes_kDataEvent: // TODO: support SYSEX
+            case Steinberg_Vst_Event_EventTypes_kNoteExpressionTextEvent:
+            case Steinberg_Vst_Event_EventTypes_kChordEvent:
+            case Steinberg_Vst_Event_EventTypes_kScaleEvent:
+            case Steinberg_Vst_Event_EventTypes_kLegacyMIDICCOutEvent:
+                event.type = CPLUG_EVENT_UNHANDLED_EVENT;
+                cplug_log("Unhandled MIDI event: %hu", vst3Midi.type);
+                break;
+            }
+            _cplug_vst3_push_event(vst3, event, vst3Midi.sampleOffset);
+        }
+    }
+    Steinberg_Vst_IParameterChanges* inParams  = data->inputParameterChanges;
+    const uint32_t                   numParams = inParams->lpVtbl->getParameterCount(inParams);
+    for (int i = 0; i < numParams; i++)
+    {
+        Steinberg_Vst_IParamValueQueue* queue     = inParams->lpVtbl->getParameterData(inParams, i);
+        const Steinberg_Vst_ParamID     paramId   = queue->lpVtbl->getParameterId(queue);
+        const int                       numPoints = queue->lpVtbl->getPointCount(queue);
+
+        const bool is_midi = cplug_is_midi_param(paramId);
+
+        for (int j = 0; j < numPoints; j++)
+        {
+            CplugEvent event;
+            // TODO quantize points for older versions of Ableton (10)...
+            // Ableton 10 send an automation point every 8 samples. This is too much.
+            // Ableton 12 seems to send one every 150-250, which is pretty good.
+            // TODO: check for Ableton 11
+            int    frameIdx = 0;
+            double value    = 0;
+            queue->lpVtbl->getPoint(queue, j, &frameIdx, &value);
+
+            if (is_midi)
+            {
+                event.midi.type  = CPLUG_EVENT_MIDI;
+                event.midi.frame = frameIdx;
+
+                uint32_t diff    = paramId - CPLUG_MIDI_PARAMID_START;
+                uint8_t  channel = diff / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+                uint8_t  control = diff % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+
+                switch (control)
+                {
+                case Steinberg_Vst_ControllerNumbers_kAfterTouch:
+                    event.midi.status = 0xd0 | channel;
+                    event.midi.data1  = (uint8_t)(value * 127.0);
+                    break;
+                case Steinberg_Vst_ControllerNumbers_kPitchBend:
+                {
+                    uint16_t pb       = (uint16_t)(value * 16383);
+                    event.midi.status = 0xe0 | channel;
+                    event.midi.data1  = pb & 127;
+                    event.midi.data2  = (pb >> 7) & 127;
+                    break;
+                }
+                default:
+                    event.midi.status = 0xb0 | channel;
+                    event.midi.data1  = control;
+                    event.midi.data2  = (uint8_t)(value * 127.0);
+                    break;
+                }
+            }
+            else
+            {
+                event.parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
+                event.parameter.id    = paramId;
+                event.parameter.value = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, value);
+            }
+            _cplug_vst3_push_event(vst3, event, frameIdx);
+        }
+    }
+
+    // Bubble sort
+    const int   num_events = vst3->num_events;
+    CplugEvent  temp;
+    CplugEvent* events = vst3->events;
+    for (int i = 0; i < (num_events - 1); i++)
+    {
+        for (int j = 0; j < num_events - 1 - i; j++)
+        {
+            if (events[j].type > events[j + 1].type)
+            {
+                temp          = events[j + 1];
+                events[j + 1] = events[j];
+                events[j]     = temp;
+            }
+        }
+    }
 
     cplug_process(vst3->userPlugin, &translator.cplugContext);
 
+    vst3->num_events             = 0;
     vst3->midiContollerQueueSize = 0;
 
     return Steinberg_kResultOk;
