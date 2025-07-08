@@ -704,15 +704,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
                 CPWIN_Audio_Start();
 
-                g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
-                cplug_assert(g_plugin.UserGUI != NULL);
-
+                // Note: GetClientRect() will set RECT to all zeros if the window is minimised
                 RECT size;
                 GetClientRect(hWindow, &size);
-                g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
+                uint32_t width  = size.right - size.left;
+                uint32_t height = size.bottom - size.top;
+
+                g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
+                cplug_assert(g_plugin.UserGUI != NULL);
+                if (width && height)
+                    g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
 
                 g_plugin.setParent(g_plugin.UserGUI, hWindow);
-                g_plugin.setVisible(g_plugin.UserGUI, true);
+                if (width && height)
+                    g_plugin.setVisible(g_plugin.UserGUI, true);
             }
 
             const UINT64 reloadEnd = CPWIN_GetNowNS();
@@ -991,7 +996,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 #ifdef HOTRELOAD_WATCH_DIR
 #pragma region PLUGIN_STATE
-int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
     cplug_assert(stateCtx != NULL);
     cplug_assert(writePos != NULL);
