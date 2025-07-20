@@ -322,6 +322,8 @@ enum PWCursorType
     PW_CURSOR_RESIZE_NS,
     PW_CURSOR_RESIZE_NESW,
     PW_CURSOR_RESIZE_NWSE,
+
+    PW_CURSOR_DEFAULT = PW_CURSOR_ARROW,
 };
 
 // clang-format off
