@@ -67,6 +67,9 @@ struct CplugHostContext
     void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
     void (*rescan)(CplugHostContext* ctx, uint32_t flags /* CPLUG_RESCAN_XXX */);
     bool (*getHostName)(CplugHostContext* ctx, char* buf, size_t buflen);
+
+    // Ask permission from host to resize your area to specified w/h within their window
+    bool (*requestResize)(CplugHostContext* ctx, uint32_t width, uint32_t height);
 };
 
 CPLUG_API void* cplug_createPlugin(CplugHostContext* ctx);
@@ -232,6 +235,7 @@ CPLUG_API void cplug_setScaleFactor(void* userGUI, float scale);
 CPLUG_API void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height);
 // Host is trying to resize, but giving you the chance to overwrite their size
 CPLUG_API void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height);
+// Host tells your plugin "this is your size"
 CPLUG_API bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height);
 
 /*  ██╗   ██╗████████╗██╗██╗     ███████╗

@@ -99,8 +99,9 @@ bool CPWIN_HostContext_GetHostName(CplugHostContext* ctx, char* buf, size_t bufl
     snprintf(buf, buflen, "CPLUG Standalone Windows");
     return true;
 }
+bool CPWIN_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint32_t height);
 #ifdef __clang__
-_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
+_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 #endif
 
 #ifdef HOTRELOAD_WATCH_DIR
@@ -311,6 +312,7 @@ HCMNOTIFICATION g_hCMNotification;
 
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+HWND             g_hwnd = NULL;
 
 static inline UINT64 CPWIN_RoundUp(UINT64 v, UINT64 align)
 {
@@ -398,8 +400,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
 
-    MSG  msg;
-    HWND hWindow = NULL;
+    MSG msg;
 
     WNDCLASSEXW wc;
     memset(&wc, 0, sizeof(wc));
@@ -427,7 +428,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     RECT rect = {0, 0, (LONG)guiWidth, (LONG)guiHeight};
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
 
-    hWindow = CreateWindowExW(
+    g_hwnd = CreateWindowExW(
         0L,
         wc.lpszClassName,
         TEXT(CPLUG_PLUGIN_NAME),
@@ -440,7 +441,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         NULL,
         hInst,
         NULL);
-    if (hWindow == NULL)
+    if (g_hwnd == NULL)
     {
         fprintf(stderr, "Could not create window\n");
         return 1;
@@ -472,7 +473,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     CPWIN_Menu_RefreshAudioOutputs();
     CPWIN_Menu_RefreshMIDIInputs();
 
-    SetMenu(hWindow, g_Menus.hMain);
+    SetMenu(g_hwnd, g_Menus.hMain);
 
     // Callback to detect connected/disconnected MIDI/Audio devices
     // Must be initialised afer the menu because the callback changes menu items based on new/removed devices
@@ -482,16 +483,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     notifyFilter.Flags      = CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES;
     notifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
 
-    HRESULT result = CM_Register_Notification(&notifyFilter, hWindow, CPWIN_HandleDeviceChange, &g_hCMNotification);
+    HRESULT result = CM_Register_Notification(&notifyFilter, g_hwnd, CPWIN_HandleDeviceChange, &g_hCMNotification);
     cplug_assert(result == CR_SUCCESS);
     cplug_assert(g_hCMNotification != NULL);
 
     // Window ready
-    g_plugin.setParent(g_plugin.UserGUI, hWindow);
+    g_plugin.setParent(g_plugin.UserGUI, g_hwnd);
 
-    ShowWindow(hWindow, cmdshow);
+    ShowWindow(g_hwnd, cmdshow);
     g_plugin.setVisible(g_plugin.UserGUI, true);
-    SetForegroundWindow(hWindow);
+    SetForegroundWindow(g_hwnd);
 
 #ifndef HOTRELOAD_WATCH_DIR
     // Default event loop
@@ -611,7 +612,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
                 g_plugin.destroyGUI(g_plugin.UserGUI);
 
                 DefWindowProcA(
-                    hWindow,
+                    g_hwnd,
                     WM_CHANGEUISTATE,
                     UIS_INITIALIZE | UISF_ACTIVE | UISF_HIDEACCEL | UISF_HIDEFOCUS,
                     0);
@@ -706,7 +707,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
                 // Note: GetClientRect() will set RECT to all zeros if the window is minimised
                 RECT size;
-                GetClientRect(hWindow, &size);
+                GetClientRect(g_hwnd, &size);
                 uint32_t width  = size.right - size.left;
                 uint32_t height = size.bottom - size.top;
 
@@ -715,7 +716,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
                 if (width && height)
                     g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
 
-                g_plugin.setParent(g_plugin.UserGUI, hWindow);
+                g_plugin.setParent(g_plugin.UserGUI, g_hwnd);
                 if (width && height)
                     g_plugin.setVisible(g_plugin.UserGUI, true);
             }
@@ -996,7 +997,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 #ifdef HOTRELOAD_WATCH_DIR
 #pragma region PLUGIN_STATE
-int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
     cplug_assert(stateCtx != NULL);
     cplug_assert(writePos != NULL);
@@ -1285,9 +1286,43 @@ void CPWIN_LoadPlugin()
     g_plugin.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
     g_plugin.HostContext.rescan         = CPWIN_HostContext_Rescan;
     g_plugin.HostContext.getHostName    = CPWIN_HostContext_GetHostName;
+    g_plugin.HostContext.requestResize  = CPWIN_HostContext_RequestResize;
 
     g_plugin.UserPlugin = g_plugin.createPlugin(&g_plugin.HostContext);
     cplug_assert(g_plugin.UserPlugin != NULL);
+}
+
+bool CPWIN_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+    if (g_plugin.UserGUI)
+    {
+        RECT parent;
+        BOOL ok = 0;
+        ok      = GetWindowRect(g_hwnd, &parent);
+        cplug_assert(ok == 1);
+        if (ok)
+        {
+            LONG parent_width  = parent.right - parent.left;
+            LONG parent_height = parent.bottom - parent.top;
+            RECT child         = parent;
+            ok                 = AdjustWindowRect(&child, WS_OVERLAPPEDWINDOW, TRUE);
+            cplug_assert(ok == 1);
+            if (ok)
+            {
+                LONG diff_x = (child.right - child.left) - parent_width;
+                LONG diff_y = (child.bottom - child.top) - parent_height;
+
+                LONG next_parent_width  = width + diff_x;
+                LONG next_parent_height = height + diff_y;
+
+                // This should trigger WM_SIZE - SIZE_RESTORED
+                // https://learn.microsoft.com/en-gb/windows/win32/api/winuser/nf-winuser-setwindowpos
+                ok = SetWindowPos(g_hwnd, NULL, parent.left, parent.top, next_parent_width, next_parent_height, 0);
+                cplug_assert(ok == 1);
+            }
+        }
+    }
+    return false;
 }
 
 #pragma region MENUS

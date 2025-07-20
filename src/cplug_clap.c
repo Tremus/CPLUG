@@ -11,15 +11,20 @@ typedef struct CLAPPlugin
     clap_plugin_t    clapPlugin;
     void*            userPlugin;
     CplugHostContext hostContext;
-#if CPLUG_WANT_GUI
-    void* userGUI;
-#endif
+
     const clap_host_t*             host;
     const clap_host_audio_ports_t* host_audio_ports;
     const clap_host_params_t*      host_params;
     const clap_host_latency_t*     host_latency;
     const clap_host_tail_t*        host_tail;
     const clap_host_state_t*       host_state;
+
+#if CPLUG_WANT_GUI
+    const clap_host_gui_t* host_gui;
+
+    void* userGUI;
+#endif
+
 } CLAPPlugin;
 
 /////////////////////////////
@@ -482,7 +487,18 @@ static bool _cplug_clap_getHostName(CplugHostContext* ctx, char* buf, size_t buf
     return ok;
 }
 
-_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
+static bool _cplug_clap_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+#if CPLUG_WANT_GUI
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+
+    if (clap->host_gui)
+        return clap->host_gui->request_resize(clap->host, width, height);
+#endif
+    return false;
+}
+
+_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
@@ -499,12 +515,14 @@ static bool CLAPPlugin_init(const struct clap_plugin* plugin)
     clap->host_latency = (const clap_host_latency_t*)clap->host->get_extension(clap->host, CLAP_EXT_LATENCY);
     clap->host_tail    = (const clap_host_tail_t*)clap->host->get_extension(clap->host, CLAP_EXT_TAIL);
     clap->host_state   = (const clap_host_state_t*)clap->host->get_extension(clap->host, CLAP_EXT_STATE);
+    clap->host_gui     = (const clap_host_gui_t*)clap->host->get_extension(clap->host, CLAP_EXT_GUI);
 
     CPLUG_LOG_ASSERT(clap->host_audio_ports != NULL);
     CPLUG_LOG_ASSERT(clap->host_params != NULL);
     CPLUG_LOG_ASSERT(clap->host_latency != NULL);
     CPLUG_LOG_ASSERT(clap->host_tail != NULL);
     CPLUG_LOG_ASSERT(clap->host_state != NULL);
+    CPLUG_LOG_ASSERT(clap->host_gui != NULL);
 
     return true;
 }
@@ -864,6 +882,7 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     clap->hostContext.sendParamEvent  = _cplug_clap_sendParamEvent;
     clap->hostContext.rescan          = _cplug_clap_rescan;
     clap->hostContext.getHostName     = _cplug_clap_getHostName;
+    clap->hostContext.requestResize   = _cplug_clap_requestResize;
 
     clap->host = host;
 

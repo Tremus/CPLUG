@@ -351,6 +351,10 @@ typedef struct VST3Plugin
     CplugHostContext hostContext;
     void*            userPlugin; // Pointer to your plugin lives here
 
+#if CPLUG_WANT_GUI
+    struct VST3View* view;
+#endif
+
     struct
     {
         Steinberg_Vst_IComponentVtbl* lpVtbl;
@@ -539,9 +543,9 @@ static bool _cplug_vst3_getHostName(CplugHostContext* ctx, char* buf, size_t buf
     return ok;
 }
 
-_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
+_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 
-static void _cplug_tryDeleteVST3(VST3Plugin* vst3)
+static void _cplug_tryDeleteVST3Plugin(VST3Plugin* vst3)
 {
     int ref_component  = cplug_atomic_load_i32(&vst3->component.refcounter);
     int ref_controller = cplug_atomic_load_i32(&vst3->controller.refcounter);
@@ -549,7 +553,8 @@ static void _cplug_tryDeleteVST3(VST3Plugin* vst3)
     int ref_noteexp    = cplug_atomic_load_i32(&vst3->noteExpression.refcounter);
     int ref_processor  = cplug_atomic_load_i32(&vst3->processor.refcounter);
     cplug_log(
-        "_cplug_tryDeleteVST3 %p | component: %d, controller: %d, midimapping: %d, noteExpression: %d, processor: %d",
+        "_cplug_tryDeleteVST3Plugin %p | component: %d, controller: %d, midimapping: %d, noteExpression: %d, "
+        "processor: %d",
         vst3,
         ref_component,
         ref_controller,
@@ -560,7 +565,7 @@ static void _cplug_tryDeleteVST3(VST3Plugin* vst3)
     int total = ref_component + ref_controller + ref_midimap + ref_noteexp + ref_processor;
     if (total == 0)
     {
-        cplug_log("_cplug_tryDeleteVST3 %p | all refcounts are zero, deleting everything!", vst3);
+        cplug_log("_cplug_tryDeleteVST3Plugin %p | all refcounts are zero, deleting everything!", vst3);
         free(vst3);
     }
 }
@@ -572,7 +577,6 @@ typedef struct VST3View
     Steinberg_IPlugViewVtbl  base;
     cplug_atomic_i32         refcounter;
 
-#ifdef _WIN32
     // Windows only. MacOS is able to detect scale changes using 'viewDidChangeBackingProperties' in NSView
     struct
     {
@@ -580,12 +584,39 @@ typedef struct VST3View
         Steinberg_IPlugViewContentScaleSupportVtbl  base;
         cplug_atomic_i32                            refcounter;
     } contentScaleSupport;
-#endif
 
     void* userGUI;
+
+    VST3Plugin*           vst3;
+    Steinberg_IPlugFrame* frame;
 } VST3View;
 
-#ifdef _WIN32
+static void _cplug_tryDeleteVST3View(VST3View* view)
+{
+    int ref_view         = cplug_atomic_load_i32(&view->refcounter);
+    int ref_contentscake = cplug_atomic_load_i32(&view->contentScaleSupport.refcounter);
+
+    int total = ref_view + ref_contentscake;
+    if (total == 0)
+    {
+        cplug_log("_cplug_tryDeleteVST3View %p | all refcounts are zero, deleting everything!", view);
+        CPLUG_LOG_ASSERT(view->vst3 != NULL);
+        VST3Plugin* vst3 = view->vst3;
+        cplug_setVisible(view->userGUI, false);
+        // Some hosts (Ableton) don't call removed() before destroying your GUI, others (Bitwig) do.
+        cplug_setParent(view->userGUI, NULL);
+        cplug_destroyGUI(view->userGUI);
+        view->userGUI = NULL;
+
+        vst3->view = NULL;
+        free(view);
+
+        // Help make sure "vst3" is deleted last. DAWs such as Cubase may delete the your GUI last, which is not
+        // desirable for many plugins
+        vst3->controller.lpVtbl->release(&vst3->controller);
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
 Source: "pluginterfaces/gui/iplugviewcontentscalesupport.h", line 57 */
 // Steinberg_FUnknown
@@ -629,11 +660,8 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_release(void* const 
     int             refcount = cplug_atomic_fetch_add_i32(&view->contentScaleSupport.refcounter, -1) - 1;
     cplug_log("VST3ViewContentScale_release => %p | refcount %d", self, refcount);
 
-    if (refcount == 0 && cplug_atomic_load_i32(&view->refcounter) == 0)
-    {
-        cplug_log("VST3ViewContentScale_setContentScaleFactor | Freeing VST3View");
-        free(view);
-    }
+    if (refcount == 0)
+        _cplug_tryDeleteVST3View(view);
     return refcount;
 }
 // Steinberg_IPlugViewContentScaleSupport
@@ -647,7 +675,6 @@ VST3ViewContentScale_setContentScaleFactor(void* const self, const float factor)
 
     return Steinberg_kResultOk;
 }
-#endif // _WIN32
 
 /*----------------------------------------------------------------------------------------------------------------------
 Source: "pluginterfaces/gui/iplugview.h", line 122 */
@@ -665,7 +692,6 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
         return Steinberg_kResultOk;
     }
 
-#ifdef _WIN32
     if (tuid_match(Steinberg_IPlugViewContentScaleSupport_iid, iid))
     {
         cplug_log("VST3View_queryInterface => %p %s %p | OK convert", self, _cplug_tuid2str(iid), iface);
@@ -673,7 +699,6 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
         *iface = &view->contentScaleSupport;
         return Steinberg_kResultOk;
     }
-#endif
 
     cplug_log("VST3View_queryInterface => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
 
@@ -696,18 +721,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3View_release(void* self)
     const int refcount = cplug_atomic_fetch_add_i32(&view->refcounter, -1) - 1;
     cplug_log("VST3View_release => %p | refcount %d", self, refcount);
     if (refcount == 0)
-    {
-        cplug_setVisible(view->userGUI, false);
-        // Some hosts (Ableton) don't call removed() before destroying your GUI, others (Bitwig) do.
-        cplug_setParent(view->userGUI, NULL);
-        cplug_destroyGUI(view->userGUI);
-#ifndef _WIN32
-        free(view);
-#else
-        cplug_log("VST3View_release | should call free from IPlugViewContentScaleSupport extension");
         view->contentScaleSupport.lpVtbl->release(&view->contentScaleSupport);
-#endif
-    }
     return refcount;
 }
 
@@ -804,6 +818,8 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onFocus(void* const sel
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_setFrame(void* const self, Steinberg_IPlugFrame* const frame)
 {
     cplug_log("VST3View_setFrame => %p %p", self, frame);
+    VST3View* const view = (VST3View*)self;
+    view->frame          = frame;
     return Steinberg_kResultTrue;
 }
 
@@ -822,6 +838,25 @@ VST3View_checkSizeConstraint(void* const self, struct Steinberg_ViewRect* const 
     return Steinberg_kResultOk;
 }
 #endif // CPLUG_WANT_GUI
+
+bool _cplug_vst3_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+#if CPLUG_WANT_GUI
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+    if (vst3->view && vst3->view->frame)
+    {
+        struct Steinberg_ViewRect rect;
+        rect.left   = 0;
+        rect.top    = 0;
+        rect.right  = width;
+        rect.bottom = height;
+        Steinberg_tresult res =
+            vst3->view->frame->lpVtbl->resizeView(vst3->view->frame, (Steinberg_IPlugView*)vst3->view, &rect);
+        return res == Steinberg_kResultOk;
+    }
+#endif // CPLUG_WANT_GUI
+    return false;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
 Source: "pluginterfaces/vst/ivsteditcontroller.h", line 557 */
@@ -861,7 +896,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_release(void* const thisI
     cplug_log("VST3MidiMapping_release => %p | refcount %d", thisInterface, refcount);
 
     if (refcount == 0)
-        _cplug_tryDeleteVST3(vst3);
+        _cplug_tryDeleteVST3Plugin(vst3);
 
     return refcount;
 }
@@ -925,7 +960,7 @@ Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_release(void* thisInt
     cplug_log("VST3NoteExpression_release => %p | refcount %d", thisInterface, refcount);
 
     if (refcount == 0)
-        _cplug_tryDeleteVST3(vst3);
+        _cplug_tryDeleteVST3Plugin(vst3);
 
     return refcount;
 }
@@ -1101,9 +1136,9 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_release(void* const self)
 
     if (refcount == 0)
     {
-        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from IMidiMapping extension");
+        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3Plugin from IMidiMapping extension");
         vst3->midiMapping.lpVtbl->release(&vst3->midiMapping);
-        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3 from "
+        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3Plugin from "
                   "Steinberg_Vst_INoteExpressionController extension");
         vst3->noteExpression.lpVtbl->release(&vst3->noteExpression);
     }
@@ -1370,6 +1405,10 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
 
     VST3View* const view = (VST3View*)malloc(sizeof(VST3View));
 
+    view->vst3 = vst3;
+    vst3->view = view;
+    vst3->controller.lpVtbl->addRef(&vst3->controller);
+
     view->lpVtbl = &view->base;
     // Steinberg_FUnknown
     view->base.queryInterface = VST3View_queryInterface;
@@ -1390,7 +1429,6 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
     view->base.checkSizeConstraint     = VST3View_checkSizeConstraint;
     view->refcounter                   = 1;
 
-#ifdef _WIN32
     view->contentScaleSupport.lpVtbl = &view->contentScaleSupport.base;
     // Steinberg_FUnknown
     view->contentScaleSupport.base.queryInterface = VST3ViewContentScale_queryInterface;
@@ -1399,11 +1437,9 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
     // Steinberg_IPlugViewContentScaleSupport
     view->contentScaleSupport.base.setContentScaleFactor = VST3ViewContentScale_setContentScaleFactor;
     view->contentScaleSupport.refcounter                 = 1;
-#endif // _WIN32
 
-    void* userGUI = cplug_createGUI(vst3->userPlugin);
-    CPLUG_LOG_ASSERT(userGUI != NULL);
-    view->userGUI = userGUI;
+    view->userGUI = cplug_createGUI(vst3->userPlugin);
+    CPLUG_LOG_ASSERT(view->userGUI != NULL);
 
     return (Steinberg_IPlugView*)view;
 #else  // !CPLUG_WANT_GUI
@@ -1497,7 +1533,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_release(void* const self)
     const int         refcount = cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, -1) - 1;
     cplug_log("VST3Processor_release => %p | refcount %i", self, refcount);
     if (refcount == 0)
-        _cplug_tryDeleteVST3(vst3);
+        _cplug_tryDeleteVST3Plugin(vst3);
 
     return refcount;
 }
@@ -2400,6 +2436,7 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         vst3->hostContext.sendParamEvent = _cplug_vst3_sendParamEvent;
         vst3->hostContext.rescan         = _cplug_vst3_rescan;
         vst3->hostContext.getHostName    = _cplug_vst3_getHostName;
+        vst3->hostContext.requestResize  = _cplug_vst3_requestResize;
         vst3->component.lpVtbl           = &vst3->component.base;
         vst3->component.refcounter       = 1;
         // Steinberg_FUnknown
