@@ -20,12 +20,12 @@ The source files are configurable using macros you define. A full list of these 
 
 | Source file            | Lines of code | Description   | Extra dependencies        |
 | ---------------------- | ------------- | ------------- | ------------------------- |
-| cplug.h                | < 350         | Common API    | None                      |
-| cplug_clap.c           | < 900         | CLAP          | `#include <clap/clap.h>`  |
-| cplug_standalone_osx.m | < 1,400       | Standalone    | None                      |
-| cplug_auv2.c           | < 1,600       | Audio Unit v2 | None                      |
-| cplug_standalone_win.c | < 1,900       | Standalone    | None                      |
-| cplug_vst3.c           | < 2,600       | VST3          | `#include <vst3_c_api.h>` |
+| cplug.h                | ~350          | Common API    | None                      |
+| cplug_clap.c           | ~900          | CLAP          | `#include <clap/clap.h>`  |
+| cplug_standalone_osx.m | ~1,400        | Standalone    | None                      |
+| cplug_auv2.c           | ~1,700        | Audio Unit v2 | None                      |
+| cplug_standalone_win.c | ~1,900        | Standalone    | None                      |
+| cplug_vst3.c           | ~2,700        | VST3          | `#include <vst3_c_api.h>` |
 
 Copies of the CLAP API and VST3 C API are included in the `src` folder for convenience. They're both single files.
 
@@ -51,6 +51,7 @@ Most plugins don't support these features, & most users don't ask for them or kn
 
 ## Roadmap
 
+-   Emscripten/Web backend
 -   Extension: Parameters
 -   AUv2: Support multiple input/output busses
 -   AUv2: Support sample accurate processing AUv2
