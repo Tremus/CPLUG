@@ -84,44 +84,6 @@ enum MIDIMenuTag
 
 #pragma mark -Global state
 
-struct STAND_Plugin
-{
-#ifdef HOTRELOAD_LIB_PATH
-    void* library;
-#endif
-    CplugHostContext hostContext;
-    void*            userPlugin;
-    void*            userGUI;
-
-    void (*libraryLoad)();
-    void (*libraryUnload)();
-    void* (*createPlugin)(CplugHostContext*);
-    void (*destroyPlugin)(void* userPlugin);
-    uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
-    void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
-    void (*process)(void* userPlugin, CplugProcessContext* ctx);
-    void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
-    void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
-
-    void* (*createGUI)(void* userPlugin);
-    void (*destroyGUI)(void* userGUI);
-    void (*setParent)(void* userGUI, void* hwnd_or_nsview);
-    void (*setVisible)(void* userGUI, bool visible);
-    void (*setScaleFactor)(void* userGUI, float scale);
-    void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
-    void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
-    bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
-} g_plugin;
-
-void STAND_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
-void STAND_rescan(CplugHostContext* ctx, uint32_t flags) {}
-bool STAND_getHostName(CplugHostContext* ctx, char* buf, size_t buflen)
-{
-    snprintf(buf, buflen, "CPLUG Standalone macOS");
-    return true;
-}
-_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
-
 #ifdef HOTRELOAD_BUILD_COMMAND
 struct STAND_PluginStateContext
 {
@@ -160,6 +122,68 @@ pthread_cond_t      g_audioStopCondition;
 pthread_mutex_t     g_audioMutex;
 
 NSWindow* g_window = NULL;
+
+struct STAND_Plugin
+{
+#ifdef HOTRELOAD_LIB_PATH
+    void* library;
+#endif
+    CplugHostContext hostContext;
+    void*            userPlugin;
+    void*            userGUI;
+
+    void (*libraryLoad)();
+    void (*libraryUnload)();
+    void* (*createPlugin)(CplugHostContext*);
+    void (*destroyPlugin)(void* userPlugin);
+    uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
+    void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
+    void (*process)(void* userPlugin, CplugProcessContext* ctx);
+    void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
+    void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
+
+    void* (*createGUI)(void* userPlugin);
+    void (*destroyGUI)(void* userGUI);
+    void (*setParent)(void* userGUI, void* hwnd_or_nsview);
+    void (*setVisible)(void* userGUI, bool visible);
+    void (*setScaleFactor)(void* userGUI, float scale);
+    void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
+    void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
+    bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
+} g_plugin;
+
+void STAND_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+void STAND_rescan(CplugHostContext* ctx, uint32_t flags) {}
+bool STAND_getHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+{
+    snprintf(buf, buflen, "CPLUG Standalone macOS");
+    return true;
+}
+bool STAND_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+    if (g_window)
+    {
+        NSView* view        = g_window.contentView;
+        NSRect  parentFrame = g_window.frame;
+        NSRect  childFrame  = view.frame;
+
+        double nextWidth  = width;
+        double nextHeight = height;
+
+        double xDiff             = nextWidth - childFrame.size.width;
+        double yDiff             = nextHeight - childFrame.size.height;
+        parentFrame.size.width  += xDiff;
+        parentFrame.size.height += yDiff;
+        // NOTE: origin on macOS is bottom left, similar to Bitmaps (.bmp), glyphs of TrueType fonts, and OpenGL
+        parentFrame.origin.y -= yDiff;
+
+        [g_window setFrame:parentFrame display:TRUE];
+
+        return true;
+    }
+    return false;
+}
+_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 
 #pragma mark -Utils
 
@@ -239,6 +263,7 @@ OSStatus STAND_audioDeviceChangeListener(
     g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
     g_plugin.hostContext.rescan         = STAND_rescan;
     g_plugin.hostContext.getHostName    = STAND_getHostName;
+    g_plugin.hostContext.requestResize  = STAND_requestResize;
     g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
     cplug_assert(g_plugin.userPlugin != NULL);
 
@@ -1288,6 +1313,7 @@ void STAND_filesystemEventCallback(
                 g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
                 g_plugin.hostContext.rescan         = STAND_rescan;
                 g_plugin.hostContext.getHostName    = STAND_getHostName;
+                g_plugin.hostContext.requestResize  = STAND_requestResize;
                 g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
                 cplug_assert(g_plugin.userPlugin != NULL);
                 g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);

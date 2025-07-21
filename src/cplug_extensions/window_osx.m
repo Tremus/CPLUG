@@ -1321,18 +1321,62 @@ bool pw_choose_file(const PWChooseFileArgs* args)
 - (unsigned)interfaceVersion;
 @end
 
+static bool AUv2HostContext_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+    const int offset = CPLUG_AUV2_OFFSET_NSVIEW - CPLUG_AUV2_OFFSET_PROCESS_CONTEXT;
+    NSView*   view   = *((NSView**)(((char*)ctx) + offset));
+
+    if (view.window)
+    {
+        NSRect parentFrame = view.window.frame;
+        NSRect childFrame  = view.frame;
+
+        double nextWidth  = width;
+        double nextHeight = height;
+
+        double xDiff             = nextWidth - childFrame.size.width;
+        double yDiff             = nextHeight - childFrame.size.height;
+        parentFrame.size.width  += xDiff;
+        parentFrame.size.height += yDiff;
+        // NOTE: origin on macOS is bottom left, similar to Bitmaps (.bmp), glyphs of TrueType fonts, and OpenGL
+        parentFrame.origin.y -= yDiff;
+
+        [view.window setFrame:parentFrame display:TRUE];
+
+        return true;
+    }
+
+    return false;
+}
+
 @implementation CPLUG_AUV2_VIEW_CLASS
 
+// NOTE: the 'AudioUnit' passed in this function is not the same thing CPLUG allocates in GetAUv2PluginFactory
 - (NSView*)uiViewForAudioUnit:(AudioUnit)inUnit withSize:(NSSize)size
 {
     cplug_log("uiViewForAudioUnit => %p %f %f", inUnit, size.width, size.height);
+
     void*  userPlugin = NULL;
-    UInt32 dataSize   = 8;
+    UInt32 dataSize   = sizeof(size_t);
 
     AudioUnitGetProperty(inUnit, kAudioUnitProperty_UserPlugin, kAudioUnitScope_Global, 0, &userPlugin, &dataSize);
     CPLUG_LOG_ASSERT_RETURN(userPlugin != NULL, NULL);
 
-    return (NSView*)cplug_createGUI(userPlugin);
+    NSView* view = (NSView*)cplug_createGUI(userPlugin);
+
+    CplugHostContext* ctx = NULL;
+
+    uint32_t ctx_id = kAudioUnitProperty_CplugProcessContext;
+    AudioUnitGetProperty(inUnit, ctx_id, kAudioUnitScope_Global, 0, &ctx, &dataSize);
+
+    const int offset = CPLUG_AUV2_OFFSET_NSVIEW - CPLUG_AUV2_OFFSET_PROCESS_CONTEXT;
+
+    ctx->requestResize = AUv2HostContext_requestResize;
+
+    NSView** pView = (NSView**)(((char*)ctx) + offset);
+    *pView         = view;
+
+    return view;
 }
 
 - (unsigned)interfaceVersion

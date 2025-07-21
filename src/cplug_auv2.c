@@ -123,7 +123,8 @@ static const char* _cplugProperty2Str(AudioUnitPropertyID inID)
         {"kAudioUnitProperty_HostMIDIProtocol", 65},
         {"kAudioUnitProperty_MIDIOutputBufferSizeHint", 66},
         {"kMusicDeviceProperty_DualSchedulingMode", 1013},
-        {"kAudioUnitProperty_UserPlugin", kAudioUnitProperty_UserPlugin}
+        {"kAudioUnitProperty_UserPlugin", kAudioUnitProperty_UserPlugin},
+        {"kAudioUnitProperty_CplugProcessContext", kAudioUnitProperty_CplugProcessContext},
     };
     // clang-format on
 
@@ -163,6 +164,7 @@ typedef struct AUv2Plugin
     AudioComponentDescription desc;
 
     CplugHostContext hostContext;
+    void*            nsview;
 
     AUHostVersionIdentifier hostVersionIdentifier;
 
@@ -203,6 +205,20 @@ typedef struct AUv2Plugin
     UInt32     numEvents;
     CplugEvent events[CPLUG_EVENT_QUEUE_SIZE];
 } AUv2Plugin;
+
+// This is a disgusting mess but what are you going to do about it?
+// I really want users to be able to control their own NSView, since detials surrounding its inheritance matter, and
+// users ought to be able to control it. This means CPLUG can't abstract its proposed GUI API for Audio Units since it
+// requires restrictive Cocoa OOP and big brained MVC design patterns, which seperates the concerns of plugin params &
+// processing, state etc. and its GUI. Users must write their own GUI code that conforms to the CPLUG API if they wish
+// to use Audio Units.
+// CPLUG does of course provide its own optional window extension with most, if not all of these problems solved.
+_Static_assert(
+    offsetof(AUv2Plugin, hostContext) == CPLUG_AUV2_OFFSET_PROCESS_CONTEXT,
+    "This offset is required by a hack in cplug_extensions/window_osx.m");
+_Static_assert(
+    offsetof(AUv2Plugin, nsview) == CPLUG_AUV2_OFFSET_NSVIEW,
+    "This offset is required by a hack in cplug_extensions/window_osx.m");
 
 void AUv2ReleaseStringArray(CFStringRef* arr, size_t arrlen)
 {
@@ -262,7 +278,7 @@ int64_t AUv2WriteProc(const void* stateCtx, void* writePos, size_t numBytesToWri
     size_t nextLen = ctx->len + numBytesToWrite;
     if (nextLen > ctx->cap)
     {
-        ctx->cap = nextLen * 2;
+        ctx->cap  = nextLen * 2;
         ctx->data = realloc(ctx->data, ctx->cap);
     }
     memcpy(ctx->data + ctx->len, writePos, numBytesToWrite);
@@ -558,11 +574,11 @@ static OSStatus AUMethodGetProperty(
         int subtype      = auv2->desc.componentSubType;
         int manufacturer = auv2->desc.componentManufacturer;
 
-        CFNumberRef      versionRef      = CFNumberCreate(0, kCFNumberSInt32Type, &version);
-        CFNumberRef      typeRef         = CFNumberCreate(0, kCFNumberSInt32Type, &type);
-        CFNumberRef      subtypeRef      = CFNumberCreate(0, kCFNumberSInt32Type, &subtype);
-        CFNumberRef      manufacturerRef = CFNumberCreate(0, kCFNumberSInt32Type, &manufacturer);
-        CFStringRef      presetNameRef   = CFStringCreateWithCString(0, "state", 0);
+        CFNumberRef versionRef      = CFNumberCreate(0, kCFNumberSInt32Type, &version);
+        CFNumberRef typeRef         = CFNumberCreate(0, kCFNumberSInt32Type, &type);
+        CFNumberRef subtypeRef      = CFNumberCreate(0, kCFNumberSInt32Type, &subtype);
+        CFNumberRef manufacturerRef = CFNumberCreate(0, kCFNumberSInt32Type, &manufacturer);
+        CFStringRef presetNameRef   = CFStringCreateWithCString(0, "state", 0);
 
         struct AUv2WriteStateContext writeCtx;
         memset(&writeCtx, 0, sizeof(writeCtx));
@@ -766,7 +782,7 @@ static OSStatus AUMethodGetProperty(
 #ifdef CPLUG_WANT_GUI
         AudioUnitCocoaViewInfo* info = (AudioUnitCocoaViewInfo*)outData;
         // AUv2 docs tell you to bundle your Cocoa GUI as a seperate App bundle nested inside your .component bundle.
-        // For most people, including CPLUG, this is s̶t̶u̶p̶i̶d̶ ̶a̶n̶d̶ ̶a̶n̶n̶o̶y̶i̶n̶g̶ intrusive to our build system.
+        // For most wrapper libraries, including CPLUG, this is s̶t̶u̶p̶i̶d̶ ̶a̶n̶d̶ ̶a̶n̶n̶o̶y̶i̶n̶g̶ intrusive to our build system.
         // Here we simply point back to our .component bundle, tricking the host. JUCE, iPlug2 & DPlug all do the same.
         CFStringRef bundleID             = CFStringCreateWithCString(0, CPLUG_AUV2_BUNDLE_ID, kCFStringEncodingUTF8);
         CFBundleRef bundle               = CFBundleGetBundleWithIdentifier(bundleID);
@@ -830,6 +846,9 @@ static OSStatus AUMethodGetProperty(
 #endif
     case kAudioUnitProperty_UserPlugin:
         *(UInt64*)outData = (UInt64)auv2->userPlugin;
+        break;
+    case kAudioUnitProperty_CplugProcessContext:
+        *(UInt64*)outData = (UInt64)&auv2->hostContext;
         break;
 
     default:
@@ -1524,7 +1543,13 @@ static bool AUv2HostContext_getHostName(CplugHostContext* ctx, char* buf, size_t
 
     return false;
 }
-_Static_assert(sizeof(CplugHostContext) == 32, "You may need to add support for new methods");
+static bool AUv2HostContext_requestResize_stub(CplugHostContext* ctx, uint32_t w, uint32_t h)
+{
+    cplug_log("[WARNING] This implementation of requestResize() will not work. You need to replace this method in your "
+              "Cocoa code");
+    return false;
+}
+_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 
 OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInstance)
 {
@@ -1576,6 +1601,7 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     auv2->hostContext.sendParamEvent = AUv2HostContext_sendParamEvent;
     auv2->hostContext.rescan         = AUv2HostContext_rescan;
     auv2->hostContext.getHostName    = AUv2HostContext_getHostName;
+    auv2->hostContext.requestResize  = AUv2HostContext_requestResize_stub;
 
     auv2->supportsInPlaceProcessing = 1;
     auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;
