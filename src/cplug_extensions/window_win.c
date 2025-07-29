@@ -112,6 +112,9 @@ typedef struct CplugWindow
 #ifdef PW_DX11
     BOOL IsWindows10OrGreater;
 
+    D3D_DRIVER_TYPE   DriverType;
+    D3D_FEATURE_LEVEL FeatureLevel;
+
     UINT64   OpenWindowBit;
     HMONITOR LastMonitor;
 
@@ -1713,11 +1716,14 @@ void* cplug_createGUI(void* userPlugin)
     IDXGIFactory* pFactory    = NULL;
     IDXGIDevice1* pDXGIDevice = NULL;
 
+    // https://learn.microsoft.com/en-us/windows/win32/api/d3dcommon/ne-d3dcommon-d3d_driver_type
     static const D3D_DRIVER_TYPE DriverTypes[] = {
         D3D_DRIVER_TYPE_HARDWARE,
         D3D_DRIVER_TYPE_WARP,
-        D3D_DRIVER_TYPE_REFERENCE,
+        D3D_DRIVER_TYPE_SOFTWARE,
+        // D3D_DRIVER_TYPE_REFERENCE,
     };
+    D3D_DRIVER_TYPE DriverType;
 
     UINT Flags = D3D11_CREATE_DEVICE_SINGLETHREADED | D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 #ifndef NDEBUG
@@ -1726,6 +1732,14 @@ void* cplug_createGUI(void* userPlugin)
 
     for (int i = 0; i < ARRAYSIZE(DriverTypes); i++)
     {
+        // Note: Feature level 11.1 offers more UAV slots, which you will probably want. Personally I've run into errors
+        // compiling compute shaders when running at feature level 11.0
+        // https://en.wikipedia.org/wiki/Feature_levels_in_Direct3D
+        // If you require 11.1, these will be your minimum hardware requirements:
+        // https://en.wikipedia.org/wiki/GeForce_GTX_900_series (2014)
+        // https://en.wikipedia.org/wiki/Radeon_HD_8000_series (2013)
+        // https://en.wikipedia.org/wiki/Intel_Graphics_Technology (Haswell CPU with integrated graphics, 2014)
+        // https://en.wikipedia.org/wiki/AMD_APU (Jaguar APU, 2013)
         static const D3D_FEATURE_LEVEL levelAttempts[] = {
             D3D_FEATURE_LEVEL_12_1, // Direct3D 12.1 SM 6
             D3D_FEATURE_LEVEL_12_0, // Direct3D 12.0 SM 5.1
@@ -1746,11 +1760,14 @@ void* cplug_createGUI(void* userPlugin)
             ARRAYSIZE(levelAttempts),
             D3D11_SDK_VERSION,
             &pw->pDevice,
-            NULL,
+            &pw->FeatureLevel,
             &pw->pDeviceContext);
 
         if (SUCCEEDED(hr))
+        {
+            pw->DriverType = DriverTypes[i];
             break;
+        }
     }
     PW_ASSERT(pw->pDevice);
     PW_ASSERT(pw->pDeviceContext);

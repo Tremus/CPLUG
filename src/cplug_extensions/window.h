@@ -160,6 +160,8 @@ bool pw_event(const PWEvent* event)
 >>>>>>>>>>>
 - Add some kind of "Monitor changed" notification
 - Detect pixel layout eg. BGR horizontal & vertical
+- Detect things like software/hardware renderers, feature levels, and generally how powerful the device is.
+  This could be useful for auto-disabling animations or image post processing FX
 - Support other dialogue boxes, eg. alerts and colour pickers
 - Support optional OpenGL or nah?
 
