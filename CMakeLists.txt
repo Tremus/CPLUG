@@ -9,6 +9,12 @@ project(cplug_example
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 98)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE})
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE})
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE})
+# Windows paths are complicated
+string(REPLACE "/" "\\\\" SOURCE_DIR_WIN ${PROJECT_SOURCE_DIR})
+string(REPLACE "/" "\\\\" BINARY_DIR_WIN ${CMAKE_BINARY_DIR})
 
 if (APPLE)
     enable_language(OBJC)
@@ -74,7 +80,7 @@ function(configure_info_plist target_name bundle_identifier bundle_type bundle_e
         OUTPUT_NAME ${PROJECT_NAME}
         BUNDLE_EXTENSION ${bundle_extension}
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/${bundle_type}.plist
-        CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${PROJECT_NAME}.${bundle_extension}
+        CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.${bundle_extension}
     )
 endfunction()
 
@@ -88,13 +94,18 @@ endfunction()
 
 # All Plugin formats in one
 if (APPLE)
-    add_library(${PROJECT_NAME}_plugin MODULE example/example.m src/cplug_auv2.c src/cplug_clap.c src/cplug_vst3.c)
+    add_library(${PROJECT_NAME}_plugin MODULE
+        example/example.m
+        src/cplug_auv2.c
+        src/cplug_clap.c
+        src/cplug_vst3.c
+        )
     target_link_libraries(${PROJECT_NAME}_plugin PRIVATE "-framework AudioToolbox -framework Cocoa") # -framework AudioToolbox not actually required...
 
     configure_info_plist(${PROJECT_NAME}_plugin ${PLUGIN_BUNDLE_ID} "BNDL" "clap")
 
-    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.clap/Contents/PkgInfo")
-    file(WRITE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.clap/Contents/PkgInfo" "BNDL????")
+    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap/Contents/PkgInfo")
+    file(WRITE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap/Contents/PkgInfo" "BNDL????")
 
     target_compile_definitions(${PROJECT_NAME}_plugin PRIVATE
         CPLUG_AUV2_VERSION_INT=${MACOSX_BUNDLE_VERSION_INT}
@@ -103,36 +114,53 @@ if (APPLE)
     )
 
     add_custom_command(TARGET ${PROJECT_NAME}_plugin POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.vst3"
-        COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.component"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.component"
 
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.clap" "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.vst3"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.clap" "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.component"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap" "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap" "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.component"
 
-        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${PROJECT_NAME}.clap to ~/Library/Audio/Plug-Ins/CLAP/"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.clap" "~/Library/Audio/Plug-Ins/CLAP/${PROJECT_NAME}.clap"
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap to ~/Library/Audio/Plug-Ins/CLAP/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap" "~/Library/Audio/Plug-Ins/CLAP/${PROJECT_NAME}.clap"
 
-        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${PROJECT_NAME}.vst3 to ~/Library/Audio/Plug-Ins/VST3/"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.vst3" "~/Library/Audio/Plug-Ins/VST3/${PROJECT_NAME}.vst3"
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3 to ~/Library/Audio/Plug-Ins/VST3/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3" "~/Library/Audio/Plug-Ins/VST3/${PROJECT_NAME}.vst3"
 
-        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${PROJECT_NAME}.component to ~/Library/Audio/Plug-Ins/Components/"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.component" "~/Library/Audio/Plug-Ins/Components/${PROJECT_NAME}.component"
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.component to ~/Library/Audio/Plug-Ins/Components/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.component" "~/Library/Audio/Plug-Ins/Components/${PROJECT_NAME}.component"
     )
 elseif(WIN32)
-    add_library(${PROJECT_NAME}_plugin MODULE example/example.c src/cplug_clap.c src/cplug_vst3.c)
-    set_target_properties(${PROJECT_NAME}_plugin PROPERTIES
-        OUTPUT_NAME "${PROJECT_NAME}"
-        SUFFIX .clap
-        PDB_NAME "${PROJECT_NAME}"
+    add_library(${PROJECT_NAME}_plugin MODULE
+        example/example.c
+        src/cplug_clap.c
+        src/cplug_vst3.c
         )
-    # According to the docs you're meant to bundle your Windows VST3 using a bundle like folder structure:
-    # https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Locations+Format/Plugin+Format.html#for-the-windows-platform
-    # However, placing the unbundled binary directly into your ...\Common Files\VST3 folder will work fine in every host.
-    # I'm not sure anyone in the real world actually bundles Windows VST3s like this, but maybe I'm just ignorant.
+    set_target_properties(${PROJECT_NAME}_plugin PROPERTIES
+        OUTPUT_NAME ${PROJECT_NAME}_plugin
+        PDB_NAME ${PROJECT_NAME}_plugin
+        )
+
+    set(VST3_BUILD_PATH ${BINARY_DIR_WIN}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}.vst3)
+
     add_custom_command(TARGET ${PROJECT_NAME}_plugin POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.vst3"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.vst3/Contents/x86_64-win"
-        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.clap" "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.vst3/Contents/x86_64-win/${PROJECT_NAME}.vst3"
+        # https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Locations+Format/Plugin+Format.html
+        COMMAND echo Building VST3 folder: ${VST3_BUILD_PATH}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VST3_BUILD_PATH}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_BUILD_PATH}\\Contents"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_BUILD_PATH}\\Contents\\x86_64-win"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "${VST3_BUILD_PATH}\\Contents\\x86_64-win\\${PROJECT_NAME}.vst3"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}\\example\\PlugIn.ico"                     "${VST3_BUILD_PATH}\\PlugIn.ico"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}\\example\\desktop.ini.in"                 "${VST3_BUILD_PATH}\\desktop.ini"
+        COMMAND attrib +s +h ${VST3_BUILD_PATH}\\desktop.ini
+        COMMAND attrib +s +h ${VST3_BUILD_PATH}\\PlugIn.ico
+        COMMAND attrib +s ${VST3_BUILD_PATH}
+
+        # The advantage of xcopy over cmake -E copy is that xcopy will let you copy the folder attributes we set above
+        COMMAND echo Installing ${VST3_BUILD_PATH} to %LOCALAPPDATA%\\Programs\\Common\\VST3
+        COMMAND xcopy ${VST3_BUILD_PATH} %LOCALAPPDATA%\\Programs\\Common\\VST3\\${PROJECT_NAME}.vst3\\ /s /e /h /y /q
+
+        COMMAND echo Installing ${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll to %LOCALAPPDATA%\\Programs\\Common\\CLAP
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "%LOCALAPPDATA%\\Programs\\Common\\CLAP\\${PROJECT_NAME}.clap"
         )
 endif()
 
@@ -151,8 +179,8 @@ elseif (APPLE)
     target_link_libraries(${PROJECT_NAME}_app PRIVATE "-framework Cocoa -framework CoreMIDI -framework CoreAudio -framework CoreServices")
     configure_info_plist(${PROJECT_NAME}_app ${APP_BUNDLE_ID} "APPL" "app")
 
-    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.app/Contents/PkgInfo")
-    file(WRITE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.app/Contents/PkgInfo" "APPL????")
+    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.app/Contents/PkgInfo")
+    file(WRITE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.app/Contents/PkgInfo" "APPL????")
 endif()
 
 
@@ -169,14 +197,10 @@ if (WIN32 AND CMAKE_BUILD_TYPE MATCHES Debug)
     add_library(${HOTRELOAD_LIB_NAME} MODULE example/example.c)
     target_compile_definitions(${HOTRELOAD_LIB_NAME} PRIVATE CPLUG_SHARED)
 
-    # Windows paths are complicated
-    string(REPLACE "/" "\\\\" SOURCE_DIR_WIN ${PROJECT_SOURCE_DIR})
-    string(REPLACE "/" "\\\\" BINARY_DIR_WIN ${CMAKE_BINARY_DIR})
-
     add_executable(${PROJECT_NAME}_hotreload WIN32 src/cplug_standalone_win.c)
     target_compile_definitions(${PROJECT_NAME}_hotreload PRIVATE
         HOTRELOAD_WATCH_DIR="${SOURCE_DIR_WIN}\\\\example"
-        HOTRELOAD_LIB_PATH="${BINARY_DIR_WIN}\\\\${HOTRELOAD_LIB_NAME}.dll"
+        HOTRELOAD_LIB_PATH="${BINARY_DIR_WIN}\\\\${CMAKE_BUILD_TYPE}\\\\${HOTRELOAD_LIB_NAME}.dll"
         HOTRELOAD_BUILD_COMMAND="cmake --build ${BINARY_DIR_WIN} --config Debug --target ${HOTRELOAD_LIB_NAME}"
         CPLUG_SHARED
         )
@@ -188,14 +212,14 @@ elseif (APPLE AND CMAKE_BUILD_TYPE MATCHES Debug)
 
     add_executable(${PROJECT_NAME}_hotreload MACOSX_BUNDLE src/cplug_standalone_osx.m)
 
-    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}_hotreload.app/Contents/PkgInfo")
-    file(WRITE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}_hotreload.app/Contents/PkgInfo" "APPL????")
+    file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}_hotreload.app/Contents/PkgInfo")
+    file(WRITE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}_hotreload.app/Contents/PkgInfo" "APPL????")
 
     target_link_libraries(${PROJECT_NAME}_hotreload PRIVATE "-framework Cocoa -framework CoreMIDI -framework CoreAudio -framework CoreServices")
 
     target_compile_definitions(${PROJECT_NAME}_hotreload PRIVATE
         HOTRELOAD_WATCH_DIR="${PROJECT_SOURCE_DIR}/example"
-        HOTRELOAD_LIB_PATH="${CMAKE_BINARY_DIR}/lib${HOTRELOAD_LIB_NAME}.so"
+        HOTRELOAD_LIB_PATH="${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/lib${HOTRELOAD_LIB_NAME}.so"
         HOTRELOAD_BUILD_COMMAND="cmake --build ${CMAKE_BINARY_DIR} --config Debug --target ${HOTRELOAD_LIB_NAME}"
         CPLUG_SHARED
         )
