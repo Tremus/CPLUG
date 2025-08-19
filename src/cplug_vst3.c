@@ -1270,7 +1270,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByV
     // FL Studio 2025 wants to know the names of your MIDI paramters...
     if (cplug_is_midi_param(paramId))
     {
-        wcscpy_s((wchar_t*)output, 128, L"MIDI");
+        wcsncpy((wchar_t*)output, L"MIDI", 128);
         return Steinberg_kResultOk;
     }
 
