@@ -1136,10 +1136,8 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_release(void* const self)
 
     if (refcount == 0)
     {
-        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3Plugin from IMidiMapping extension");
+        // should call _cplug_tryDeleteVST3Plugin() from IMidiMapping & INoteExpressionController
         vst3->midiMapping.lpVtbl->release(&vst3->midiMapping);
-        cplug_log("VST3Controller_release | should call _cplug_tryDeleteVST3Plugin from "
-                  "Steinberg_Vst_INoteExpressionController extension");
         vst3->noteExpression.lpVtbl->release(&vst3->noteExpression);
     }
 
@@ -1268,7 +1266,13 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByV
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
     // Bitwig 5 has been spotted failing this assertion
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
-    CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
+
+    // FL Studio 2025 wants to know the names of your MIDI paramters...
+    if (cplug_is_midi_param(paramId))
+    {
+        wcscpy_s((wchar_t*)output, 128, L"MIDI");
+        return Steinberg_kResultOk;
+    }
 
     char   buf[128];
     double denormalised = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
