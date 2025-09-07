@@ -823,14 +823,24 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         height     -= padding_y;
         uint32_t w  = width < 0 ? 0 : width;
         uint32_t h  = height < 0 ? 0 : height;
+        cplug_assert(w >= 0);
+        cplug_assert(h >= 0);
         g_plugin.checkSize(g_plugin.UserGUI, &w, &h);
         width   = w;
         height  = h;
         width  += padding_x;
         height += padding_y;
 
-        parent->right  = parent->left + width;
-        parent->bottom = parent->top + height;
+        // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
+        if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
+            parent->left = parent->right - width;
+        else
+            parent->right = parent->left + width;
+
+        if (wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT)
+            parent->top = parent->bottom - height;
+        else
+            parent->bottom = parent->top + height;
 
         return TRUE;
     }
@@ -997,7 +1007,7 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 #ifdef HOTRELOAD_WATCH_DIR
 #pragma region PLUGIN_STATE
-int64_t        CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
     cplug_assert(stateCtx != NULL);
     cplug_assert(writePos != NULL);
