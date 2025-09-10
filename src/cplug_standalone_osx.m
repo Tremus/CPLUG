@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
+#include <sys/stat.h>
 
 enum
 {
@@ -95,6 +96,8 @@ struct STAND_PluginStateContext
     size_t bytesRead;
 } g_pluginState;
 FSEventStreamRef g_filesystemEventStream = NULL;
+
+int g_hotreloadVersion = 0;
 
 int64_t STAND_writeStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
 int64_t STAND_readStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
@@ -490,6 +493,27 @@ OSStatus STAND_audioDeviceChangeListener(
     [g_window release];
     [[NSApp menu] release];
     [NSApp.delegate release];
+
+#ifdef HOTRELOAD_LIB_PATH
+    // Cleanup hotreload temp files
+    const char* hotreloadLibPath = HOTRELOAD_LIB_PATH;
+    const char* ext              = NULL;
+    for (const char* c = hotreloadLibPath; *c != 0; c++)
+    {
+        if (*c == '.')
+            ext = c;
+    }
+    for (int i = 0; i < g_hotreloadVersion; i++)
+    {
+        int  version = i + 1;
+        char path[1024];
+        snprintf(path, sizeof(path), "%.*s%d%s", (int)(ext - hotreloadLibPath), hotreloadLibPath, version, ext);
+
+        // delete old library
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/unlink.2.html
+        unlink(path);
+    }
+#endif // HOTRELOAD_LIB_PATH
 }
 
 #pragma mark -NSMenuItem click methods
@@ -1202,9 +1226,68 @@ OSStatus STAND_audioDeviceChangeListener(
 void STAND_openLibraryWithSymbols()
 {
 #ifdef HOTRELOAD_LIB_PATH
-    cplug_assert(g_plugin.library == NULL);
-    g_plugin.library = dlopen(HOTRELOAD_LIB_PATH, RTLD_NOW);
-    cplug_assert(g_plugin.library != NULL);
+    // Apples docs (assuming macOS behaves the same) state that dlclose may not actually close libraries.
+    // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/dlclose.3.html
+    // From my experience it can happen when your library depends on OS libs like -framework Metal. It's possible that
+    // your app may not suffer these problems due to your dependancies.
+    // When Apple fail to close libraries, it introduces problems when you want to rebuild a library at the same
+    // filepath, then load the updated one whilst in a debugging environment. Here we duplicate the source library to a
+    // new path to guarantee we never load libraries from the same filepath twice in one program instance.
+    {
+        g_hotreloadVersion++;
+        const char* hotreloadLibPath = HOTRELOAD_LIB_PATH;
+        const char* ext              = NULL;
+        for (const char* c = hotreloadLibPath; *c != 0; c++)
+        {
+            if (*c == '.')
+                ext = c;
+        }
+        cplug_assert(ext != NULL);
+
+        char newlibpath[1024];
+        snprintf(
+            newlibpath,
+            sizeof(newlibpath),
+            "%.*s%d%s",
+            (int)(ext - hotreloadLibPath),
+            hotreloadLibPath,
+            g_hotreloadVersion,
+            ext);
+
+        // deep copy library file
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/open.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fstat.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/read.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/close.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/write.2.html#//apple_ref/doc/man/2/write
+
+        int fd_src = open(hotreloadLibPath, O_RDONLY);
+        cplug_assert(fd_src != -1);
+
+        struct stat info = {0};
+        int         ret  = fstat(fd_src, &info);
+        cplug_assert(ret != -1);
+
+        void* src_data = malloc(info.st_size);
+        cplug_assert(src_data != NULL);
+
+        ret = read(fd_src, src_data, info.st_size);
+        cplug_assert(ret == info.st_size);
+        ret = close(fd_src);
+        cplug_assert(ret != -1);
+
+        int fd_dst = open(newlibpath, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+        cplug_assert(fd_dst != -1);
+        ret = write(fd_dst, src_data, info.st_size);
+        cplug_assert(ret == info.st_size);
+        ret = close(fd_dst);
+        cplug_assert(ret != -1);
+
+        // Load library from new path
+        cplug_assert(g_plugin.library == NULL);
+        g_plugin.library = dlopen(newlibpath, RTLD_NOW);
+        cplug_assert(g_plugin.library != NULL);
+    }
 #define CPLUG_DLSYM(name) dlsym(g_plugin.library, #name)
 #else
 #define CPLUG_DLSYM(func) func
