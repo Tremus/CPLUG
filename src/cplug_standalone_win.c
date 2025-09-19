@@ -22,6 +22,7 @@
 #include <Windows.h>
 
 #include <audioclient.h>
+#include <avrt.h>
 #include <cfgmgr32.h>
 #include <mmdeviceapi.h>
 #include <mmeapi.h>
@@ -33,6 +34,7 @@
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "cfgmgr32.lib")
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "Avrt.lib")
 
 #define cplug_assert(cond) (cond) ? (void)0 : __debugbreak()
 
@@ -43,7 +45,9 @@
 #endif
 
 #if !defined(CPLUG_DEFAULT_BLOCK_SIZE) || !defined(CPLUG_DEFAULT_SAMPLE_RATE)
-// WARNING: using 44100 is currently glitchy, don't know why. It's not a default for now
+// WARNING: Only a sample rate of 48000 with a block size of 512 or less appears to work on my machine. Any other
+// setting produces stutters. I don't know why this is. Several DAWs I use seem to have this problem too when using
+// WASAPI. This may be Microsoft jank, it also may be me not understanding how use the API properly
 #define CPLUG_DEFAULT_SAMPLE_RATE 48000
 #define CPLUG_DEFAULT_BLOCK_SIZE  512
 #endif
@@ -1712,14 +1716,12 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
 
 DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
 {
-    // NOTE: requested sizes do not come in the size requested, or even in a multiple of 32
-    // On my machine, requesting a block size of 512 at 44100Hz gives me a max frame size of 1032 and variable
-    // block sizes, usually consisting of 441 frames.The windows docs say this to guarantee enough audio in reserve to
-    // prevent audible glicthes:
-    // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize
-    // Unfortunately for us, this means we need to play silly games caching audio within a preallocated buffer to
-    // make sure the users App recieves a sensible block size
     CPWIN_Audio_Process(g_Audio.ProcessBufferMaxFrames);
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avsetmmthreadcharacteristicsw
+    DWORD  TaskIndex             = 0;
+    HANDLE ThreadCharacteristics = AvSetMmThreadCharacteristicsW(L"Pro Audio", &TaskIndex);
+    cplug_assert(ThreadCharacteristics);
 
     g_Audio.pIAudioClient->lpVtbl->Start(g_Audio.pIAudioClient);
 
@@ -1740,6 +1742,10 @@ DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
 
         CPWIN_Audio_Process(blockSize);
     }
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avrevertmmthreadcharacteristics
+    BOOL ok = AvRevertMmThreadCharacteristics(ThreadCharacteristics);
+    cplug_assert(ok);
 
     return 0;
 }
@@ -1851,11 +1857,11 @@ void CPWIN_Audio_Start()
     fmtex.Format.wFormatTag           = WAVE_FORMAT_EXTENSIBLE;
     fmtex.Format.nChannels            = g_Audio.NumChannels;
     fmtex.Format.nSamplesPerSec       = g_Audio.SampleRate;
-    fmtex.Format.wBitsPerSample       = 32;
-    fmtex.Format.nBlockAlign          = (fmtex.Format.nChannels * fmtex.Format.wBitsPerSample) / 8;
-    fmtex.Format.nAvgBytesPerSec      = fmtex.Format.nSamplesPerSec * fmtex.Format.nBlockAlign;
-    fmtex.Format.cbSize               = 22;
-    fmtex.Samples.wValidBitsPerSample = 32;
+    fmtex.Format.wBitsPerSample       = sizeof(float) * 8;
+    fmtex.Format.nBlockAlign          = sizeof(float) * g_Audio.NumChannels;
+    fmtex.Format.nAvgBytesPerSec      = sizeof(float) * g_Audio.SampleRate * g_Audio.NumChannels;
+    fmtex.Format.cbSize               = sizeof(fmtex) - sizeof(fmtex.Format);
+    fmtex.Samples.wValidBitsPerSample = sizeof(float) * 8;
 
     if (fmtex.Format.nChannels == 1)
         fmtex.dwChannelMask = SPEAKER_FRONT_CENTER;
