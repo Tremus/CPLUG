@@ -1671,6 +1671,8 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
     WindowsProcessContext ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.cplugContext.numFrames      = g_Audio.BlockSize;
+    ctx.cplugContext.numInputs      = 0;
+    ctx.cplugContext.numOutputs     = 2;
     ctx.cplugContext.enqueueEvent   = CPWIN_Audio_enqueueEvent;
     ctx.cplugContext.dequeueEvent   = CPWIN_Audio_dequeueEvent;
     ctx.cplugContext.getAudioInput  = CPWIN_Audio_getAudioInput;

@@ -743,7 +743,9 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
 
     struct ClapProcessContextTranslator translator;
     memset(&translator, 0, sizeof(translator));
-    translator.cplugContext.numFrames = process->frames_count;
+    translator.cplugContext.numFrames  = process->frames_count;
+    translator.cplugContext.numInputs  = process->audio_inputs_count;
+    translator.cplugContext.numOutputs = process->audio_outputs_count;
 
     if (process->transport)
     {

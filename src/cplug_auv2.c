@@ -1248,7 +1248,8 @@ static OSStatus AUMethodProcessAudio(
     // cplug_log("AUMethodProcessAudio => %u %p %u %u %p", flags, inTimeStamp, inOutputBusNumber, inNumFrames, ioData);
 
     // The very smart people at Apple test you on this
-    CPLUG_LOG_ASSERT_RETURN(inNumFrames <= auv2->mMaxFramesPerSlice, kAudioUnitErr_TooManyFramesToProcess);
+    if (inNumFrames > auv2->mMaxFramesPerSlice)
+        return kAudioUnitErr_TooManyFramesToProcess;
 
     if (flags == 0 || (flags & kAudioUnitRenderAction_DoNotCheckRenderArgs))
     {
@@ -1258,7 +1259,9 @@ static OSStatus AUMethodProcessAudio(
         CplugProcessContext* ctx    = &translator.cplugContext;
         HostCallbackInfo*    hostcb = &auv2->mHostCallbackInfo;
 
-        ctx->numFrames = inNumFrames;
+        ctx->numFrames  = inNumFrames;
+        ctx->numInputs  = ioData->mNumberBuffers;
+        ctx->numOutputs = ioData->mNumberBuffers;
 
         if (hostcb->beatAndTempoProc)
         {

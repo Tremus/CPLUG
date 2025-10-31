@@ -162,6 +162,8 @@ enum
 struct CplugProcessContext
 {
     uint32_t numFrames;
+    uint32_t numInputs;
+    uint32_t numOutputs;
 
     uint32_t flags; // CPLUG_FLAG_TRANSPORT_XXX
     double   bpm;

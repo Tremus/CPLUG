@@ -1764,7 +1764,9 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
 
     VST3ProcessContextTranslator translator;
     memset(&translator, 0, sizeof(translator));
-    translator.cplugContext.numFrames = data->numSamples;
+    translator.cplugContext.numFrames  = data->numSamples;
+    translator.cplugContext.numInputs  = data->numInputs;
+    translator.cplugContext.numOutputs = data->numOutputs;
 
     if (data->processContext != NULL)
     {
