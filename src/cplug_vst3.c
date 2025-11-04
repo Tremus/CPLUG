@@ -543,7 +543,7 @@ static bool _cplug_vst3_getHostName(CplugHostContext* ctx, char* buf, size_t buf
     return ok;
 }
 
-_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 
 static void _cplug_tryDeleteVST3Plugin(VST3Plugin* vst3)
 {

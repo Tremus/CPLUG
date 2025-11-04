@@ -9,7 +9,7 @@
 #define my_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
 #endif
 
-#if defined(_WIN32) && defined(__x86_64__)
+#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
 // https://softwareengineering.stackexchange.com/a/337251
 #include <immintrin.h>
 #define DISABLE_DENORMALS                                                                                              \

@@ -140,28 +140,31 @@ elseif(WIN32)
         PDB_NAME ${PROJECT_NAME}_plugin
         )
 
-    set(VST3_BUILD_PATH ${BINARY_DIR_WIN}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}.vst3)
+    set(VST3_BUILD_PATH "${BINARY_DIR_WIN}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}.vst3")
 
-    add_custom_command(TARGET ${PROJECT_NAME}_plugin POST_BUILD
-        # https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Locations+Format/Plugin+Format.html
-        COMMAND echo Building VST3 folder: ${VST3_BUILD_PATH}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${VST3_BUILD_PATH}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_BUILD_PATH}\\Contents"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_BUILD_PATH}\\Contents\\x86_64-win"
-        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "${VST3_BUILD_PATH}\\Contents\\x86_64-win\\${PROJECT_NAME}.vst3"
-        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}\\example\\PlugIn.ico"                     "${VST3_BUILD_PATH}\\PlugIn.ico"
-        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}\\example\\desktop.ini.in"                 "${VST3_BUILD_PATH}\\desktop.ini"
-        COMMAND attrib +s +h ${VST3_BUILD_PATH}\\desktop.ini
-        COMMAND attrib +s +h ${VST3_BUILD_PATH}\\PlugIn.ico
-        COMMAND attrib +s ${VST3_BUILD_PATH}
+    # All this post build stuff fails with MSVC
+    if(NOT CMAKE_C_COMPILER_ID STREQUAL "MSVC" AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        add_custom_command(TARGET ${PROJECT_NAME}_plugin POST_BUILD
+            # https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Locations+Format/Plugin+Format.html
+            COMMAND echo Building VST3 folder: ${VST3_BUILD_PATH}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${VST3_BUILD_PATH}
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_BUILD_PATH}\\Contents"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_BUILD_PATH}\\Contents\\x86_64-win"
+            COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "${VST3_BUILD_PATH}\\Contents\\x86_64-win\\${PROJECT_NAME}.vst3"
+            COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}\\example\\PlugIn.ico"                     "${VST3_BUILD_PATH}\\PlugIn.ico"
+            COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}\\example\\desktop.ini.in"                 "${VST3_BUILD_PATH}\\desktop.ini"
+            COMMAND attrib +s +h ${VST3_BUILD_PATH}\\desktop.ini
+            COMMAND attrib +s +h ${VST3_BUILD_PATH}\\PlugIn.ico
+            COMMAND attrib +s ${VST3_BUILD_PATH}
 
-        # The advantage of xcopy over cmake -E copy is that xcopy will let you copy the folder attributes we set above
-        COMMAND echo Installing ${VST3_BUILD_PATH} to %LOCALAPPDATA%\\Programs\\Common\\VST3
-        COMMAND xcopy ${VST3_BUILD_PATH} %LOCALAPPDATA%\\Programs\\Common\\VST3\\${PROJECT_NAME}.vst3\\ /s /e /h /y /q
+            # The advantage of xcopy over cmake -E copy is that xcopy will let you copy the folder attributes we set above
+            COMMAND echo Installing ${VST3_BUILD_PATH} to %LOCALAPPDATA%\\Programs\\Common\\VST3
+            COMMAND xcopy ${VST3_BUILD_PATH} %LOCALAPPDATA%\\Programs\\Common\\VST3\\${PROJECT_NAME}.vst3\\ /s /e /h /y /q
 
-        COMMAND echo Installing ${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll to %LOCALAPPDATA%\\Programs\\Common\\CLAP
-        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "%LOCALAPPDATA%\\Programs\\Common\\CLAP\\${PROJECT_NAME}.clap"
-        )
+            COMMAND echo Installing ${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll to %LOCALAPPDATA%\\Programs\\Common\\CLAP
+            COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "%LOCALAPPDATA%\\Programs\\Common\\CLAP\\${PROJECT_NAME}.clap"
+            )
+    endif() # MSVC
 endif()
 
 

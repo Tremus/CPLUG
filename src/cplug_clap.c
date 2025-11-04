@@ -498,7 +498,7 @@ static bool _cplug_clap_requestResize(CplugHostContext* ctx, uint32_t width, uin
     return false;
 }
 
-_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {

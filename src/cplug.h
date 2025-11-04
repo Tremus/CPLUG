@@ -223,10 +223,13 @@ typedef int64_t (*cplug_readProc)(const void* stateCtx, void* readPos, size_t ma
 CPLUG_API void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
 
 // AUv2 hacks. Unfortunately Apple's API designs are offensive leaky abstractions.
-static const uint32_t kAudioUnitProperty_UserPlugin          = 'plug';
-static const uint32_t kAudioUnitProperty_CplugProcessContext = kAudioUnitProperty_UserPlugin + 1;
-static const int      CPLUG_AUV2_OFFSET_PROCESS_CONTEXT      = 64;
-static const int      CPLUG_AUV2_OFFSET_NSVIEW = CPLUG_AUV2_OFFSET_PROCESS_CONTEXT + sizeof(CplugHostContext);
+enum
+{
+    kAudioUnitProperty_UserPlugin          = 'plug',
+    kAudioUnitProperty_CplugProcessContext = kAudioUnitProperty_UserPlugin + 1,
+    CPLUG_AUV2_OFFSET_PROCESS_CONTEXT      = 64,
+    CPLUG_AUV2_OFFSET_NSVIEW               = CPLUG_AUV2_OFFSET_PROCESS_CONTEXT + sizeof(CplugHostContext),
+};
 
 // NOTE: For AUv2, your pointer MUST be castable to NSView. AUv2 hosts expect an NSView & you simply override methods
 // This is the only CPLUG method used in AUv2 builds.
