@@ -209,7 +209,7 @@ typedef struct AUv2Plugin
 // This is a disgusting mess but what are you going to do about it?
 // I really want users to be able to control their own NSView, since detials surrounding its inheritance matter, and
 // users ought to be able to control it. This means CPLUG can't abstract its proposed GUI API for Audio Units since it
-// requires restrictive Cocoa OOP and big brained MVC design patterns, which seperates the concerns of plugin params &
+// requires restrictive Cocoa OOP and big brained MVC design patterns, which separates the concerns of plugin params &
 // processing, state etc. and its GUI. Users must write their own GUI code that conforms to the CPLUG API if they wish
 // to use Audio Units.
 // CPLUG does of course provide its own optional window extension with most, if not all of these problems solved.
@@ -781,7 +781,7 @@ static OSStatus AUMethodGetProperty(
     {
 #ifdef CPLUG_WANT_GUI
         AudioUnitCocoaViewInfo* info = (AudioUnitCocoaViewInfo*)outData;
-        // AUv2 docs tell you to bundle your Cocoa GUI as a seperate App bundle nested inside your .component bundle.
+        // AUv2 docs tell you to bundle your Cocoa GUI as a separate App bundle nested inside your .component bundle.
         // For most wrapper libraries, including CPLUG, this is s̶t̶u̶p̶i̶d̶ ̶a̶n̶d̶ ̶a̶n̶n̶o̶y̶i̶n̶g̶ intrusive to our build system.
         // Here we simply point back to our .component bundle, tricking the host. JUCE, iPlug2 & DPlug all do the same.
         CFStringRef bundleID             = CFStringCreateWithCString(0, CPLUG_AUV2_BUNDLE_ID, kCFStringEncodingUTF8);

@@ -420,7 +420,7 @@ typedef struct VST3Plugin
 
     // Param updates sent through IAudioProcessor::process() are sent in a very inconvenient way
     // They are ordered by paramID first, and sample position second
-    // Also Steinberg pseudo MIDI (IEventList) events come through a seperate queue
+    // Also Steinberg pseudo MIDI (IEventList) events come through a saperate queue
     // Also some versions of Ableton send MIDI parameters hough ::setParamNormalized(),
     // It's a giant mess to order correctly and maintain these 3 queues, so we stuff everything in this big buffer
     // and sort them in the ::process() callback.

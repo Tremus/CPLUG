@@ -1122,8 +1122,8 @@ bool pw_choose_file(const PWChooseFileArgs* args)
     // Opening the modal will noticably lock the main thread for 200ms or more before opening the modal.
     // To avoid this, you may try opening the modal on another thread, however this will crash your program.
     // It appears to be an undocumented requirement that you must open the modal on the main thread.
-    // By contrast Windows doesn't have this locking problem, since you can spin up a seperate thread to run it on.
-    // From what is known, macOS 10.15+ run the modal in a seperate process.
+    // By contrast Windows doesn't have this locking problem, since you can spin up a separate thread to run it on.
+    // From what is known, macOS 10.15+ run the modal in a separate process.
     // https://developer.apple.com/documentation/appkit/nssavepanel?language=objc
     // All the stack memory from before the modal starts running seems to persist until after the modal is closed.
     // Apple is using memory/event queue tricks here which leads me to fear this code will break in a macOS update.
