@@ -1815,6 +1815,72 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
         event.midi.bytesAsInt = vst3->midiContollerQueue[i];
         _cplug_vst3_push_event(vst3, event, 0);
     }
+
+    // A problem that exists for VST3 in Ableton when replaying MIDI clips using ctrl/cmd + space hotkeys is that "all
+    // notes off events" ((0xb0 | ch), 0x7b, 0) come in as Steinberg parameter events and note on/off events come in as
+    // regular IEvents all in the same block. We need to take special care to make sure the all notes off event
+    // is processed BEFORE the note on/off events or else MIDI notes at the beginning of the clip won't play.
+    Steinberg_Vst_IParameterChanges* inParams  = data->inputParameterChanges;
+    const uint32_t                   numParams = inParams->lpVtbl->getParameterCount(inParams);
+    for (int i = 0; i < numParams; i++)
+    {
+        Steinberg_Vst_IParamValueQueue* queue     = inParams->lpVtbl->getParameterData(inParams, i);
+        const Steinberg_Vst_ParamID     paramId   = queue->lpVtbl->getParameterId(queue);
+        const int                       numPoints = queue->lpVtbl->getPointCount(queue);
+
+        const bool is_midi = cplug_is_midi_param(paramId);
+
+        for (int j = 0; j < numPoints; j++)
+        {
+            CplugEvent event;
+            // TODO quantize points for older versions of Ableton (10)...
+            // Ableton 10 send an automation point every 8 samples. This is too much.
+            // Ableton 12 seems to send one every 150-250, which is pretty good.
+            // TODO: check for Ableton 11
+            int    frameIdx = 0;
+            double value    = 0;
+            queue->lpVtbl->getPoint(queue, j, &frameIdx, &value);
+
+            if (is_midi)
+            {
+                event.midi.type  = CPLUG_EVENT_MIDI;
+                event.midi.frame = frameIdx;
+
+                uint32_t diff    = paramId - CPLUG_MIDI_PARAMID_START;
+                uint8_t  channel = diff / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+                uint8_t  control = diff % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
+
+                switch (control)
+                {
+                case Steinberg_Vst_ControllerNumbers_kAfterTouch:
+                    event.midi.status = 0xd0 | channel;
+                    event.midi.data1  = (uint8_t)(value * 127.0);
+                    break;
+                case Steinberg_Vst_ControllerNumbers_kPitchBend:
+                {
+                    uint16_t pb       = (uint16_t)(value * 16383);
+                    event.midi.status = 0xe0 | channel;
+                    event.midi.data1  = pb & 127;
+                    event.midi.data2  = (pb >> 7) & 127;
+                    break;
+                }
+                default:
+                    event.midi.status = 0xb0 | channel;
+                    event.midi.data1  = control;
+                    event.midi.data2  = (uint8_t)(value * 127.0);
+                    break;
+                }
+            }
+            else
+            {
+                event.parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
+                event.parameter.id    = paramId;
+                event.parameter.value = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, value);
+            }
+            _cplug_vst3_push_event(vst3, event, frameIdx);
+        }
+    }
+
     Steinberg_Vst_IEventList* const inEvents = data->inputEvents;
     if (inEvents)
     {
@@ -1921,66 +1987,6 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
                 break;
             }
             _cplug_vst3_push_event(vst3, event, vst3Midi.sampleOffset);
-        }
-    }
-    Steinberg_Vst_IParameterChanges* inParams  = data->inputParameterChanges;
-    const uint32_t                   numParams = inParams->lpVtbl->getParameterCount(inParams);
-    for (int i = 0; i < numParams; i++)
-    {
-        Steinberg_Vst_IParamValueQueue* queue     = inParams->lpVtbl->getParameterData(inParams, i);
-        const Steinberg_Vst_ParamID     paramId   = queue->lpVtbl->getParameterId(queue);
-        const int                       numPoints = queue->lpVtbl->getPointCount(queue);
-
-        const bool is_midi = cplug_is_midi_param(paramId);
-
-        for (int j = 0; j < numPoints; j++)
-        {
-            CplugEvent event;
-            // TODO quantize points for older versions of Ableton (10)...
-            // Ableton 10 send an automation point every 8 samples. This is too much.
-            // Ableton 12 seems to send one every 150-250, which is pretty good.
-            // TODO: check for Ableton 11
-            int    frameIdx = 0;
-            double value    = 0;
-            queue->lpVtbl->getPoint(queue, j, &frameIdx, &value);
-
-            if (is_midi)
-            {
-                event.midi.type  = CPLUG_EVENT_MIDI;
-                event.midi.frame = frameIdx;
-
-                uint32_t diff    = paramId - CPLUG_MIDI_PARAMID_START;
-                uint8_t  channel = diff / Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
-                uint8_t  control = diff % Steinberg_Vst_ControllerNumbers_kCountCtrlNumber;
-
-                switch (control)
-                {
-                case Steinberg_Vst_ControllerNumbers_kAfterTouch:
-                    event.midi.status = 0xd0 | channel;
-                    event.midi.data1  = (uint8_t)(value * 127.0);
-                    break;
-                case Steinberg_Vst_ControllerNumbers_kPitchBend:
-                {
-                    uint16_t pb       = (uint16_t)(value * 16383);
-                    event.midi.status = 0xe0 | channel;
-                    event.midi.data1  = pb & 127;
-                    event.midi.data2  = (pb >> 7) & 127;
-                    break;
-                }
-                default:
-                    event.midi.status = 0xb0 | channel;
-                    event.midi.data1  = control;
-                    event.midi.data2  = (uint8_t)(value * 127.0);
-                    break;
-                }
-            }
-            else
-            {
-                event.parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
-                event.parameter.id    = paramId;
-                event.parameter.value = cplug_denormaliseParameterValue(vst3->userPlugin, paramId, value);
-            }
-            _cplug_vst3_push_event(vst3, event, frameIdx);
         }
     }
 
