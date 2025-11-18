@@ -9,22 +9,29 @@
 #include <dlfcn.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
+#include <sys/stat.h>
 
-#define CPLUG_MIDI_RINGBUFFER_SIZE 128
-#define MAX_BLOCK_SIZE             2048
+enum
+{
+    CPLUG_MIDI_RINGBUFFER_SIZE = 128,
+    MAX_BLOCK_SIZE             = 2048,
 
-#define USER_SAMPLE_RATE  44100
-#define USER_BLOCK_SIZE   512
-#define USER_NUM_CHANNELS 2
+    USER_SAMPLE_RATE  = 44100,
+    USER_BLOCK_SIZE   = 512,
+    USER_NUM_CHANNELS = 2,
+};
 
 #ifndef ARRSIZE
 #define ARRSIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 #endif
 
-#define unlikely(x)  __builtin_expect(x, 0)
 #define SLEEP_MS(ms) usleep(ms * 1000)
 
+#ifdef NDEBUG
+#define cplug_assert(...)
+#else
 #define cplug_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
+#endif // NDEBUG
 
 #pragma mark -Structs
 
@@ -78,34 +85,6 @@ enum MIDIMenuTag
 
 #pragma mark -Global state
 
-struct STAND_Plugin
-{
-#ifdef HOTRELOAD_LIB_PATH
-    void* library;
-#endif
-    void* userPlugin;
-    void* userGUI;
-
-    void (*libraryLoad)();
-    void (*libraryUnload)();
-    void* (*createPlugin)();
-    void (*destroyPlugin)(void* userPlugin);
-    uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
-    void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
-    void (*process)(void* userPlugin, CplugProcessContext* ctx);
-    void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
-    void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
-
-    void* (*createGUI)(void* userPlugin);
-    void (*destroyGUI)(void* userGUI);
-    void (*setParent)(void* userGUI, void* hwnd_or_nsview);
-    void (*setVisible)(void* userGUI, bool visible);
-    void (*setScaleFactor)(void* userGUI, float scale);
-    void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
-    void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
-    bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
-} g_plugin;
-
 #ifdef HOTRELOAD_BUILD_COMMAND
 struct STAND_PluginStateContext
 {
@@ -116,6 +95,10 @@ struct STAND_PluginStateContext
     size_t bytesWritten;
     size_t bytesRead;
 } g_pluginState;
+FSEventStreamRef g_filesystemEventStream = NULL;
+
+int g_hotreloadVersion = 0;
+
 int64_t STAND_writeStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
 int64_t STAND_readStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
 #endif // HOTRELOAD_BUILD_COMMAND
@@ -141,9 +124,69 @@ volatile bool       g_audioStopFlag    = false;
 pthread_cond_t      g_audioStopCondition;
 pthread_mutex_t     g_audioMutex;
 
-FSEventStreamRef g_filesystemEventStream = NULL;
-
 NSWindow* g_window = NULL;
+
+struct STAND_Plugin
+{
+#ifdef HOTRELOAD_LIB_PATH
+    void* library;
+#endif
+    CplugHostContext hostContext;
+    void*            userPlugin;
+    void*            userGUI;
+
+    void (*libraryLoad)();
+    void (*libraryUnload)();
+    void* (*createPlugin)(CplugHostContext*);
+    void (*destroyPlugin)(void* userPlugin);
+    uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
+    void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
+    void (*process)(void* userPlugin, CplugProcessContext* ctx);
+    void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
+    void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
+
+    void* (*createGUI)(void* userPlugin);
+    void (*destroyGUI)(void* userGUI);
+    void (*setParent)(void* userGUI, void* hwnd_or_nsview);
+    void (*setVisible)(void* userGUI, bool visible);
+    void (*setScaleFactor)(void* userGUI, float scale);
+    void (*getSize)(void* userGUI, uint32_t* width, uint32_t* height);
+    void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
+    bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
+} g_plugin;
+
+void STAND_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+void STAND_rescan(CplugHostContext* ctx, uint32_t flags) {}
+bool STAND_getHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+{
+    snprintf(buf, buflen, "CPLUG Standalone macOS");
+    return true;
+}
+bool STAND_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+    if (g_window)
+    {
+        NSView* view        = g_window.contentView;
+        NSRect  parentFrame = g_window.frame;
+        NSRect  childFrame  = view.frame;
+
+        double nextWidth  = width;
+        double nextHeight = height;
+
+        double xDiff             = nextWidth - childFrame.size.width;
+        double yDiff             = nextHeight - childFrame.size.height;
+        parentFrame.size.width  += xDiff;
+        parentFrame.size.height += yDiff;
+        // NOTE: origin on macOS is bottom left, similar to Bitmaps (.bmp), glyphs of TrueType fonts, and OpenGL
+        parentFrame.origin.y -= yDiff;
+
+        [g_window setFrame:parentFrame display:TRUE];
+
+        return true;
+    }
+    return false;
+}
+_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
 
 #pragma mark -Utils
 
@@ -219,7 +262,12 @@ OSStatus STAND_audioDeviceChangeListener(
     STAND_openLibraryWithSymbols();
 
     g_plugin.libraryLoad();
-    g_plugin.userPlugin = g_plugin.createPlugin();
+    g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
+    g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
+    g_plugin.hostContext.rescan         = STAND_rescan;
+    g_plugin.hostContext.getHostName    = STAND_getHostName;
+    g_plugin.hostContext.requestResize  = STAND_requestResize;
+    g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
     cplug_assert(g_plugin.userPlugin != NULL);
 
     // Init MIDI
@@ -264,16 +312,20 @@ OSStatus STAND_audioDeviceChangeListener(
     uint32_t guiWidth, guiHeight;
     g_plugin.getSize(g_plugin.userGUI, &guiWidth, &guiHeight);
 
+    NSWindowStyleMask windowStyles =
+        NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+#if CPLUG_GUI_RESIZABLE
+    windowStyles |= NSWindowStyleMaskResizable;
+#endif
+
     g_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, guiWidth, guiHeight)
-                                           styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                           styleMask:windowStyles
                                              backing:NSBackingStoreBuffered
                                                defer:NO];
     [g_window setReleasedWhenClosed:NO];
     [g_window makeKeyAndOrderFront:nil];
     [g_window setTitle:@(CPLUG_PLUGIN_NAME)];
-#if CPLUG_GUI_RESIZABLE
-    [g_window setStyleMask:[g_window styleMask] | NSWindowStyleMaskResizable];
-#endif
+
     [g_window setContentView:[[NSView alloc] init]];
     [g_window setDelegate:[[WindowDelegate alloc] init]];
 
@@ -399,9 +451,11 @@ OSStatus STAND_audioDeviceChangeListener(
 
 - (void)applicationWillTerminate:(NSNotification*)notification
 {
+#ifdef HOTRELOAD_WATCH_DIR
     FSEventStreamStop(g_filesystemEventStream);
     FSEventStreamInvalidate(g_filesystemEventStream);
     FSEventStreamRelease(g_filesystemEventStream);
+#endif
 
     STAND_audioStop();
 
@@ -439,6 +493,27 @@ OSStatus STAND_audioDeviceChangeListener(
     [g_window release];
     [[NSApp menu] release];
     [NSApp.delegate release];
+
+#ifdef HOTRELOAD_LIB_PATH
+    // Cleanup hotreload temp files
+    const char* hotreloadLibPath = HOTRELOAD_LIB_PATH;
+    const char* ext              = NULL;
+    for (const char* c = hotreloadLibPath; *c != 0; c++)
+    {
+        if (*c == '.')
+            ext = c;
+    }
+    for (int i = 0; i < g_hotreloadVersion; i++)
+    {
+        int  version = i + 1;
+        char path[1024];
+        snprintf(path, sizeof(path), "%.*s%d%s", (int)(ext - hotreloadLibPath), hotreloadLibPath, version, ext);
+
+        // delete old library
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/unlink.2.html
+        unlink(path);
+    }
+#endif // HOTRELOAD_LIB_PATH
 }
 
 #pragma mark -NSMenuItem click methods
@@ -630,21 +705,23 @@ void STAND_menuRefreshAudioOutputItems()
         status = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &outputConfig);
         cplug_assert(status == noErr);
 
-        int numChannels = outputConfig.mBuffers[0].mNumberChannels;
+        const int numChannels = outputConfig.mBuffers[0].mNumberChannels;
 
-        if (numChannels != g_audioNumChannels)
+        // Only support devices with even number of outputs.
+        // Devices with 2/4/6/... channels presumably have 1/2/3/... stereo outputs
+        if ((numChannels % 2) != 0)
             continue;
 
-        CFStringRef nameRef = 0;
-        propertySize        = sizeof(CFStringRef);
-        addr.mSelector      = kAudioDevicePropertyDeviceNameCFString;
-        status              = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &nameRef);
+        CFStringRef name = NULL;
+        propertySize     = sizeof(CFStringRef);
+        addr.mSelector   = kAudioDevicePropertyDeviceNameCFString;
+        status           = AudioObjectGetPropertyData(deviceID, &addr, 0, NULL, &propertySize, &name);
         cplug_assert(status == noErr);
-        cplug_assert(nameRef != 0);
+        cplug_assert(name != 0);
 
-        const char* name = CFStringGetCStringPtr(nameRef, 0);
-
-        NSMenuItem* item = [menu addItemWithTitle:@(name) action:@selector(handleClickAudioOutput:) keyEquivalent:@""];
+        NSMenuItem* item = [menu addItemWithTitle:(NSString*)name
+                                           action:@selector(handleClickAudioOutput:)
+                                    keyEquivalent:@""];
         item.target      = [NSApp delegate];
         [item setTag:deviceID];
         [item setState:deviceID == g_audioOutputDeviceID];
@@ -836,7 +913,8 @@ bool OSXProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent*
         event->midi.bytesAsInt = msg->bytesAsInt;
 
         tail++;
-        tail %= CPLUG_MIDI_RINGBUFFER_SIZE;
+        if (tail == CPLUG_MIDI_RINGBUFFER_SIZE)
+            tail = 0;
 
         g_midiRingBuffer.readPos = tail;
         return true;
@@ -871,8 +949,11 @@ OSStatus STAND_audioIOProc(
     cplug_assert(outOutputData->mBuffers->mNumberChannels == g_audioNumChannels);
     cplug_assert(outOutputData->mBuffers->mDataByteSize == (g_audioNumChannels * g_audioBlockSize * sizeof(float)));
 
-    OSXProcessContextTranlator translator  = {0};
+    OSXProcessContextTranlator translator;
+    memset(&translator, 0, sizeof(translator));
     translator.cplugContext.numFrames      = g_audioBlockSize;
+    translator.cplugContext.numInputs      = 0;
+    translator.cplugContext.numOutputs     = 2;
     translator.cplugContext.enqueueEvent   = OSXProcessContext_enqueueEvent;
     translator.cplugContext.dequeueEvent   = OSXProcessContext_dequeueEvent;
     translator.cplugContext.getAudioInput  = OSXProcessContext_getAudioInput;
@@ -885,9 +966,15 @@ OSStatus STAND_audioIOProc(
 
     // copy from non-interleaved to interleaved
     float* output = (float*)outOutputData->mBuffers->mData;
-    for (int i = 0; i < g_audioBlockSize; i++)
-        for (int ch = 0; ch < g_audioNumChannels; ch++)
-            *output++ = translator.output[ch][i];
+    for (int sample_idx = 0; sample_idx < g_audioBlockSize; sample_idx++)
+    {
+        // g_audioNumChannels may be a multiple of 2/4/6/... depending on the number of stereo outputs on the device
+        for (int ch = 0; ch < g_audioNumChannels; ch += 2)
+        {
+            *output++ = translator.output[0][sample_idx];
+            *output++ = translator.output[1][sample_idx];
+        }
+    }
 
     if (__atomic_load_n(&g_audioStopFlag, __ATOMIC_SEQ_CST))
     {
@@ -930,7 +1017,8 @@ void STAND_audioStart()
     propSize = sizeof(list);
     status   = AudioObjectGetPropertyData(g_audioOutputDeviceID, &addr, 0, NULL, &propSize, &list);
     cplug_assert(status == noErr);
-    cplug_assert(list.mBuffers[0].mNumberChannels == g_audioNumChannels);
+    cplug_assert((list.mBuffers[0].mNumberChannels % 2) == 0);
+    g_audioNumChannels = list.mBuffers[0].mNumberChannels;
 
     addr.mSelector = kAudioDevicePropertyBufferFrameSize;
     propSize       = sizeof(UInt32);
@@ -1104,7 +1192,7 @@ void handleAudioDeviceChange()
             if (deviceIDs[i] == g_audioOutputDeviceID)
                 deviceStillExists = true;
 
-        if (! deviceStillExists)
+        if (!deviceStillExists)
         {
             printf("Warning: Disconnected active audio output");
 
@@ -1140,9 +1228,68 @@ OSStatus STAND_audioDeviceChangeListener(
 void STAND_openLibraryWithSymbols()
 {
 #ifdef HOTRELOAD_LIB_PATH
-    cplug_assert(g_plugin.library == NULL);
-    g_plugin.library = dlopen(HOTRELOAD_LIB_PATH, RTLD_NOW);
-    cplug_assert(g_plugin.library != NULL);
+    // Apples docs (assuming macOS behaves the same) state that dlclose may not actually close libraries.
+    // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/dlclose.3.html
+    // From my experience it can happen when your library depends on OS libs like -framework Metal. It's possible that
+    // your app may not suffer these problems due to your dependancies.
+    // When Apple fail to close libraries, it introduces problems when you want to rebuild a library at the same
+    // filepath, then load the updated one whilst in a debugging environment. Here we duplicate the source library to a
+    // new path to guarantee we never load libraries from the same filepath twice in one program instance.
+    {
+        g_hotreloadVersion++;
+        const char* hotreloadLibPath = HOTRELOAD_LIB_PATH;
+        const char* ext              = NULL;
+        for (const char* c = hotreloadLibPath; *c != 0; c++)
+        {
+            if (*c == '.')
+                ext = c;
+        }
+        cplug_assert(ext != NULL);
+
+        char newlibpath[1024];
+        snprintf(
+            newlibpath,
+            sizeof(newlibpath),
+            "%.*s%d%s",
+            (int)(ext - hotreloadLibPath),
+            hotreloadLibPath,
+            g_hotreloadVersion,
+            ext);
+
+        // deep copy library file
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/open.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fstat.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/read.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/close.2.html
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/write.2.html#//apple_ref/doc/man/2/write
+
+        int fd_src = open(hotreloadLibPath, O_RDONLY);
+        cplug_assert(fd_src != -1);
+
+        struct stat info = {0};
+        int         ret  = fstat(fd_src, &info);
+        cplug_assert(ret != -1);
+
+        void* src_data = malloc(info.st_size);
+        cplug_assert(src_data != NULL);
+
+        ret = read(fd_src, src_data, info.st_size);
+        cplug_assert(ret == info.st_size);
+        ret = close(fd_src);
+        cplug_assert(ret != -1);
+
+        int fd_dst = open(newlibpath, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+        cplug_assert(fd_dst != -1);
+        ret = write(fd_dst, src_data, info.st_size);
+        cplug_assert(ret == info.st_size);
+        ret = close(fd_dst);
+        cplug_assert(ret != -1);
+
+        // Load library from new path
+        cplug_assert(g_plugin.library == NULL);
+        g_plugin.library = dlopen(newlibpath, RTLD_NOW);
+        cplug_assert(g_plugin.library != NULL);
+    }
 #define CPLUG_DLSYM(name) dlsym(g_plugin.library, #name)
 #else
 #define CPLUG_DLSYM(func) func
@@ -1247,7 +1394,12 @@ void STAND_filesystemEventCallback(
             {
                 STAND_openLibraryWithSymbols();
                 g_plugin.libraryLoad();
-                g_plugin.userPlugin = g_plugin.createPlugin();
+                g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
+                g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
+                g_plugin.hostContext.rescan         = STAND_rescan;
+                g_plugin.hostContext.getHostName    = STAND_getHostName;
+                g_plugin.hostContext.requestResize  = STAND_requestResize;
+                g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
                 cplug_assert(g_plugin.userPlugin != NULL);
                 g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
 

@@ -9,26 +9,52 @@
 #define my_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
 #endif
 
-// Apparently denormals aren't a problem on ARM & M1?
-// https://en.wikipedia.org/wiki/Subnormal_number
-// https://www.kvraudio.com/forum/viewtopic.php?t=575799
-#if __arm64__
-#define DISABLE_DENORMALS
-#define ENABLE_DENORMALS
-#elif defined(_WIN32)
+#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
+// https://softwareengineering.stackexchange.com/a/337251
 #include <immintrin.h>
-#define DISABLE_DENORMALS _mm_setcsr(_mm_getcsr() & ~0x8040);
-#define ENABLE_DENORMALS _mm_setcsr(_mm_getcsr() | 0x8040);
+#define DISABLE_DENORMALS                                                                                              \
+    unsigned int oldMXCSR = _mm_getcsr();       /*read the old MXCSR setting  */                                       \
+    unsigned int newMXCSR = oldMXCSR |= 0x8040; /* set DAZ and FZ bits        */                                       \
+    _mm_setcsr(newMXCSR);                       /* write the new MXCSR setting to the MXCSR */
+#define RESTORE_DENORMALS _mm_setcsr(oldMXCSR);
 #else
 #include <fenv.h>
+#if defined(__x86_64__)
+#define DISABLE_DENORMS_ENV &_FE_DFL_DISABLE_SSE_DENORMS_ENV
+#elif defined(__arm64__)
+#define DISABLE_DENORMS_ENV &_FE_DFL_DISABLE_DENORMS_ENV
+#endif // x84, ARM64
+
 #define DISABLE_DENORMALS                                                                                              \
     fenv_t _fenv;                                                                                                      \
     fegetenv(&_fenv);                                                                                                  \
-    fesetenv(FE_DFL_DISABLE_SSE_DENORMS_ENV);
-#define ENABLE_DENORMALS fesetenv(&_fenv);
+    fesetenv(DISABLE_DENORMS_ENV);
+#define RESTORE_DENORMALS fesetenv(&_fenv);
 #endif
 
-static_assert((int)CPLUG_NUM_PARAMS == kParameterCount, "Must be equal");
+#define ARRLEN(a)              (sizeof(a) / sizeof((a)[0]))
+#define CPLUG_EVENT_QUEUE_MASK (CPLUG_EVENT_QUEUE_SIZE - 1)
+
+static const uint32_t PARAM_IDS[] = {
+    'pf32',
+    'pi32',
+    'bool',
+    'utf8',
+};
+enum
+{
+    NUM_PARAMS = ARRLEN(PARAM_IDS)
+};
+
+// returns 'CPLUG_NUM_PARAMS' on failure
+uint32_t get_param_index(void* ptr, uint32_t paramId)
+{
+    uint32_t i = 0;
+    for (; i < ARRLEN(PARAM_IDS); i++)
+        if (paramId == PARAM_IDS[i])
+            break;
+    return i;
+}
 
 typedef struct ParamInfo
 {
@@ -40,12 +66,14 @@ typedef struct ParamInfo
 
 typedef struct MyPlugin
 {
-    ParamInfo paramInfo[kParameterCount];
+    CplugHostContext* hostContext;
+
+    ParamInfo paramInfo[NUM_PARAMS];
 
     float    sampleRate;
     uint32_t maxBufferSize;
 
-    float paramValuesAudio[kParameterCount];
+    float paramValuesAudio[NUM_PARAMS];
 
     float oscPhase; // 0-1
     int   midiNote; // -1 == not playing, 0-127+ playing
@@ -53,7 +81,7 @@ typedef struct MyPlugin
 
     // GUI zone
     void* gui;
-    float paramValuesMain[kParameterCount];
+    float paramValuesMain[NUM_PARAMS];
 
     // Single reader writer queue. Pretty sure atomics aren't required, but here anyway
     cplug_atomic_i32 mainToAudioHead;
@@ -67,33 +95,43 @@ typedef struct MyPlugin
 
 void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramIdx, double value);
 
-void cplug_libraryLoad(){};
-void cplug_libraryUnload(){};
+void cplug_libraryLoad() {};
+void cplug_libraryUnload() {};
 
-void* cplug_createPlugin()
+void* cplug_createPlugin(CplugHostContext* ctx)
 {
-    MyPlugin* plugin = (MyPlugin*)malloc(sizeof(MyPlugin));
-    memset(plugin, 0, sizeof(*plugin));
+    MyPlugin* plugin    = (MyPlugin*)calloc(1, sizeof(MyPlugin));
+    plugin->hostContext = ctx;
 
+    uint32_t idx;
     // Init params
-    plugin->paramInfo[kParameterFloat].flags        = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE;
-    plugin->paramInfo[kParameterFloat].max          = 100.0f;
-    plugin->paramInfo[kParameterFloat].defaultValue = 50.0f;
+    // 'pf32'
+    idx                                 = get_param_index(plugin, 'pf32');
+    plugin->paramInfo[idx].flags        = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE;
+    plugin->paramInfo[idx].max          = 100.0f;
+    plugin->paramInfo[idx].defaultValue = 50.0f;
 
-    plugin->paramValuesAudio[kParameterInt] = 2.0f;
-    plugin->paramInfo[kParameterInt].flags  = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE | CPLUG_FLAG_PARAMETER_IS_INTEGER;
-    plugin->paramInfo[kParameterInt].min    = 2.0f;
-    plugin->paramInfo[kParameterInt].max    = 5.0f;
-    plugin->paramInfo[kParameterInt].defaultValue = 2.0f;
+    // 'pi32'
+    idx                                 = get_param_index(plugin, 'pi32');
+    plugin->paramValuesAudio[idx]       = 2.0f;
+    plugin->paramInfo[idx].flags        = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE | CPLUG_FLAG_PARAMETER_IS_INTEGER;
+    plugin->paramInfo[idx].min          = 2.0f;
+    plugin->paramInfo[idx].max          = 5.0f;
+    plugin->paramInfo[idx].defaultValue = 2.0f;
 
-    plugin->paramInfo[kParameterBool].flags = CPLUG_FLAG_PARAMETER_IS_BOOL;
-    plugin->paramInfo[kParameterBool].max   = 1.0f;
+    // 'bool'
+    idx                           = get_param_index(plugin, 'bool');
+    plugin->paramValuesAudio[idx] = 0.0f;
+    plugin->paramInfo[idx].flags  = CPLUG_FLAG_PARAMETER_IS_BOOL;
+    plugin->paramInfo[idx].max    = 1.0f;
 
-    plugin->paramValuesAudio[kParameterUTF8]       = 0.0f;
-    plugin->paramInfo[kParameterUTF8].flags        = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE;
-    plugin->paramInfo[kParameterUTF8].min          = 0.0f;
-    plugin->paramInfo[kParameterUTF8].max          = 1.0f;
-    plugin->paramInfo[kParameterUTF8].defaultValue = 0.0f;
+    // 'utf8'
+    idx                                 = get_param_index(plugin, 'utf8');
+    plugin->paramValuesAudio[idx]       = 0.0f;
+    plugin->paramInfo[idx].flags        = CPLUG_FLAG_PARAMETER_IS_AUTOMATABLE;
+    plugin->paramInfo[idx].min          = 0.0f;
+    plugin->paramInfo[idx].max          = 1.0f;
+    plugin->paramInfo[idx].defaultValue = 0.0f;
 
     plugin->midiNote = -1;
 
@@ -108,38 +146,25 @@ void cplug_destroyPlugin(void* ptr)
 /* --------------------------------------------------------------------------------------------------------
  * Busses */
 
-uint32_t cplug_getInputBusChannelCount(void* ptr, uint32_t idx)
-{
-    if (idx == 0)
-        return 2; // 1 bus, stereo
-    return 0;
-}
+uint32_t cplug_getNumInputBusses(void* ptr) { return 1; }
+uint32_t cplug_getNumOutputBusses(void* ptr) { return 1; }
+uint32_t cplug_getInputBusChannelCount(void* ptr, uint32_t idx) { return 2; }
+uint32_t cplug_getOutputBusChannelCount(void* ptr, uint32_t idx) { return 2; }
 
-uint32_t cplug_getOutputBusChannelCount(void* ptr, uint32_t idx)
-{
-    if (idx == 0)
-        return 2; // 1 bus, stereo
-    return 0;
-}
+void cplug_getInputBusName(void* ptr, uint32_t idx, char* buf, size_t buflen) { snprintf(buf, buflen, "Stereo Input"); }
 
-const char* cplug_getInputBusName(void* ptr, uint32_t idx)
+void cplug_getOutputBusName(void* ptr, uint32_t idx, char* buf, size_t buflen)
 {
-    if (idx == 0)
-        return "Stereo Input";
-    return "";
-}
-
-const char* cplug_getOutputBusName(void* ptr, uint32_t idx)
-{
-    if (idx == 0)
-        return "Stereo Output";
-    return "";
+    snprintf(buf, buflen, "Stereo Output");
 }
 
 /* --------------------------------------------------------------------------------------------------------
  * Parameters */
 
-const char* cplug_getParameterName(void* ptr, uint32_t index)
+uint32_t cplug_getNumParameters(void* ptr) { return ARRLEN(PARAM_IDS); }
+uint32_t cplug_getParameterID(void* ptr, uint32_t paramIndex) { return PARAM_IDS[paramIndex]; }
+
+void cplug_getParameterName(void* ptr, uint32_t paramId, char* buf, size_t buflen)
 {
     static const char* param_names[] = {
         "Parameter Float",
@@ -152,28 +177,34 @@ const char* cplug_getParameterName(void* ptr, uint32_t index)
         // שלום = 3 בייטים
         // 🐨       = 4 bytes
         "UTF8 Приве́т नमस्ते שָׁלוֹם 🐨"};
-    static_assert((sizeof(param_names) / sizeof(param_names[0])) == kParameterCount, "Invalid length");
-    return param_names[index];
+    static_assert(ARRLEN(param_names) == ARRLEN(PARAM_IDS), "Invalid length");
+
+    uint32_t index = get_param_index(ptr, paramId);
+    snprintf(buf, buflen, "%s", param_names[index]);
 }
 
-double cplug_getParameterValue(void* ptr, uint32_t index)
+double cplug_getParameterValue(void* ptr, uint32_t paramId)
 {
     const MyPlugin* plugin = (MyPlugin*)ptr;
-    double          val    = plugin->paramValuesAudio[index];
+    uint32_t        index  = get_param_index(ptr, paramId);
+
+    double val = plugin->paramValuesAudio[index];
     if (plugin->paramInfo[index].flags & CPLUG_FLAG_PARAMETER_IS_INTEGER)
         val = round(val);
     return val;
 }
 
-double cplug_getDefaultParameterValue(void* ptr, uint32_t index)
+double cplug_getDefaultParameterValue(void* ptr, uint32_t paramId)
 {
     MyPlugin* plugin = (MyPlugin*)ptr;
+    uint32_t  index  = get_param_index(ptr, paramId);
     return plugin->paramInfo[index].defaultValue;
 }
 
-void cplug_setParameterValue(void* ptr, uint32_t index, double value)
+void cplug_setParameterValue(void* ptr, uint32_t paramId, double value)
 {
     MyPlugin* plugin = (MyPlugin*)ptr;
+    uint32_t  index  = get_param_index(ptr, paramId);
 
     ParamInfo* info = &plugin->paramInfo[index];
     if (value < info->min)
@@ -188,7 +219,7 @@ void cplug_setParameterValue(void* ptr, uint32_t index, double value)
         int queueWritePos = cplug_atomic_load_i32(&plugin->audioToMainHead) & CPLUG_EVENT_QUEUE_MASK;
 
         plugin->audioToMainQueue[queueWritePos].parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
-        plugin->audioToMainQueue[queueWritePos].parameter.idx   = index;
+        plugin->audioToMainQueue[queueWritePos].parameter.id    = paramId;
         plugin->audioToMainQueue[queueWritePos].parameter.value = value;
 
         cplug_atomic_fetch_add_i32(&plugin->audioToMainHead, 1);
@@ -196,10 +227,12 @@ void cplug_setParameterValue(void* ptr, uint32_t index, double value)
     }
 }
 
-double cplug_denormaliseParameterValue(void* ptr, uint32_t index, double normalised)
+double cplug_denormaliseParameterValue(void* ptr, uint32_t paramId, double normalised)
 {
-    const MyPlugin*  plugin = (MyPlugin*)ptr;
-    const ParamInfo* info   = &plugin->paramInfo[index];
+    const MyPlugin* plugin = (MyPlugin*)ptr;
+    uint32_t        index  = get_param_index(ptr, paramId);
+
+    const ParamInfo* info = &plugin->paramInfo[index];
 
     double denormalised = normalised * (info->max - info->min) + info->min;
 
@@ -210,10 +243,12 @@ double cplug_denormaliseParameterValue(void* ptr, uint32_t index, double normali
     return denormalised;
 }
 
-double cplug_normaliseParameterValue(void* ptr, uint32_t index, double denormalised)
+double cplug_normaliseParameterValue(void* ptr, uint32_t paramId, double denormalised)
 {
-    const MyPlugin*  plugin = (MyPlugin*)ptr;
-    const ParamInfo* info   = &plugin->paramInfo[index];
+    const MyPlugin* plugin = (MyPlugin*)ptr;
+    uint32_t        index  = get_param_index(ptr, paramId);
+
+    const ParamInfo* info = &plugin->paramInfo[index];
 
     // If this fails, your param range is likely not initialised, causing a division by zero and producing infinity
     double normalised = (denormalised - info->min) / (info->max - info->min);
@@ -226,11 +261,13 @@ double cplug_normaliseParameterValue(void* ptr, uint32_t index, double denormali
     return normalised;
 }
 
-double cplug_parameterStringToValue(void* ptr, uint32_t index, const char* str)
+double cplug_parameterStringToValue(void* ptr, uint32_t paramId, const char* str)
 {
     double          value;
     const MyPlugin* plugin = (MyPlugin*)ptr;
-    const unsigned  flags  = plugin->paramInfo[index].flags;
+    uint32_t        index  = get_param_index(ptr, paramId);
+
+    const unsigned flags = plugin->paramInfo[index].flags;
 
     if (flags & CPLUG_FLAG_PARAMETER_IS_INTEGER)
         value = (double)atoi(str);
@@ -240,15 +277,18 @@ double cplug_parameterStringToValue(void* ptr, uint32_t index, const char* str)
     return value;
 }
 
-void cplug_parameterValueToString(void* ptr, uint32_t index, char* buf, size_t bufsize, double value)
+void cplug_parameterValueToString(void* ptr, uint32_t paramId, char* buf, size_t bufsize, double value)
 {
     const MyPlugin* plugin = (MyPlugin*)ptr;
-    const uint32_t  flags  = plugin->paramInfo[index].flags;
+
+    uint32_t index = get_param_index(ptr, paramId);
+
+    const uint32_t flags = plugin->paramInfo[index].flags;
 
     if (flags & CPLUG_FLAG_PARAMETER_IS_BOOL)
         value = value >= 0.5 ? 1 : 0;
 
-    if (index == kParameterUTF8)
+    if (paramId == 'utf8')
         snprintf(buf, bufsize, "%.2f Приве́т नमस्ते שָׁלוֹם 🐨", value);
     else if (flags & (CPLUG_FLAG_PARAMETER_IS_INTEGER | CPLUG_FLAG_PARAMETER_IS_BOOL))
         snprintf(buf, bufsize, "%d", (int)value);
@@ -256,16 +296,19 @@ void cplug_parameterValueToString(void* ptr, uint32_t index, char* buf, size_t b
         snprintf(buf, bufsize, "%.2f", value);
 }
 
-void cplug_getParameterRange(void* ptr, uint32_t index, double* min, double* max)
+void cplug_getParameterRange(void* ptr, uint32_t paramId, double* min, double* max)
 {
     const MyPlugin* plugin = (MyPlugin*)ptr;
-    *min                   = plugin->paramInfo[index].min;
-    *max                   = plugin->paramInfo[index].max;
+    uint32_t        index  = get_param_index(ptr, paramId);
+
+    *min = plugin->paramInfo[index].min;
+    *max = plugin->paramInfo[index].max;
 }
 
-uint32_t cplug_getParameterFlags(void* ptr, uint32_t index)
+uint32_t cplug_getParameterFlags(void* ptr, uint32_t paramId)
 {
     const MyPlugin* plugin = (MyPlugin*)ptr;
+    uint32_t        index  = get_param_index(ptr, paramId);
     return plugin->paramInfo[index].flags;
 }
 
@@ -297,7 +340,10 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
         CplugEvent* event = &plugin->mainToAudioQueue[tail];
 
         if (event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE)
-            plugin->paramValuesAudio[event->parameter.idx] = event->parameter.value;
+        {
+            uint32_t idx                  = get_param_index(ptr, event->parameter.id);
+            plugin->paramValuesAudio[idx] = (float)event->parameter.value;
+        }
 
         ctx->enqueueEvent(ctx, event, 0);
 
@@ -308,14 +354,18 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
 
     // "Sample accurate" process loop
     CplugEvent event;
-    int        frame = 0;
+    uint32_t   frame = 0;
     while (ctx->dequeueEvent(ctx, &event, frame))
     {
         switch (event.type)
         {
-        case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
-            cplug_setParameterValue(plugin, event.parameter.idx, event.parameter.value);
+        case CPLUG_EVENT_UNHANDLED_EVENT:
             break;
+        case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
+        {
+            cplug_setParameterValue(plugin, event.parameter.id, event.parameter.value);
+            break;
+        }
         case CPLUG_EVENT_MIDI:
         {
             static const uint8_t MIDI_NOTE_OFF         = 0x80;
@@ -336,7 +386,7 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
             }
             if ((event.midi.status & 0xf0) == MIDI_NOTE_PITCH_WHEEL)
             {
-                int pb = (int)event.midi.data1 | ((int)event.midi.data2 << 7);
+                // int pb = (int)event.midi.data1 | ((int)event.midi.data2 << 7);
             }
             break;
         }
@@ -368,9 +418,9 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
 
                 for (; frame < event.processAudio.endFrame; frame++)
                 {
-                    static const float pi = 3.141592653589793f;
+                    static const float mypi = 3.141592653589793f;
 
-                    float sample = vol * sinf(2 * pi * phase);
+                    float sample = vol * sinf(2 * mypi * phase);
 
                     for (int ch = 0; ch < 2; ch++)
                         output[ch][frame] = sample;
@@ -387,60 +437,69 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
             break;
         }
     }
-    ENABLE_DENORMALS
+    RESTORE_DENORMALS
 }
 
 /* --------------------------------------------------------------------------------------------------------
  * State */
 
 // In these methods we will use a very basic binary preset format: a flat array of param values
+struct ParamState
+{
+    uint32_t paramId;
+    float    value;
+};
 
 void cplug_saveState(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc)
 {
     MyPlugin* plugin = (MyPlugin*)userPlugin;
-    writeProc(stateCtx, plugin->paramValuesAudio, sizeof(plugin->paramValuesAudio));
+
+    struct ParamState state[NUM_PARAMS];
+    for (int i = 0; i < NUM_PARAMS; i++)
+    {
+        state[i].paramId = PARAM_IDS[i];
+        state[i].value   = plugin->paramValuesAudio[i];
+    }
+    writeProc(stateCtx, state, sizeof(state));
 }
 
 void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_readProc readProc)
 {
     MyPlugin* plugin = (MyPlugin*)userPlugin;
 
-    float vals[kParameterCount + 1];
+    struct ParamState state[NUM_PARAMS * 2];
 
-    int64_t bytesRead = readProc(stateCtx, vals, sizeof(vals));
+    // If your plugin has added/removed parameters, requesting for more data then you actually expect may be a good idea
+    int64_t bytesRead = readProc(stateCtx, state, sizeof(state));
 
-    if (bytesRead == sizeof(plugin->paramValuesAudio))
+    for (int i = 0; i < bytesRead / sizeof(state[0]); i++)
     {
-        // Send update to queue so we notify host
-        for (int i = 0; i < kParameterCount; i++)
+        uint32_t paramIdx = get_param_index(userPlugin, state[i].paramId);
+        if (paramIdx < NUM_PARAMS)
         {
-            plugin->paramValuesAudio[i] = vals[i];
-            plugin->paramValuesMain[i]  = vals[i];
-            sendParamEventFromMain(plugin, CPLUG_EVENT_PARAM_CHANGE_UPDATE, i, vals[i]);
+            plugin->paramValuesAudio[paramIdx] = state[i].value;
+            plugin->paramValuesMain[paramIdx]  = state[i].value;
+            sendParamEventFromMain(plugin, CPLUG_EVENT_PARAM_CHANGE_UPDATE, state[i].paramId, state[i].value);
         }
     }
 }
 
-void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramIdx, double value)
+void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramId, double value)
 {
     int         mainToAudioHead = cplug_atomic_load_i32(&plugin->mainToAudioHead) & CPLUG_EVENT_QUEUE_MASK;
     CplugEvent* paramEvent      = &plugin->mainToAudioQueue[mainToAudioHead];
     paramEvent->parameter.type  = type;
-    paramEvent->parameter.idx   = paramIdx;
+    paramEvent->parameter.id    = paramId;
     paramEvent->parameter.value = value;
 
     cplug_atomic_fetch_add_i32(&plugin->mainToAudioHead, 1);
     cplug_atomic_fetch_and_i32(&plugin->mainToAudioHead, CPLUG_EVENT_QUEUE_MASK);
-
-    // request_flush from CLAP host? Doesn't seem to be required
 }
 
-#ifdef CPLUG_WANT_GUI
-
-#define GUI_DEFAULT_WIDTH 640
+#define GUI_DEFAULT_WIDTH  640
 #define GUI_DEFAULT_HEIGHT 360
-#define GUI_RATIO_X 16
-#define GUI_RATIO_Y 9
+#define GUI_RATIO_X        16
+#define GUI_RATIO_Y        9
 
 typedef struct MyGUI
 {
@@ -455,7 +514,7 @@ typedef struct MyGUI
     uint32_t  height;
 
     bool     mouseDragging;
-    uint32_t dragParamIdx;
+    uint32_t dragParamId;
     int      dragStartX;
     int      dragStartY;
     double   dragStartParamNormalised;
@@ -478,13 +537,16 @@ static void drawGUI(MyGUI* gui)
 {
     my_assert(gui->width > 0);
     my_assert(gui->height > 0);
-    drawRect(gui, 0, gui->width, 0, gui->height, 0xC0C0C0, 0xC0C0C0);
-    drawRect(gui, 10, 40, 10, 40, 0x000000, 0xC0C0C0);
+    const uint32_t bg_col = 0xC0C0C0;
+    // const uint32_t bg_col    = 0xCF00C0;
+    const uint32_t param_col = 0x0C0C0C;
+    drawRect(gui, 0, gui->width, 0, gui->height, bg_col, bg_col);
+    drawRect(gui, 10, 40, 10, 40, param_col, bg_col);
 
-    double paramFloat = gui->plugin->paramValuesMain[kParameterFloat];
-    paramFloat        = cplug_normaliseParameterValue(gui->plugin, kParameterFloat, paramFloat);
+    double v = cplug_getParameterValue(gui->plugin, 'pf32');
+    v        = cplug_normaliseParameterValue(gui->plugin, 'pf32', v);
 
-    drawRect(gui, 10, 40, 10 + 30 * (1.0 - paramFloat), 40, 0x000000, 0x000000);
+    drawRect(gui, 10, 40, 10 + (uint32_t)(30.0 * (1.0 - v)), 40, param_col, param_col);
 }
 
 static void handleMouseDown(MyGUI* gui, int x, int y)
@@ -492,15 +554,15 @@ static void handleMouseDown(MyGUI* gui, int x, int y)
     if (x >= 10 && x < 40 && y >= 10 && y < 40)
     {
         gui->mouseDragging = true;
-        gui->dragParamIdx  = kParameterFloat;
+        gui->dragParamId   = 'pf32';
         gui->dragStartX    = x;
         gui->dragStartY    = y;
 
-        double v                        = gui->plugin->paramValuesMain[kParameterFloat];
-        gui->dragStartParamNormalised   = cplug_normaliseParameterValue(gui->plugin, kParameterFloat, v);
+        double v                        = cplug_getParameterValue(gui->plugin, 'pf32');
+        gui->dragStartParamNormalised   = cplug_normaliseParameterValue(gui->plugin, 'pf32', v);
         gui->dragCurrentParamNormalised = gui->dragStartParamNormalised;
 
-        sendParamEventFromMain(gui->plugin, CPLUG_EVENT_PARAM_CHANGE_BEGIN, gui->dragParamIdx, 0);
+        sendParamEventFromMain(gui->plugin, CPLUG_EVENT_PARAM_CHANGE_BEGIN, gui->dragParamId, 0);
     }
 }
 
@@ -509,7 +571,7 @@ static void handleMouseUp(MyGUI* gui)
     if (gui->mouseDragging)
     {
         gui->mouseDragging = false;
-        sendParamEventFromMain(gui->plugin, CPLUG_EVENT_PARAM_CHANGE_END, gui->dragParamIdx, 0);
+        sendParamEventFromMain(gui->plugin, CPLUG_EVENT_PARAM_CHANGE_END, gui->dragParamId, 0);
     }
 }
 
@@ -524,9 +586,10 @@ static void handleMouseMove(MyGUI* gui, int x, int y)
             nextValNormalised = 1;
         gui->dragCurrentParamNormalised = nextValNormalised;
 
-        double nextValDenormalised = cplug_denormaliseParameterValue(gui->plugin, gui->dragParamIdx, nextValNormalised);
-        gui->plugin->paramValuesMain[gui->dragParamIdx] = nextValDenormalised;
-        sendParamEventFromMain(gui->plugin, CPLUG_EVENT_PARAM_CHANGE_UPDATE, gui->dragParamIdx, nextValDenormalised);
+        double nextValDenormalised = cplug_denormaliseParameterValue(gui->plugin, gui->dragParamId, nextValNormalised);
+        uint32_t paramIdx          = get_param_index(gui->plugin, gui->dragParamId);
+        gui->plugin->paramValuesMain[paramIdx] = (float)nextValDenormalised;
+        sendParamEventFromMain(gui->plugin, CPLUG_EVENT_PARAM_CHANGE_UPDATE, gui->dragParamId, nextValDenormalised);
     }
 }
 
@@ -547,8 +610,11 @@ bool tickGUI(MyGUI* gui)
         switch (event->type)
         {
         case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
-            plugin->paramValuesMain[event->parameter.idx] = event->parameter.value;
+        {
+            uint32_t idx                 = get_param_index(gui->plugin, event->parameter.id);
+            plugin->paramValuesMain[idx] = (float)event->parameter.value;
             break;
+        }
         default:
             break;
         }
@@ -580,8 +646,13 @@ LRESULT CALLBACK MyWinProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         drawGUI(gui);
         PAINTSTRUCT paint;
-        HDC         dc   = BeginPaint(hwnd, &paint);
-        BITMAPINFO  info = {{sizeof(BITMAPINFOHEADER), (LONG)gui->width, (LONG)-gui->height, 1, 32, BI_RGB}};
+        HDC         dc = BeginPaint(hwnd, &paint);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader
+        // By default, Windows reads bitmaps scan lines bottom up. According to the docs, changing the sign (binary) of
+        // the height will cause the bitmap to be read to down.
+        BITMAPINFO info = {{sizeof(BITMAPINFOHEADER), (LONG)gui->width, -((LONG)gui->height), 1, 32, BI_RGB}};
+
         StretchDIBits(
             dc,
             0,
@@ -663,7 +734,6 @@ void* cplug_createGUI(void* userPlugin)
         NULL,
         NULL,
         NULL);
-    DWORD err = GetLastError();
     my_assert(gui->window != NULL);
 
     SetWindowLongPtrA((HWND)gui->window, 0, (LONG_PTR)gui);
@@ -692,18 +762,15 @@ void cplug_setParent(void* userGUI, void* newParent)
     if (oldParent)
     {
         KillTimer((HWND)gui->window, MY_TIMER_ID);
-
         SetParent((HWND)gui->window, NULL);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_CHILD);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_POPUP);
     }
 
     if (newParent)
     {
-        SetParent((HWND)gui->window, (HWND)newParent);
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent
+        HWND prev = SetParent((HWND)gui->window, (HWND)newParent);
+        my_assert(prev != 0);
         memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_CLEAR, WS_POPUP);
-        DefWindowProcA((HWND)gui->window, WM_UPDATEUISTATE, UIS_SET, WS_CHILD);
 
         SetTimer((HWND)gui->window, MY_TIMER_ID, 10, NULL);
     }
@@ -732,14 +799,9 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     gui->width  = width;
     gui->height = height;
     gui->img    = (uint32_t*)realloc(gui->img, width * height * sizeof(*gui->img));
-    return SetWindowPos(
-        (HWND)gui->window,
-        HWND_TOP,
-        0,
-        0,
-        width,
-        height,
-        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOMOVE);
+
+    const UINT uFlags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOMOVE;
+    return SetWindowPos((HWND)gui->window, HWND_TOP, 0, 0, width, height, uFlags);
 }
 
 #endif // _WIN32
@@ -762,21 +824,3 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
     *width        = num * GUI_RATIO_X;
     *height       = num * GUI_RATIO_Y;
 }
-
-bool cplug_getResizeHints(
-    void*     userGUI,
-    bool*     resizableX,
-    bool*     resizableY,
-    bool*     preserveAspectRatio,
-    uint32_t* aspectRatioX,
-    uint32_t* aspectRatioY)
-{
-    *resizableX          = true;
-    *resizableY          = true;
-    *preserveAspectRatio = true;
-    *aspectRatioX        = GUI_RATIO_X;
-    *aspectRatioY        = GUI_RATIO_Y;
-    return true;
-}
-
-#endif // CPLUG_WANT_GUI

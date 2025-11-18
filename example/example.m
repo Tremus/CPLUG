@@ -3,6 +3,8 @@
 #if CPLUG_WANT_GUI
 #import <Cocoa/Cocoa.h>
 
+void timer_cb(CFRunLoopTimerRef timer, void* info);
+
 @interface MyGUIWrapper : NSView
 {
 @public
@@ -29,6 +31,27 @@
     [super viewDidMoveToWindow];
 }
 #endif // CPLUG_GUI_RESIZABLE
+
+- (void)viewDidMoveToSuperview
+{
+    NSView* parent = [self superview];
+    if (parent)
+    {
+        CFRunLoopTimerContext context;
+        memset(&context, 0, sizeof(context));
+        context.info    = self;
+        double interval = 0.016; // 16ms
+
+        timerRef =
+            CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + interval, interval, 0, 0, timer_cb, &context);
+        my_assert(timerRef != NULL);
+
+        CFRunLoopAddTimer(CFRunLoopGetCurrent(), timerRef, kCFRunLoopCommonModes);
+
+        [self setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    }
+    [super viewDidMoveToSuperview];
+}
 
 - (void)removeFromSuperview
 {
@@ -147,16 +170,6 @@ void* cplug_createGUI(void* userPlugin)
 
     memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
 
-    CFRunLoopTimerContext context = {};
-    context.info                  = wrapper;
-    double interval               = 0.01; // 10ms
-
-    wrapper->timerRef =
-        CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + interval, interval, 0, 0, timer_cb, &context);
-    assert(wrapper->timerRef != NULL);
-
-    CFRunLoopAddTimer(CFRunLoopGetCurrent(), wrapper->timerRef, kCFRunLoopCommonModes);
-
     return wrapper;
 }
 
@@ -183,8 +196,9 @@ void cplug_setVisible(void* userGUI, bool visible) { [(MyGUIWrapper*)userGUI set
 void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
 {
     MyGUIWrapper* wrapper = (MyGUIWrapper*)userGUI;
-    *width                = (uint32_t)wrapper.frame.size.width;
-    *height               = (uint32_t)wrapper.frame.size.height;
+    CGSize        size    = wrapper.frame.size;
+    *width                = (uint32_t)size.width;
+    *height               = (uint32_t)size.height;
 }
 
 bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)

@@ -8,18 +8,25 @@
 
 typedef struct CLAPPlugin
 {
-    clap_plugin_t clapPlugin;
-    void*         userPlugin;
+    clap_plugin_t    clapPlugin;
+    void*            userPlugin;
+    CplugHostContext hostContext;
+
+    const clap_host_t*             host;
+    const clap_host_audio_ports_t* host_audio_ports;
+    const clap_host_params_t*      host_params;
+    const clap_host_latency_t*     host_latency;
+    const clap_host_tail_t*        host_tail;
+    const clap_host_state_t*       host_state;
+
 #if CPLUG_WANT_GUI
+    const clap_host_gui_t* host_gui;
+
     void* userGUI;
 #endif
-    const clap_host_t*         host;
-    const clap_host_latency_t* host_latency;
-    const clap_host_state_t*   host_state;
-    const clap_host_params_t*  host_params;
+
 } CLAPPlugin;
 
-#if CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES > 0
 /////////////////////////////
 // clap_plugin_audio_ports //
 /////////////////////////////
@@ -27,7 +34,10 @@ typedef struct CLAPPlugin
 static uint32_t CLAPExtAudioPorts_count(const clap_plugin_t* plugin, bool is_input)
 {
     cplug_log("CLAPExtAudioPorts_count => %u", (unsigned)is_input);
-    return is_input ? CPLUG_NUM_INPUT_BUSSES : CPLUG_NUM_OUTPUT_BUSSES;
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    if (is_input)
+        return cplug_getNumInputBusses(clap->userPlugin);
+    return cplug_getNumOutputBusses(clap->userPlugin);
 }
 
 static bool
@@ -36,10 +46,12 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
     cplug_log("CLAPExtAudioPorts_get => %u %p", (unsigned)is_input, info);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    if (is_input && index < CPLUG_NUM_INPUT_BUSSES)
+    uint32_t numInputs  = cplug_getNumInputBusses(clap->userPlugin);
+    uint32_t numOutputs = cplug_getNumOutputBusses(clap->userPlugin);
+    if (is_input && index < numInputs)
     {
         info->id = index;
-        snprintf(info->name, sizeof(info->name), "%s", cplug_getInputBusName(clap->userPlugin, index));
+        cplug_getInputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getInputBusChannelCount(clap->userPlugin, index);
         // Maybe we will support 64bit one day (probably not)
         info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE;
@@ -53,17 +65,17 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         else
             info->port_type = NULL;
 
-        if (index < CPLUG_NUM_OUTPUT_BUSSES)
-            info->in_place_pair = CPLUG_NUM_INPUT_BUSSES + index;
+        if (index < numOutputs)
+            info->in_place_pair = numInputs + index;
         else
             info->in_place_pair = CLAP_INVALID_ID;
         return true;
     }
 
-    if (! is_input && index < CPLUG_NUM_OUTPUT_BUSSES)
+    if (!is_input && index < numOutputs)
     {
-        info->id = CPLUG_NUM_INPUT_BUSSES + index;
-        snprintf(info->name, sizeof(info->name), "%s", cplug_getOutputBusName(clap->userPlugin, index));
+        info->id = numInputs + index;
+        cplug_getOutputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getOutputBusChannelCount(clap->userPlugin, index);
         // Maybe we will support 64bit one day (probably not)
         info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE;
@@ -77,7 +89,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         else
             info->port_type = NULL;
 
-        if (index < CPLUG_NUM_INPUT_BUSSES)
+        if (index < numInputs)
             info->in_place_pair = index;
         else
             info->in_place_pair = CLAP_INVALID_ID;
@@ -91,7 +103,6 @@ static const clap_plugin_audio_ports_t s_clap_audio_ports = {
     .count = CLAPExtAudioPorts_count,
     .get   = CLAPExtAudioPorts_get,
 };
-#endif // CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES
 
 #if CPLUG_WANT_MIDI_INPUT
 ////////////////////////////
@@ -111,10 +122,11 @@ CLAPExtNotePorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input,
     CPLUG_LOG_ASSERT_RETURN(index == 0, false);
 
     info->id = 0;
-    snprintf(info->name, sizeof(info->name), "%s", "MIDI Input");
     // NOTE: Bitwig 5.0 doesn't support the plain MIDI dialect, only CLAP. Bitwig 5.1 supports them all
-    info->supported_dialects = CLAP_NOTE_DIALECT_MIDI;
+    // FL Studio also doesn't support the plain MIDI dialect, but presumably will in future
+    info->supported_dialects = CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_CLAP;
     info->preferred_dialect  = CLAP_NOTE_DIALECT_MIDI;
+    snprintf(info->name, sizeof(info->name), "%s", "MIDI Input");
     return true;
 }
 
@@ -177,7 +189,6 @@ static const clap_plugin_state_t s_clap_state = {
     .load = CLAPExtState_load,
 };
 
-#if CPLUG_NUM_PARAMS
 /////////////////
 // clap_params //
 /////////////////
@@ -185,23 +196,25 @@ static const clap_plugin_state_t s_clap_state = {
 uint32_t CLAPExtParams_count(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtParams_count");
-    return CPLUG_NUM_PARAMS;
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    return cplug_getNumParameters(clap->userPlugin);
 }
 
 bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, clap_param_info_t* param_info)
 {
-    cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
-    CPLUG_LOG_ASSERT_RETURN(param_index < CPLUG_NUM_PARAMS, false);
-
+    // cplug_log("CLAPExtParams_get_info => %u %p", param_index, param_info);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    CPLUG_LOG_ASSERT_RETURN(param_index < cplug_getNumParameters(clap->userPlugin), false);
 
-    param_info->id = param_index;
-    snprintf(param_info->name, sizeof(param_info->name), "%s", cplug_getParameterName(clap->userPlugin, param_index));
+    const uint32_t param_id = cplug_getParameterID(clap->userPlugin, param_index);
+
+    param_info->id = param_id;
+    cplug_getParameterName(clap->userPlugin, param_id, param_info->name, sizeof(param_info->name));
     param_info->module[0]     = 0;
-    param_info->default_value = cplug_getDefaultParameterValue(clap->userPlugin, param_index);
-    cplug_getParameterRange(clap->userPlugin, param_index, &param_info->min_value, &param_info->max_value);
+    param_info->default_value = cplug_getDefaultParameterValue(clap->userPlugin, param_id);
+    cplug_getParameterRange(clap->userPlugin, param_id, &param_info->min_value, &param_info->max_value);
 
-    uint32_t flags    = cplug_getParameterFlags(clap->userPlugin, param_index);
+    uint32_t flags    = cplug_getParameterFlags(clap->userPlugin, param_id);
     param_info->flags = 0;
     if (flags & CPLUG_FLAG_PARAMETER_IS_READ_ONLY)
         param_info->flags |= CLAP_PARAM_IS_READONLY;
@@ -222,8 +235,7 @@ bool CLAPExtParams_get_info(const clap_plugin_t* plugin, uint32_t param_index, c
 
 bool CLAPExtParams_get_value(const clap_plugin_t* plugin, clap_id param_id, double* out_value)
 {
-    cplug_log("CLAPExtParams_get_value => %u %p", param_id, out_value);
-    CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
+    // cplug_log("CLAPExtParams_get_value => %u %p", param_id, out_value);
     *out_value = cplug_getParameterValue(((CLAPPlugin*)plugin->plugin_data)->userPlugin, param_id);
     return true;
 }
@@ -236,8 +248,6 @@ bool CLAPExtParams_value_to_text(
     uint32_t             out_buffer_capacity)
 {
     // cplug_log("CLAPExtParams_value_to_text => %u %f %p %u", param_id, value, out_buffer, out_buffer_capacity);
-    CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
-
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
     cplug_parameterValueToString(clap->userPlugin, param_id, out_buffer, out_buffer_capacity, value);
     return true;
@@ -249,8 +259,7 @@ bool CLAPExtParams_text_to_value(
     const char*          param_value_text,
     double*              out_value)
 {
-    cplug_log("CLAPExtParams_text_to_value => %u %p %p", param_id, param_value_text, out_value);
-    CPLUG_LOG_ASSERT_RETURN(param_id < CPLUG_NUM_PARAMS, false);
+    // cplug_log("CLAPExtParams_text_to_value => %u %p %p", param_id, param_value_text, out_value);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
     *out_value       = cplug_parameterStringToValue(clap->userPlugin, param_id, param_value_text);
     return true;
@@ -271,7 +280,6 @@ static const clap_plugin_params_t s_clap_params = {
     .text_to_value = CLAPExtParams_text_to_value,
     .flush         = CLAPExtParams_flush,
 };
-#endif // CPLUG_NUM_PARAMS
 
 #if CPLUG_WANT_GUI
 //////////////
@@ -289,7 +297,7 @@ static const clap_plugin_params_t s_clap_params = {
 bool CLAPExtGUI_is_api_supported(const clap_plugin_t* plugin, const char* api, bool is_floating)
 {
     cplug_log("CLAPExtGUI_is_api_supported => %s %u", api, (unsigned)is_floating);
-    return ! strcmp(api, CPLUG_CLAP_GUI_API) && ! is_floating;
+    return !strcmp(api, CPLUG_CLAP_GUI_API) && !is_floating;
 }
 
 bool CLAPExtGUI_get_preferred_api(const clap_plugin_t* plugin, const char** api, bool* is_floating)
@@ -314,11 +322,23 @@ bool CLAPExtGUI_create(const clap_plugin_t* plugin, const char* api, bool is_flo
 
 void CLAPExtGUI_destroy(const clap_plugin_t* plugin)
 {
-    cplug_log("CLAPExtGUI_destroy");
+    cplug_log("CLAPExtGUI_destroy %p", plugin);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
-    cplug_setParent(clap->userGUI, NULL);
-    cplug_destroyGUI(clap->userGUI);
-    clap->userGUI = NULL;
+    // NOTE: FL Studio v24.1.1 has been caught calling clap_plugin_gui::destroy() twice
+    // The functions below may immediately trigger an additional call to clap_plugin_gui::destroy(), so we need to be
+    // evasive with our pointers here.
+
+    // Reaper doesn't call ::hide() in their shutdown process
+    if (clap->userGUI != NULL)
+        cplug_setVisible(clap->userGUI, false);
+    if (clap->userGUI != NULL)
+        cplug_setParent(clap->userGUI, NULL);
+    if (clap->userGUI != NULL)
+    {
+        void* gui     = clap->userGUI;
+        clap->userGUI = NULL;
+        cplug_destroyGUI(gui);
+    }
 }
 
 static bool CLAPExtGUI_set_scale(const clap_plugin_t* plugin, double scale)
@@ -344,13 +364,7 @@ static bool CLAPExtGUI_can_resize(const clap_plugin_t* plugin)
 static bool CLAPExtGUI_get_resize_hints(const clap_plugin_t* plugin, clap_gui_resize_hints_t* hints)
 {
     cplug_log("CLAPExtGUI_resize_hints => %p", hints);
-    return cplug_getResizeHints(
-        ((CLAPPlugin*)plugin->plugin_data)->userGUI,
-        &hints->can_resize_horizontally,
-        &hints->can_resize_vertically,
-        &hints->preserve_aspect_ratio,
-        &hints->aspect_ratio_width,
-        &hints->aspect_ratio_height);
+    return false;
 }
 
 static bool CLAPExtGUI_adjust_size(const clap_plugin_t* plugin, uint32_t* width, uint32_t* height)
@@ -369,7 +383,9 @@ static bool CLAPExtGUI_set_size(const clap_plugin_t* plugin, uint32_t width, uin
 static bool CLAPExtGUI_set_parent(const clap_plugin_t* plugin, const clap_window_t* window)
 {
     cplug_log("CLAPExtGUI_set_parent => %p", window);
-    cplug_setParent(((CLAPPlugin*)plugin->plugin_data)->userGUI, window->ptr);
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    if (clap->userGUI)
+        cplug_setParent(clap->userGUI, window->ptr);
     return true;
 }
 
@@ -394,7 +410,12 @@ static bool CLAPExtGUI_show(const clap_plugin_t* plugin)
 static bool CLAPExtGUI_hide(const clap_plugin_t* plugin)
 {
     cplug_log("CLAPExtGUI_hide");
-    cplug_setVisible(((CLAPPlugin*)plugin->plugin_data)->userGUI, false);
+    // FL Studio v24.1.1 has been caught calling clap_plugin_gui::destroy() twice
+    // ::hide() is consistently called right before ::destroy().
+    // This means the GUI may not exist the second time ::hide() is called
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    if (clap->userGUI)
+        cplug_setVisible(clap->userGUI, false);
     return true;
 }
 
@@ -421,22 +442,88 @@ static const clap_plugin_gui_t s_clap_gui = {
 // clap_plugin //
 /////////////////
 
+static void _cplug_clap_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+static void _cplug_clap_rescan(CplugHostContext* ctx, uint32_t flags)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+
+    uint32_t bus_flags = 0;
+    if (flags & CPLUG_FLAG_RESCAN_BUS_COUNT)
+        bus_flags |= CLAP_AUDIO_PORTS_RESCAN_LIST;
+    if (flags & CPLUG_FLAG_RESCAN_BUS_NAMES)
+        bus_flags |= CLAP_AUDIO_PORTS_RESCAN_NAMES;
+    if (bus_flags != 0 && clap->host_audio_ports)
+        clap->host_audio_ports->rescan(clap->host, bus_flags);
+
+    uint32_t param_flags = 0;
+    // if (flags & CPLUG_FLAG_RESCAN_PARAM_COUNT)
+    //     param_flags |= CLAP_PARAM_RESCAN_ALL;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_VALUES)
+        param_flags |= CLAP_PARAM_RESCAN_VALUES;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_NAMES)
+        param_flags |= CLAP_PARAM_RESCAN_INFO;
+    if (flags & CPLUG_FLAG_RESCAN_PARAM_METADATA)
+        param_flags |= CLAP_PARAM_RESCAN_ALL;
+    // The CLAP docs say that CLAP_PARAM_RESCAN_ALL may only be called when the plugin is deactivated.
+    // My own testing shows that Bitwig, FL and Reaper don't care and just rescan your parameters anyway, then
+    // deactivate/reactivate your plugin.
+    if (param_flags != 0 && clap->host_params)
+        clap->host_params->rescan(clap->host, param_flags);
+
+    if ((flags & CPLUG_FLAG_RESCAN_LATENCY) && clap->host_latency)
+        clap->host_latency->changed(clap->host);
+    if ((flags & CPLUG_FLAG_RESCAN_TAIL_TIME) && clap->host_tail)
+        clap->host_tail->changed(clap->host);
+}
+static bool _cplug_clap_getHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+{
+    bool        ok   = false;
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+    if (clap->host)
+    {
+        snprintf(buf, buflen, "%s", clap->host->name);
+        ok = true;
+    }
+    return ok;
+}
+
+static bool _cplug_clap_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+#if CPLUG_WANT_GUI
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+
+    if (clap->host_gui)
+        return clap->host_gui->request_resize(clap->host, width, height);
+#endif
+    return false;
+}
+
+static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
     cplug_log("CLAPPlugin_init");
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    clap->userPlugin = cplug_createPlugin();
+    clap->userPlugin = cplug_createPlugin(&clap->hostContext);
 
     // Fetch host's extensions here
     // Make sure to check that the interface functions are not null pointers
-    clap->host_latency = (const clap_host_latency_t*)clap->host->get_extension(clap->host, CLAP_EXT_LATENCY);
-    clap->host_state   = (const clap_host_state_t*)clap->host->get_extension(clap->host, CLAP_EXT_STATE);
+    clap->host_audio_ports =
+        (const clap_host_audio_ports_t*)clap->host->get_extension(clap->host, CLAP_EXT_AUDIO_PORTS);
     clap->host_params  = (const clap_host_params_t*)clap->host->get_extension(clap->host, CLAP_EXT_PARAMS);
+    clap->host_latency = (const clap_host_latency_t*)clap->host->get_extension(clap->host, CLAP_EXT_LATENCY);
+    clap->host_tail    = (const clap_host_tail_t*)clap->host->get_extension(clap->host, CLAP_EXT_TAIL);
+    clap->host_state   = (const clap_host_state_t*)clap->host->get_extension(clap->host, CLAP_EXT_STATE);
+    clap->host_gui     = (const clap_host_gui_t*)clap->host->get_extension(clap->host, CLAP_EXT_GUI);
 
-    assert(clap->host_latency != NULL);
-    assert(clap->host_state != NULL);
-    assert(clap->host_params != NULL);
+    CPLUG_LOG_ASSERT(clap->host_audio_ports != NULL);
+    CPLUG_LOG_ASSERT(clap->host_params != NULL);
+    CPLUG_LOG_ASSERT(clap->host_latency != NULL);
+    CPLUG_LOG_ASSERT(clap->host_tail != NULL);
+    CPLUG_LOG_ASSERT(clap->host_state != NULL);
+    CPLUG_LOG_ASSERT(clap->host_gui != NULL);
+
     return true;
 }
 
@@ -495,7 +582,7 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         event.header.size = sizeof(event);
         event.header.type = paramEvent->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN ? CLAP_EVENT_PARAM_GESTURE_BEGIN
                                                                                : CLAP_EVENT_PARAM_GESTURE_END;
-        event.param_id    = paramEvent->parameter.idx;
+        event.param_id    = paramEvent->parameter.id;
         return process->out_events->try_push(process->out_events, &event.header);
     }
     case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
@@ -504,7 +591,7 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         memset(&event, 0, sizeof(event));
         event.header.size = sizeof(event);
         event.header.type = CLAP_EVENT_PARAM_VALUE;
-        event.param_id    = paramEvent->parameter.idx;
+        event.param_id    = paramEvent->parameter.id;
         event.value       = paramEvent->parameter.value;
         return process->out_events->try_push(process->out_events, &event.header);
     }
@@ -531,27 +618,82 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
     }
 
     const clap_event_header_t* hdr = process->in_events->get(process->in_events, translator->eventIdx);
-    if (hdr->time != frameIdx)
+
+    uint32_t event_time = hdr->time;
+
+    if (event_time != frameIdx)
     {
         event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
-        event->processAudio.endFrame = hdr->time;
+        event->processAudio.endFrame = event_time;
         return true;
     }
 
     switch (hdr->type)
     {
     case CLAP_EVENT_NOTE_ON:
-    case CLAP_EVENT_NOTE_OFF:
-    case CLAP_EVENT_NOTE_CHOKE:
-    case CLAP_EVENT_NOTE_END:
-        cplug_log("WARNING: Unsupported MIDI format. If you're using Bitwig v5.0, please update to >= v5.1");
+    {
+        const clap_event_note_t* ev = (const clap_event_note_t*)hdr;
+
+        event->midi.type     = CPLUG_EVENT_MIDI;
+        event->midi.frame    = event_time;
+        event->midi.bytes[0] = 0x90; // Note on
+        if (ev->channel >= 0 && ev->channel < 16)
+            event->midi.bytes[0] |= ev->channel;
+
+        event->midi.bytes[1] = (uint8_t)ev->key;
+        event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
+        event->midi.bytes[3] = 0;
         break;
+    }
+    case CLAP_EVENT_NOTE_OFF:
+    {
+        const clap_event_note_t* ev = (const clap_event_note_t*)hdr;
+
+        event->midi.type     = CPLUG_EVENT_MIDI;
+        event->midi.frame    = event_time;
+        event->midi.bytes[0] = 0x80; // Note off
+        if (ev->channel >= 0 && ev->channel < 16)
+            event->midi.bytes[0] |= ev->channel;
+
+        event->midi.bytes[1] = ev->key;
+        event->midi.bytes[2] = (uint8_t)(ev->velocity * 127);
+        event->midi.bytes[3] = 0;
+        break;
+    }
+    case CLAP_EVENT_NOTE_EXPRESSION:
+    {
+        const clap_event_note_expression_t* ev = (const clap_event_note_expression_t*)hdr;
+
+        if (ev->expression_id == CLAP_NOTE_EXPRESSION_PRESSURE)
+        {
+            event->midi.type     = CPLUG_EVENT_MIDI;
+            event->midi.frame    = event_time;
+            event->midi.bytes[0] = 0xa0; // Polyphonic aftertouch
+            if (ev->channel >= 0 && ev->channel < 16)
+                event->midi.bytes[0] |= ev->channel;
+
+            event->midi.bytes[1] = ev->key;
+            event->midi.bytes[2] = (int8_t)(ev->value * 127);
+            event->midi.bytes[3] = 0;
+        }
+        else if (ev->expression_id == CLAP_NOTE_EXPRESSION_TUNING)
+        {
+            event->note_expression.type  = CPLUG_EVENT_NOTE_EXPRESSION_TUNING;
+            event->note_expression.key   = ev->key;
+            event->note_expression.value = ev->value;
+        }
+        else
+        {
+            event->type = CPLUG_EVENT_UNHANDLED_EVENT;
+        }
+        break;
+    }
     case CLAP_EVENT_PARAM_VALUE:
     {
         const clap_event_param_value_t* ev = (const clap_event_param_value_t*)hdr;
 
         event->parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE;
-        event->parameter.idx   = ev->param_id;
+        event->parameter.id    = ev->param_id;
         event->parameter.value = ev->value;
         break;
     }
@@ -564,11 +706,14 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
         event->midi.bytes[1] = ev->data[1];
         event->midi.bytes[2] = ev->data[2];
         event->midi.bytes[3] = 0;
-        event->midi.frame    = ev->header.time;
+        event->midi.frame    = event_time;
         break;
     }
+    case CLAP_EVENT_NOTE_CHOKE:
+    case CLAP_EVENT_NOTE_END:
     default:
         cplug_log("ClapProcessContext_dequeueEvent: Unhandled event type: %hu", hdr->type);
+        event->type = CPLUG_EVENT_UNHANDLED_EVENT;
         break;
     }
 
@@ -596,8 +741,11 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
     // cplug_log("CLAPPlugin_process => %p", process);
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
 
-    struct ClapProcessContextTranslator translator = {0};
-    translator.cplugContext.numFrames              = process->frames_count;
+    struct ClapProcessContextTranslator translator;
+    memset(&translator, 0, sizeof(translator));
+    translator.cplugContext.numFrames  = process->frames_count;
+    translator.cplugContext.numInputs  = process->audio_inputs_count;
+    translator.cplugContext.numOutputs = process->audio_outputs_count;
 
     if (process->transport)
     {
@@ -623,7 +771,7 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
             double loopStartBeats = (double)process->transport->loop_start_beats / (double)CLAP_BEATTIME_FACTOR;
             double loopEndBeats   = (double)process->transport->loop_end_beats / (double)CLAP_BEATTIME_FACTOR;
             translator.cplugContext.loopStartBeats = loopStartBeats;
-            translator.cplugContext.loopStartBeats = loopEndBeats;
+            translator.cplugContext.loopEndBeats   = loopEndBeats;
         }
         if (process->transport->flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE)
         {
@@ -650,26 +798,28 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
 static const void* CLAPPlugin_get_extension(const struct clap_plugin* plugin, const char* id)
 {
     cplug_log("CLAPPlugin_get_extension => %s", id);
-    if (! strcmp(id, CLAP_EXT_LATENCY))
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+
+    uint32_t numInputs  = cplug_getNumInputBusses(clap->userPlugin);
+    uint32_t numOutputs = cplug_getNumOutputBusses(clap->userPlugin);
+    uint32_t numParams  = cplug_getNumParameters(clap->userPlugin);
+
+    if (!strcmp(id, CLAP_EXT_LATENCY))
         return &s_clap_latency;
-    if (! strcmp(id, CLAP_EXT_TAIL))
+    if (!strcmp(id, CLAP_EXT_TAIL))
         return &s_clap_tail;
-#if (CPLUG_NUM_INPUT_BUSSES + CPLUG_NUM_OUTPUT_BUSSES) > 0
-    if (! strcmp(id, CLAP_EXT_AUDIO_PORTS))
+    if (!strcmp(id, CLAP_EXT_AUDIO_PORTS) && (numInputs || numOutputs))
         return &s_clap_audio_ports;
-#endif
 #if CPLUG_WANT_MIDI_INPUT
-    if (! strcmp(id, CLAP_EXT_NOTE_PORTS))
+    if (!strcmp(id, CLAP_EXT_NOTE_PORTS))
         return &s_clap_note_ports;
 #endif
-    if (! strcmp(id, CLAP_EXT_STATE))
+    if (!strcmp(id, CLAP_EXT_STATE))
         return &s_clap_state;
-#if CPLUG_NUM_PARAMS
-    if (! strcmp(id, CLAP_EXT_PARAMS))
+    if (!strcmp(id, CLAP_EXT_PARAMS) && numParams)
         return &s_clap_params;
-#endif
 #if CPLUG_WANT_GUI
-    if (! strcmp(id, CLAP_EXT_GUI))
+    if (!strcmp(id, CLAP_EXT_GUI))
         return &s_clap_gui;
 #endif
     return NULL;
@@ -730,6 +880,11 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     clap->clapPlugin.process          = CLAPPlugin_process;
     clap->clapPlugin.get_extension    = CLAPPlugin_get_extension;
     clap->clapPlugin.on_main_thread   = CLAPPlugin_on_main_thread;
+    clap->hostContext.type            = CPLUG_PLUGIN_IS_CLAP;
+    clap->hostContext.sendParamEvent  = _cplug_clap_sendParamEvent;
+    clap->hostContext.rescan          = _cplug_clap_rescan;
+    clap->hostContext.getHostName     = _cplug_clap_getHostName;
+    clap->hostContext.requestResize   = _cplug_clap_requestResize;
 
     clap->host = host;
 
@@ -762,7 +917,7 @@ static void CLAPEntry_deinit(void)
 static const void* CLAPEntry_get_factory(const char* factory_id)
 {
     cplug_log("CLAPEntry_get_factory => %s", factory_id);
-    if (! strcmp(factory_id, CLAP_PLUGIN_FACTORY_ID))
+    if (!strcmp(factory_id, CLAP_PLUGIN_FACTORY_ID))
         return &s_plugin_factory;
     return NULL;
 }

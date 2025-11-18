@@ -27,30 +27,64 @@ extern "C" {
 #endif
 #else
 #define CPLUG_API
-#endif
+#endif // CPLUG_SHARED
 
 #ifndef CPLUG_EVENT_QUEUE_SIZE
 #define CPLUG_EVENT_QUEUE_SIZE 256
 #endif
-#define CPLUG_EVENT_QUEUE_MASK (CPLUG_EVENT_QUEUE_SIZE - 1)
 
-// How sample accurate do you need your events?
-#ifndef CPLUG_EVENT_FRAME_QUANTIZE
-#define CPLUG_EVENT_FRAME_QUANTIZE 64
-#endif
+typedef union CplugEvent           CplugEvent;
+typedef struct CplugHostContext    CplugHostContext;
+typedef struct CplugProcessContext CplugProcessContext;
 
 CPLUG_API void cplug_libraryLoad();
 CPLUG_API void cplug_libraryUnload();
 
-CPLUG_API void* cplug_createPlugin();
+enum
+{
+    CPLUG_PLUGIN_IS_STANDALONE,
+    CPLUG_PLUGIN_IS_CLAP,
+    CPLUG_PLUGIN_IS_VST3,
+    CPLUG_PLUGIN_IS_AUV2,
+};
+
+enum
+{
+    CPLUG_FLAG_RESCAN_LATENCY        = 1 << 0,
+    CPLUG_FLAG_RESCAN_TAIL_TIME      = 1 << 1,
+    CPLUG_FLAG_RESCAN_BUS_COUNT      = 1 << 2,
+    CPLUG_FLAG_RESCAN_BUS_NAMES      = 1 << 3,
+    CPLUG_FLAG_RESCAN_PARAM_VALUES   = 1 << 4,
+    CPLUG_FLAG_RESCAN_PARAM_NAMES    = 1 << 5,
+    CPLUG_FLAG_RESCAN_PARAM_METADATA = 1 << 6,
+};
+
+struct CplugHostContext
+{
+    uint32_t type; // CPLUG_PLUGIN_IS_XXX
+
+    // VST3 & AUv2 only, UI thread only.
+    void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
+    void (*rescan)(CplugHostContext* ctx, uint32_t flags /* CPLUG_RESCAN_XXX */);
+    bool (*getHostName)(CplugHostContext* ctx, char* buf, size_t buflen);
+
+    // Ask permission from host to resize your area to specified w/h within their window
+    bool (*requestResize)(CplugHostContext* ctx, uint32_t width, uint32_t height);
+};
+
+CPLUG_API void* cplug_createPlugin(CplugHostContext* ctx);
 CPLUG_API void  cplug_destroyPlugin(void*);
 
+CPLUG_API uint32_t cplug_getNumInputBusses(void*);
+CPLUG_API uint32_t cplug_getNumOutputBusses(void*);
 CPLUG_API uint32_t cplug_getInputBusChannelCount(void*, uint32_t bus_idx);
 CPLUG_API uint32_t cplug_getOutputBusChannelCount(void*, uint32_t bus_idx);
 
-// NOTE: VST3 supports a max length of 128 bytes, CLAP 256, AUv2 no limit (mandatory CFString)
-CPLUG_API const char* cplug_getInputBusName(void*, uint32_t idx);
-CPLUG_API const char* cplug_getOutputBusName(void*, uint32_t idx);
+// Copy UTF8 name to this buffer, including null terminating byte.
+// NOTE: VST3 uses UTF16 strings with a max length of 128 characters. Cplug the handles UTF16<->UTF8 conversion
+//       CLAP has a max length of 256 bytes, AUv2 no limit (mandatory CFString), both are UTF8
+CPLUG_API void cplug_getInputBusName(void*, uint32_t idx, char* buf, size_t buflen);
+CPLUG_API void cplug_getOutputBusName(void*, uint32_t idx, char* buf, size_t buflen);
 
 CPLUG_API uint32_t cplug_getLatencyInSamples(void*);
 CPLUG_API uint32_t cplug_getTailInSamples(void*);
@@ -59,16 +93,23 @@ CPLUG_API void cplug_setSampleRateAndBlockSize(void*, double sampleRate, uint32_
 
 enum
 {
+    CPLUG_EVENT_UNHANDLED_EVENT, // Empty event for unimplemented features. Do nothing
     CPLUG_EVENT_PROCESS_AUDIO,
     CPLUG_EVENT_PARAM_CHANGE_BEGIN,
     CPLUG_EVENT_PARAM_CHANGE_UPDATE,
     CPLUG_EVENT_PARAM_CHANGE_END,
     CPLUG_EVENT_MIDI,
+    // CPLUG_EVENT_NOTE_EXPRESSION_VOLUME,
+    // CPLUG_EVENT_NOTE_EXPRESSION_PAN,
+    CPLUG_EVENT_NOTE_EXPRESSION_TUNING,
+    // CPLUG_EVENT_NOTE_EXPRESSION_VIBRATO,
+    // CPLUG_EVENT_NOTE_EXPRESSION_EXPRESSION, // similar to an expression pedal (MIDI CC 11), except polyphonic
+    // CPLUG_EVENT_NOTE_EXPRESSION_BRIGHTNESS,
 };
 
-typedef union CplugEvent
+union CplugEvent
 {
-    uint32_t type;
+    uint32_t type; // CPLUG_EVENT_XXX
 
     struct
     {
@@ -79,7 +120,7 @@ typedef union CplugEvent
     struct
     {
         uint32_t type;
-        uint32_t idx;
+        uint32_t id;
         double   value;
     } parameter;
 
@@ -99,7 +140,14 @@ typedef union CplugEvent
             uint32_t bytesAsInt;
         };
     } midi;
-} CplugEvent;
+
+    struct
+    {
+        uint32_t type;
+        int32_t  key; // 0-127
+        double   value;
+    } note_expression;
+};
 
 enum
 {
@@ -111,11 +159,13 @@ enum
     CPLUG_FLAG_TRANSPORT_HAS_PLAYHEAD_BEATS = 1 << 5,
 };
 
-typedef struct CplugProcessContext
+struct CplugProcessContext
 {
     uint32_t numFrames;
+    uint32_t numInputs;
+    uint32_t numOutputs;
 
-    uint32_t flags;
+    uint32_t flags; // CPLUG_FLAG_TRANSPORT_XXX
     double   bpm;
     double   playheadBeats;
     double   loopStartBeats;
@@ -123,12 +173,12 @@ typedef struct CplugProcessContext
     uint32_t timeSigNumerator;
     uint32_t timeSigDenominator;
 
-    bool (*enqueueEvent)(struct CplugProcessContext* ctx, const CplugEvent*, uint32_t frameIdx);
-    bool (*dequeueEvent)(struct CplugProcessContext* ctx, CplugEvent*, uint32_t frameIdx);
+    bool (*enqueueEvent)(CplugProcessContext* ctx, const CplugEvent*, uint32_t frameIdx);
+    bool (*dequeueEvent)(CplugProcessContext* ctx, CplugEvent*, uint32_t frameIdx);
 
-    float** (*getAudioInput)(const struct CplugProcessContext* ctx, uint32_t busIdx);
-    float** (*getAudioOutput)(const struct CplugProcessContext* ctx, uint32_t busIdx);
-} CplugProcessContext;
+    float** (*getAudioInput)(const CplugProcessContext* ctx, uint32_t busIdx);
+    float** (*getAudioOutput)(const CplugProcessContext* ctx, uint32_t busIdx);
+};
 
 CPLUG_API void cplug_process(void* userPlugin, CplugProcessContext* ctx);
 
@@ -144,23 +194,25 @@ enum
     CPLUG_FLAG_PARAMETER_IS_BYPASS      = 1 << 5
 };
 
-CPLUG_API uint32_t cplug_getParameterFlags(void*, uint32_t index);
+CPLUG_API uint32_t cplug_getNumParameters(void*);
+CPLUG_API uint32_t cplug_getParameterID(void*, uint32_t paramIndex);
+CPLUG_API uint32_t cplug_getParameterFlags(void*, uint32_t paramId); // CPLUG_FLAG_PARAMETER_XXX
 
-CPLUG_API void cplug_getParameterRange(void*, uint32_t index, double* min, double* max);
+CPLUG_API void cplug_getParameterRange(void*, uint32_t paramId, double* min, double* max);
 
 // NOTE: AUv2 supports a max length of 52 bytes, VST3 128, CLAP 256
-CPLUG_API const char* cplug_getParameterName(void*, uint32_t index);
+CPLUG_API void cplug_getParameterName(void*, uint32_t paramId, char* buf, size_t buflen);
 
-CPLUG_API double cplug_getParameterValue(void*, uint32_t index);
-CPLUG_API double cplug_getDefaultParameterValue(void*, uint32_t index);
+CPLUG_API double cplug_getParameterValue(void*, uint32_t paramId);
+CPLUG_API double cplug_getDefaultParameterValue(void*, uint32_t paramId);
 // [hopefully audio thread] VST3 & AU only
-CPLUG_API void cplug_setParameterValue(void*, uint32_t index, double value);
+CPLUG_API void cplug_setParameterValue(void*, uint32_t paramId, double value);
 // VST3 only
-CPLUG_API double cplug_denormaliseParameterValue(void*, uint32_t index, double value);
-CPLUG_API double cplug_normaliseParameterValue(void*, uint32_t index, double value);
+CPLUG_API double cplug_denormaliseParameterValue(void*, uint32_t paramId, double value);
+CPLUG_API double cplug_normaliseParameterValue(void*, uint32_t paramId, double value);
 
-CPLUG_API double cplug_parameterStringToValue(void*, uint32_t index, const char*);
-CPLUG_API void   cplug_parameterValueToString(void*, uint32_t index, char* buf, size_t bufsize, double value);
+CPLUG_API double cplug_parameterStringToValue(void*, uint32_t paramId, const char*);
+CPLUG_API void   cplug_parameterValueToString(void*, uint32_t paramId, char* buf, size_t bufsize, double value);
 
 // Returns -1 on error and 'numBytesToWrite' on success
 typedef int64_t (*cplug_writeProc)(const void* stateCtx, void* writePos, size_t numBytesToWrite);
@@ -169,6 +221,15 @@ CPLUG_API void cplug_saveState(void* userPlugin, const void* stateCtx, cplug_wri
 // Returns 0 if all bytes are read, -1 on error, and 'maxBytesToRead' when there are remaining bytes to read
 typedef int64_t (*cplug_readProc)(const void* stateCtx, void* readPos, size_t maxBytesToRead);
 CPLUG_API void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
+
+// AUv2 hacks. Unfortunately Apple's API designs are offensive leaky abstractions.
+enum
+{
+    kAudioUnitProperty_UserPlugin          = 'plug',
+    kAudioUnitProperty_CplugProcessContext = kAudioUnitProperty_UserPlugin + 1,
+    CPLUG_AUV2_OFFSET_PROCESS_CONTEXT      = 64,
+    CPLUG_AUV2_OFFSET_NSVIEW               = CPLUG_AUV2_OFFSET_PROCESS_CONTEXT + sizeof(CplugHostContext),
+};
 
 // NOTE: For AUv2, your pointer MUST be castable to NSView. AUv2 hosts expect an NSView & you simply override methods
 // This is the only CPLUG method used in AUv2 builds.
@@ -183,15 +244,8 @@ CPLUG_API void cplug_setScaleFactor(void* userGUI, float scale);
 CPLUG_API void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height);
 // Host is trying to resize, but giving you the chance to overwrite their size
 CPLUG_API void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height);
+// Host tells your plugin "this is your size"
 CPLUG_API bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height);
-// CLAP only. Might deprecate this
-CPLUG_API bool cplug_getResizeHints(
-    void*     userGUI,
-    bool*     resizableX,
-    bool*     resizableY,
-    bool*     preserveAspectRatio,
-    uint32_t* aspectRatioX,
-    uint32_t* aspectRatioY);
 
 /*  ██╗   ██╗████████╗██╗██╗     ███████╗
     ██║   ██║╚══██╔══╝██║██║     ██╔════╝
@@ -217,7 +271,6 @@ static inline int cplug_atomic_load_i32(const cplug_atomic_i32* ptr)        { re
 static inline int cplug_atomic_fetch_add_i32( cplug_atomic_i32* ptr, int v) { return __atomic_fetch_add (ptr, v, __ATOMIC_SEQ_CST); }
 static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { return __atomic_fetch_and (ptr, v, __ATOMIC_SEQ_CST); }
 #endif
-// clang-format on
 
 /*  ██████╗ ███████╗██████╗ ██╗   ██╗ ██████╗
     ██╔══██╗██╔════╝██╔══██╗██║   ██║██╔════╝
@@ -226,46 +279,45 @@ static inline int cplug_atomic_fetch_and_i32( cplug_atomic_i32* ptr, int v) { re
     ██████╔╝███████╗██████╔╝╚██████╔╝╚██████╔╝
     ╚═════╝ ╚══════╝╚═════╝  ╚═════╝  ╚═════╝*/
 
-#if ! defined(__cplusplus) && ! defined(_MSC_VER) && ! defined(static_assert)
+#if !defined(__cplusplus) && !defined(_MSC_VER) && !defined(static_assert)
 #define static_assert _Static_assert
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
-#define unlikely(x) __builtin_expect(x, 0)
-#else
-#define unlikely(x) x
-#endif
-
-#if defined(NDEBUG)
+#ifndef cplug_log
+#ifdef NDEBUG
 #define cplug_log(...)
 #else
 #include <stdarg.h>
 #include <stdio.h>
-
-// When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
-static inline void cplug_log(const char* const fmt, ...)
+static inline void cplug_printf(const char* const fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
+    // When debugging in a host, consider adding: freopen(".../Desktop/log.txt", "a", stderr);
     vfprintf(stderr, fmt, args);
     fprintf(stderr, "\n");
     va_end(args);
 }
+#define cplug_log cplug_printf
 #endif // NDEBUG
+#endif // cplug_log
 
-#define CPLUG_LOG_ASSERT(cond)                                                                                         \
-    if (unlikely(! (cond)))                                                                                            \
-    {                                                                                                                  \
-        cplug_log("assertion failure: \"%s\" in file %s, line %i", #cond, __FILE__, __LINE__);                         \
-    }
+#ifndef CPLUG_LOG_ASSERT
+#ifdef NDEBUG
+#define CPLUG_LOG_ASSERT(...)
+#else
+#define CPLUG_LOG_ASSERT(cond) if (!(cond)) { cplug_log("FAIL ASSERT: " #cond " - %s:%d", __FILE__, __LINE__); }
+#endif // NDEBUG
+#endif // CPLUG_LOG_ASSERT
 
 #define CPLUG_LOG_ASSERT_RETURN(cond, ret)                                                                             \
     CPLUG_LOG_ASSERT(cond)                                                                                             \
-    if (unlikely(! (cond)))                                                                                            \
-        return ret;
+    if (!(cond)) return ret;
+
+// clang-format on
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // CPLUG_H
+#endif // !CPLUG_H
