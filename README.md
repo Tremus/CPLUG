@@ -57,8 +57,8 @@ Most plugins don't support these features, & most users don't ask for them or kn
 
 -   CPLUG 2.0:
     - Remove as many macros as possible. Make build scripts as short as possibe. Solve as many problems as possible with C/C++ code, not build scripts
-    - Move all cplug methods to one big vtable. This makes supporting multiple plugins in a single dll trivial, want of extensions (eg. parameter, gui, midi) could be implied by settings functions on the vtable.
-    - Update VST3 C API version to the new MIT license one
+    - Move all cplug methods to one big vtable. This makes supporting multiple plugins in a single dll trivial, want of extensions (eg. parameter, gui, midi) could be implied by setting function pointers on the vtable.
+    - Update VST3 C API version to the new MIT licensed one
     - Convert everything into to single header library
     - Allow user to hijack `main()` and hook into file changes so they can write their own custom hotreloading code
 -   Finish supporting other note expressions (volume, pan, vibrato, brightness)
