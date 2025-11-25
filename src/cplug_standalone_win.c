@@ -77,7 +77,7 @@ struct CPWIN_Plugin
 
     void (*libraryLoad)();
     void (*libraryUnload)();
-    void* (*createPlugin)(CplugHostContext*);
+    void* (*createPlugin)(CplugHostContext* ctx);
     void (*destroyPlugin)(void* userPlugin);
     uint32_t (*getOutputBusChannelCount)(void*, uint32_t bus_idx);
     void (*setSampleRateAndBlockSize)(void*, double sampleRate, uint32_t maxBlockSize);
@@ -85,7 +85,7 @@ struct CPWIN_Plugin
     void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
     void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
 
-    void* (*createGUI)(void* userPlugin);
+    void* (*createGUI)(CplugHostContext* ctx, void* userPlugin);
     void (*destroyGUI)(void* userGUI);
     void (*setParent)(void* userGUI, void* hwnd_or_nsview);
     void (*setVisible)(void* userGUI, bool visible);
@@ -423,7 +423,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         return 1;
     }
 
-    g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
+    g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
     cplug_assert(g_plugin.UserGUI != NULL);
 
     uint32_t guiWidth, guiHeight;
@@ -715,7 +715,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
                 uint32_t width  = size.right - size.left;
                 uint32_t height = size.bottom - size.top;
 
-                g_plugin.UserGUI = g_plugin.createGUI(g_plugin.UserPlugin);
+                g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
                 cplug_assert(g_plugin.UserGUI != NULL);
                 if (width && height)
                     g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
