@@ -1681,6 +1681,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_UNIQUE_INT_ID = EpochTimeMs;
     SetWindowLongPtrW(pw->hwnd, GWLP_ID, PW_UNIQUE_INT_ID);
 
+    // GetDpiForWindow is Windows 10+
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow
     pw->dpi = GetDpiForWindow(pw->hwnd) / 96.0f;
 
