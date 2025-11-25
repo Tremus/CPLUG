@@ -123,8 +123,7 @@ static const char* _cplugProperty2Str(AudioUnitPropertyID inID)
         {"kAudioUnitProperty_HostMIDIProtocol", 65},
         {"kAudioUnitProperty_MIDIOutputBufferSizeHint", 66},
         {"kMusicDeviceProperty_DualSchedulingMode", 1013},
-        {"kAudioUnitProperty_UserPlugin", kAudioUnitProperty_UserPlugin},
-        {"kAudioUnitProperty_CplugProcessContext", kAudioUnitProperty_CplugProcessContext},
+        {"kAudioUnitProperty_AUV2Wrapper", kAudioUnitProperty_AUV2Wrapper},
     };
     // clang-format on
 
@@ -164,11 +163,11 @@ typedef struct AUv2Plugin
     AudioComponentDescription desc;
 
     CplugHostContext hostContext;
+    void*            userPlugin;
     void*            nsview;
 
     AUHostVersionIdentifier hostVersionIdentifier;
 
-    void* userPlugin;
     // Despite the name, this is actually used for getting transport state, position, and BPM.
     HostCallbackInfo mHostCallbackInfo;
 
@@ -212,13 +211,12 @@ typedef struct AUv2Plugin
 // requires restrictive Cocoa OOP and big brained MVC design patterns, which separates the concerns of plugin params &
 // processing, state etc. and its GUI. Users must write their own GUI code that conforms to the CPLUG API if they wish
 // to use Audio Units.
+// These offsets below allow the caller of AudioUnitGetProperty() to get certain properties on AUv2Plugin
 // CPLUG does of course provide its own optional window extension with most, if not all of these problems solved.
-_Static_assert(
-    offsetof(AUv2Plugin, hostContext) == CPLUG_AUV2_OFFSET_PROCESS_CONTEXT,
-    "This offset is required by a hack in cplug_extensions/window_osx.m");
-_Static_assert(
-    offsetof(AUv2Plugin, nsview) == CPLUG_AUV2_OFFSET_NSVIEW,
-    "This offset is required by a hack in cplug_extensions/window_osx.m");
+// See: cplug_extensions/window_osx.m
+_Static_assert(offsetof(AUv2Plugin, hostContext) == CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT, "");
+_Static_assert(offsetof(AUv2Plugin, userPlugin) == CPLUG_AUV2_OFFSET_PLUGIN, "");
+_Static_assert(offsetof(AUv2Plugin, nsview) == CPLUG_AUV2_OFFSET_NSVIEW, "");
 
 void AUv2ReleaseStringArray(CFStringRef* arr, size_t arrlen)
 {
@@ -279,7 +277,7 @@ int64_t AUv2WriteProc(const void* stateCtx, void* writePos, size_t numBytesToWri
     if (nextLen > ctx->cap)
     {
         ctx->cap  = nextLen * 2;
-        ctx->data = realloc(ctx->data, ctx->cap);
+        ctx->data = (UInt8*)realloc(ctx->data, ctx->cap);
     }
     memcpy(ctx->data + ctx->len, writePos, numBytesToWrite);
     ctx->len = nextLen;
@@ -844,11 +842,8 @@ static OSStatus AUMethodGetProperty(
         *ioDataSize       = sizeof(UInt32);
         break;
 #endif
-    case kAudioUnitProperty_UserPlugin:
-        *(UInt64*)outData = (UInt64)auv2->userPlugin;
-        break;
-    case kAudioUnitProperty_CplugProcessContext:
-        *(UInt64*)outData = (UInt64)&auv2->hostContext;
+    case kAudioUnitProperty_AUV2Wrapper:
+        *(UInt64*)outData = (UInt64)auv2;
         break;
 
     default:

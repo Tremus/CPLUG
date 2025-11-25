@@ -16,6 +16,8 @@
     void* gui;
     void* plugin;
 
+    CplugHostContext* hostCtx;
+
     // The state below used for hacky resize corner detection.
     // Setting a NSWindowDelegate would be ideal, but not always possible, because many hosts set their own, and
     // replacing theirs with ours can create problems.
@@ -239,18 +241,19 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
         windowStyle |= NSWindowStyleMaskResizable;
         [window setStyleMask:windowStyle];
 
-#ifdef CPLUG_BUILD_AUV2
-        // The Audio Unit API has no specification about how a host should ask a plugin about its desired width/height
-        // This means we have to resort to 'NSWindowDelegate' trickery to listen for resize changes in the hosts window,
-        // and override its behaviour. We do this trickery in the 'windowWillResize' method
+        if (hostCtx->type == CPLUG_PLUGIN_IS_AUV2)
+        {
+            // The Audio Unit API has no specification about how a host should ask a plugin about its desired
+            // width/height This means we have to resort to 'NSWindowDelegate' trickery to listen for resize changes in
+            // the hosts window, and override its behaviour. We do this trickery in the 'windowWillResize' method
 
-        // This trickery however comes into conflict with how other DAWs manage their windows. Steinberg's Cubase and
-        // VST3PluginTestHost, Reaper, Logic Pro (Intel & Rosetta), and Ableton 12 (10 doesn't) all register delegates.
-        // Setting a delegate here in a VST3 build in Cubase prevents the GUI from showing...
-        // Setting a delegate here in Logic running in Rosetta mode will crash the DAW on close.
-        if (window.delegate == NULL)
-            [window setDelegate:self];
-#endif
+            // This trickery however comes into conflict with how other DAWs manage their windows. Steinberg's Cubase
+            // and VST3PluginTestHost, Reaper, Logic Pro (Intel & Rosetta), and Ableton 12 (10 doesn't) all register
+            // delegates. Setting a delegate here in a VST3 build in Cubase prevents the GUI from showing... Setting a
+            // delegate here in Logic running in Rosetta mode will crash the DAW on close.
+            if (window.delegate == NULL)
+                [window setDelegate:self];
+        }
 
         // Due to the aforementioned delegate problem, here we set up observers as a fallback.
         NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
@@ -375,7 +378,6 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
     [super setFrameSize:newSize];
 }
 
-#ifdef CPLUG_BUILD_AUV2
 - (NSSize)windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
 {
     // Current size
@@ -395,7 +397,6 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
 
     return nextViewSize;
 }
-#endif // CPLUG_BUILD_AUV2
 
 - (void)parentWindowDidResize
 {
@@ -846,7 +847,7 @@ void pw_release_keyboard_focus(void* _pw)
 
 void pw_beep() { NSBeep(); }
 
-void* cplug_createGUI(void* userPlugin)
+void* cplug_createGUI(CplugHostContext* hostCtx, void* userPlugin)
 {
     _Static_assert(offsetof(struct PWGetInfo, init_size) > offsetof(struct PWGetInfo, type), "");
     struct PWGetInfo info;
@@ -869,6 +870,7 @@ void* cplug_createGUI(void* userPlugin)
 
     pw->gui              = NULL;
     pw->plugin           = userPlugin;
+    pw->hostCtx          = hostCtx;
     pw->resizeStartFrame = (NSRect){{0, 0}, {0, 0}};
     pw->pwResizeFlags    = 0;
     pw->checkResizeFlag  = false;
@@ -1312,7 +1314,7 @@ bool pw_choose_file(const PWChooseFileArgs* args)
 }
 
 // AUv2 only
-#ifdef CPLUG_BUILD_AUV2
+#ifdef CPLUG_AUV2_VIEW_CLASS
 #include <AudioToolbox/AUCocoaUIView.h>
 #include <AudioToolbox/AudioUnit.h>
 
@@ -1323,7 +1325,8 @@ bool pw_choose_file(const PWChooseFileArgs* args)
 
 static bool AUv2HostContext_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
 {
-    const int offset = CPLUG_AUV2_OFFSET_NSVIEW - CPLUG_AUV2_OFFSET_PROCESS_CONTEXT;
+    cplug_log("AUv2HostContext_requestResize => %p %u %u", ctx, width, height);
+    const int offset = CPLUG_AUV2_OFFSET_NSVIEW - CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT;
     NSView*   view   = *((NSView**)(((char*)ctx) + offset));
 
     if (view.window)
@@ -1356,25 +1359,23 @@ static bool AUv2HostContext_requestResize(CplugHostContext* ctx, uint32_t width,
 {
     cplug_log("uiViewForAudioUnit => %p %f %f", inUnit, size.width, size.height);
 
-    void*  userPlugin = NULL;
-    UInt32 dataSize   = sizeof(size_t);
+    // Hack to get the AUv2Plugin wrapper struct
+    struct AUv2Plugin* auv2     = NULL;
+    UInt32             dataSize = sizeof(size_t);
+    AudioUnitGetProperty(inUnit, kAudioUnitProperty_AUV2Wrapper, kAudioUnitScope_Global, 0, &auv2, &dataSize);
+    CPLUG_LOG_ASSERT_RETURN(auv2 != NULL, NULL);
 
-    AudioUnitGetProperty(inUnit, kAudioUnitProperty_UserPlugin, kAudioUnitScope_Global, 0, &userPlugin, &dataSize);
-    CPLUG_LOG_ASSERT_RETURN(userPlugin != NULL, NULL);
+    // Create GUI
+    CplugHostContext* ctx        = (CplugHostContext*)(((char*)auv2) + CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT);
+    void**            userPlugin = (void**)(((char*)auv2) + CPLUG_AUV2_OFFSET_PLUGIN);
+    CPLUG_LOG_ASSERT_RETURN(*userPlugin != NULL, NULL);
+    NSView* view = (NSView*)cplug_createGUI(ctx, *userPlugin);
+    CPLUG_LOG_ASSERT_RETURN(view != NULL, NULL);
 
-    NSView* view = (NSView*)cplug_createGUI(userPlugin);
-
-    CplugHostContext* ctx = NULL;
-
-    uint32_t ctx_id = kAudioUnitProperty_CplugProcessContext;
-    AudioUnitGetProperty(inUnit, ctx_id, kAudioUnitScope_Global, 0, &ctx, &dataSize);
-
-    const int offset = CPLUG_AUV2_OFFSET_NSVIEW - CPLUG_AUV2_OFFSET_PROCESS_CONTEXT;
-
+    // Set up vtable
+    NSView** pView     = (NSView**)(((char*)auv2) + CPLUG_AUV2_OFFSET_NSVIEW);
+    *pView             = view;
     ctx->requestResize = AUv2HostContext_requestResize;
-
-    NSView** pView = (NSView**)(((char*)ctx) + offset);
-    *pView         = view;
 
     return view;
 }
@@ -1385,4 +1386,4 @@ static bool AUv2HostContext_requestResize(CplugHostContext* ctx, uint32_t width,
 }
 
 @end
-#endif // CPLUG_BUILD_AUV2
+#endif // CPLUG_AUV2_VIEW_CLASS

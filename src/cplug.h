@@ -225,10 +225,10 @@ CPLUG_API void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_rea
 // AUv2 hacks. Unfortunately Apple's API designs are offensive leaky abstractions.
 enum
 {
-    kAudioUnitProperty_UserPlugin          = 'plug',
-    kAudioUnitProperty_CplugProcessContext = kAudioUnitProperty_UserPlugin + 1,
-    CPLUG_AUV2_OFFSET_PROCESS_CONTEXT      = 64,
-    CPLUG_AUV2_OFFSET_NSVIEW               = CPLUG_AUV2_OFFSET_PROCESS_CONTEXT + sizeof(CplugHostContext),
+    kAudioUnitProperty_AUV2Wrapper    = 'plug',
+    CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT = 64,
+    CPLUG_AUV2_OFFSET_PLUGIN          = CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT + sizeof(CplugHostContext),
+    CPLUG_AUV2_OFFSET_NSVIEW          = CPLUG_AUV2_OFFSET_PLUGIN + sizeof(size_t),
 };
 
 // NOTE: For AUv2, your pointer MUST be castable to NSView. AUv2 hosts expect an NSView & you simply override methods

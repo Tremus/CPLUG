@@ -145,7 +145,7 @@ struct STAND_Plugin
     void (*saveState)(void* userPlugin, const void* stateCtx, cplug_writeProc writeProc);
     void (*loadState)(void* userPlugin, const void* stateCtx, cplug_readProc readProc);
 
-    void* (*createGUI)(void* userPlugin);
+    void* (*createGUI)(CplugHostContext* host_ctx, void* userPlugin);
     void (*destroyGUI)(void* userGUI);
     void (*setParent)(void* userGUI, void* hwnd_or_nsview);
     void (*setVisible)(void* userGUI, bool visible);
@@ -306,7 +306,7 @@ OSStatus STAND_audioDeviceChangeListener(
     STAND_audioStart();
 
     // GUI
-    g_plugin.userGUI = g_plugin.createGUI(g_plugin.userPlugin);
+    g_plugin.userGUI = g_plugin.createGUI(&g_plugin.hostContext, g_plugin.userPlugin);
     assert(g_plugin.userGUI != NULL);
 
     uint32_t guiWidth, guiHeight;
@@ -1405,7 +1405,7 @@ void STAND_filesystemEventCallback(
 
                 STAND_audioStart();
 
-                g_plugin.userGUI = g_plugin.createGUI(g_plugin.userPlugin);
+                g_plugin.userGUI = g_plugin.createGUI(&g_plugin.hostContext, g_plugin.userPlugin);
                 cplug_assert(g_plugin.userGUI != NULL);
 
                 uint32_t width, height;

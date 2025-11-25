@@ -110,7 +110,6 @@ if (APPLE)
     target_compile_definitions(${PROJECT_NAME}_plugin PRIVATE
         CPLUG_AUV2_VERSION_INT=${MACOSX_BUNDLE_VERSION_INT}
         CPLUG_AUV2_BUNDLE_ID="${PLUGIN_BUNDLE_ID}"
-        CPLUG_BUILD_AUV2=1
     )
 
     add_custom_command(TARGET ${PROJECT_NAME}_plugin POST_BUILD
@@ -243,7 +242,6 @@ if (APPLE)
     target_compile_definitions(test_compile_objcpp PRIVATE
         CPLUG_AUV2_VERSION_INT=${MACOSX_BUNDLE_VERSION_INT}
         CPLUG_AUV2_BUNDLE_ID="${PLUGIN_BUNDLE_ID}"
-        CPLUG_BUILD_AUV2=1
     )
 else()
     add_executable(test_compile_cpp WIN32 test_compile.cpp)

@@ -24,8 +24,8 @@ void timer_cb(CFRunLoopTimerRef timer, void* info);
 #if CPLUG_GUI_RESIZABLE
 - (void)viewDidMoveToWindow
 {
-    NSWindow*         window      = [self window];
-    NSWindowStyleMask windowStyle = [window styleMask];
+    NSWindow*         window       = [self window];
+    NSWindowStyleMask windowStyle  = [window styleMask];
     windowStyle                   |= NSWindowStyleMaskResizable;
     [window setStyleMask:windowStyle];
     [super viewDidMoveToWindow];
@@ -143,7 +143,7 @@ void timer_cb(CFRunLoopTimerRef timer, void* info)
         [wrapper setNeedsDisplayInRect:wrapper.bounds];
 }
 
-void* cplug_createGUI(void* userPlugin)
+void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin)
 {
     NSRect frame;
     frame.origin.x    = 0;
@@ -218,7 +218,7 @@ void cplug_setScaleFactor(void* userGUI, float scale)
 }
 
 // AUv2 only
-#ifdef CPLUG_BUILD_AUV2
+#ifdef CPLUG_AUV2_VIEW_CLASS
 #include <AudioToolbox/AUCocoaUIView.h>
 #include <AudioToolbox/AudioUnit.h>
 
@@ -232,13 +232,18 @@ void cplug_setScaleFactor(void* userGUI, float scale)
 - (NSView*)uiViewForAudioUnit:(AudioUnit)inUnit withSize:(NSSize)size
 {
     cplug_log("uiViewForAudioUnit => %p %f %f", inUnit, size.width, size.height);
-    void*  userPlugin = NULL;
-    UInt32 dataSize   = 8;
 
-    AudioUnitGetProperty(inUnit, kAudioUnitProperty_UserPlugin, kAudioUnitScope_Global, 0, &userPlugin, &dataSize);
-    CPLUG_LOG_ASSERT_RETURN(userPlugin != NULL, NULL);
+    // Hack to get the AUv2Plugin wrapper struct
+    struct AUv2Plugin* auv2     = NULL;
+    UInt32             dataSize = sizeof(size_t);
+    AudioUnitGetProperty(inUnit, kAudioUnitProperty_AUV2Wrapper, kAudioUnitScope_Global, 0, &auv2, &dataSize);
+    CPLUG_LOG_ASSERT_RETURN(auv2 != NULL, NULL);
 
-    return (NSView*)cplug_createGUI(userPlugin);
+    // Create GUI
+    CplugHostContext* ctx        = (CplugHostContext*)(((char*)auv2) + CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT);
+    void**            userPlugin = (void**)(((char*)auv2) + CPLUG_AUV2_OFFSET_PLUGIN);
+    CPLUG_LOG_ASSERT_RETURN(*userPlugin != NULL, NULL);
+    return (NSView*)cplug_createGUI(ctx, *userPlugin);
 }
 
 - (unsigned)interfaceVersion
@@ -247,5 +252,5 @@ void cplug_setScaleFactor(void* userGUI, float scale)
 }
 
 @end
-#endif // CPLUG_BUILD_AUV2
+#endif // CPLUG_AUV2_VIEW_CLASS
 #endif // CPLUG_WANT_GUI
