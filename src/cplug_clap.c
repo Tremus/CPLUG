@@ -314,7 +314,7 @@ bool CLAPExtGUI_create(const clap_plugin_t* plugin, const char* api, bool is_flo
     CPLUG_LOG_ASSERT_RETURN(CLAPExtGUI_is_api_supported(plugin, api, is_floating), false);
 
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
-    clap->userGUI    = cplug_createGUI(clap->userPlugin);
+    clap->userGUI    = cplug_createGUI(&clap->hostContext, clap->userPlugin);
     CPLUG_LOG_ASSERT_RETURN(clap->userGUI != NULL, false);
 
     return true;

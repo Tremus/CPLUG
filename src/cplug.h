@@ -233,7 +233,7 @@ enum
 
 // NOTE: For AUv2, your pointer MUST be castable to NSView. AUv2 hosts expect an NSView & you simply override methods
 // This is the only CPLUG method used in AUv2 builds.
-CPLUG_API void* cplug_createGUI(void* userPlugin);
+CPLUG_API void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin);
 CPLUG_API void  cplug_destroyGUI(void* userGUI);
 // If not NULL, set your window/view as a child/subview. If NULL, remove from parent/superview.
 // This is a good place to init/deinit your GFX and timer. Be prepared for this to be called multiple times with NULL

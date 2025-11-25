@@ -78,6 +78,8 @@ typedef struct CplugWindow
     void* gui;
     void* plugin;
 
+    CplugHostContext* host_ctx;
+
     WCHAR ClassName[48];
     HWND  hwnd;
     HHOOK hGetMessageHook;
@@ -151,42 +153,6 @@ typedef struct CplugWindow
         HANDLE hThread;
     } ChooseFile;
 } CplugWindow;
-
-#ifndef CPLUG_BUILD_STANDALONE
-HINSTANCE g_DLL = NULL;
-
-__declspec(dllexport) BOOL WINAPI DllMain(
-    HINSTANCE hinstDLL,  // handle to DLL module
-    DWORD     fdwReason, // reason for calling function
-    LPVOID    lpvReserved)  // reserved
-{
-    // cplug_log("DllMain => %p %lu %p", hinstDLL, fdwReason, lpvReserved);
-
-    // Perform actions based on the reason for calling.
-    switch (fdwReason)
-    {
-    case DLL_PROCESS_ATTACH:
-        // Initialize once for each new process.
-        // Return FALSE to fail DLL load.
-        g_DLL = hinstDLL;
-        break;
-
-    case DLL_THREAD_ATTACH:
-        // Do thread-specific initialization.
-        break;
-
-    case DLL_THREAD_DETACH:
-        // Do thread-specific cleanup.
-        break;
-
-    case DLL_PROCESS_DETACH:
-        // Perform any necessary cleanup.
-        g_DLL = NULL;
-        break;
-    }
-    return TRUE; // Successful DLL_PROCESS_ATTACH.
-}
-#endif // CPLUG_BUILD_STANDALONE
 
 LPSTR PWMakeUTF8String(PWCHAR utf16)
 {
@@ -1235,19 +1201,31 @@ void pw_get_keyboard_focus(void* _pw)
 {
     // cplug_log("pw_get_keyboard_focus => %p", _pw);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setfocus
+    // https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexw
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowshookexw
     CplugWindow* pw = _pw;
     if (pw->hPrevKeyboardFocus == NULL)
         pw->hPrevKeyboardFocus = SetFocus(pw->hwnd);
 
-#ifndef CPLUG_BUILD_STANDALONE
-    // This is a hack to deal with DAWs that use questionable win32 tricks
-    // https://forum.juce.com/t/vst-plugin-isnt-getting-keystrokes/1633/71
-    PW_ASSERT(pw->hGetMessageHook == NULL);
-    if (pw->hGetMessageHook == NULL)
-        pw->hGetMessageHook = SetWindowsHookExW(WH_GETMESSAGE, PWGetMsgProc, g_DLL, 0);
-    PW_ASSERT(pw->hGetMessageHook != NULL);
-#endif
+    if (pw->host_ctx->type != CPLUG_PLUGIN_IS_STANDALONE)
+    {
+        // This is a hack to deal with DAWs that use questionable win32 tricks
+        // https://forum.juce.com/t/vst-plugin-isnt-getting-keystrokes/1633/71
+        PW_ASSERT(pw->hGetMessageHook == NULL);
+        if (pw->hGetMessageHook == NULL)
+        {
+            DWORD Flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+            static HMODULE hModule = NULL;
+            if (hModule == NULL)
+            {
+                BOOL ok = GetModuleHandleExW(Flags, (LPCWSTR)&hModule, &hModule);
+                PW_ASSERT(ok);
+            }
+            if (hModule)
+                pw->hGetMessageHook = SetWindowsHookExW(WH_GETMESSAGE, PWGetMsgProc, hModule, 0);
+        }
+        PW_ASSERT(pw->hGetMessageHook != NULL);
+    }
 }
 
 bool pw_check_keyboard_focus(const void* _pw)
@@ -1262,14 +1240,16 @@ void pw_release_keyboard_focus(void* _pw)
 {
     // cplug_log("pw_release_keyboard_focus => %p", _pw);
     CplugWindow* pw = _pw;
-#ifndef CPLUG_BUILD_STANDALONE
-    PW_ASSERT(pw->hGetMessageHook != NULL);
-    if (pw->hGetMessageHook)
+
+    if (pw->host_ctx->type != CPLUG_PLUGIN_IS_STANDALONE)
     {
-        UnhookWindowsHookEx(pw->hGetMessageHook);
-        pw->hGetMessageHook = NULL;
+        PW_ASSERT(pw->hGetMessageHook != NULL);
+        if (pw->hGetMessageHook)
+        {
+            UnhookWindowsHookEx(pw->hGetMessageHook);
+            pw->hGetMessageHook = NULL;
+        }
     }
-#endif
 
     if (pw->hPrevKeyboardFocus)
     {
@@ -1625,12 +1605,13 @@ void pw_drag_files(void* _pw, const char* const* paths, uint32_t num_paths)
     }
 }
 
-void* cplug_createGUI(void* userPlugin)
+void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 {
     // cplug_log("cplug_createGUI => %p", userPlugin);
     CplugWindow* pw = (void*)PW_MALLOC(sizeof(CplugWindow));
     memset(pw, 0, sizeof(*pw));
-    pw->plugin = userPlugin;
+    pw->plugin   = userPlugin;
+    pw->host_ctx = host_ctx;
 
     pw->DropTarget.lpVtbl              = &pw->DropTarget.Vtbl;
     pw->DropTarget.Vtbl.QueryInterface = PWDropTarget_QueryInterface;

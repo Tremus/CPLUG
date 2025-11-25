@@ -1442,7 +1442,7 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
     view->contentScaleSupport.base.setContentScaleFactor = VST3ViewContentScale_setContentScaleFactor;
     view->contentScaleSupport.refcounter                 = 1;
 
-    view->userGUI = cplug_createGUI(vst3->userPlugin);
+    view->userGUI = cplug_createGUI(&vst3->hostContext, vst3->userPlugin);
     CPLUG_LOG_ASSERT(view->userGUI != NULL);
 
     return (Steinberg_IPlugView*)view;
