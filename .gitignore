@@ -3,3 +3,10 @@
 .DS_Store
 .ideas
 build
+
+*.pdb
+*.ilk
+*.exp
+*.vst3
+*.lib
+*.rdi
