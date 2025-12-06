@@ -1069,6 +1069,11 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             .key.modifiers   = PWGetKeyModifiers(),
         };
 
+        BOOL KeyRepeated = (keyFlags & KF_REPEAT) == KF_REPEAT;
+        // Note: if the key was held down and "repeated", Windows will still set this flag on a key up event.
+        if (KeyRepeated)
+            e.key.modifiers |= PW_MOD_KEY_REPEAT;
+
         pw_event(&e);
         return 0;
     }
