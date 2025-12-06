@@ -30,7 +30,7 @@
 
 #ifdef PW_DX11
 #include <d3d11.h>
-#include <dxgi.h>
+#include <dxgi1_2.h>
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxguid.lib")
 
@@ -120,10 +120,11 @@ typedef struct CplugWindow
     UINT64   OpenWindowBit;
     HMONITOR LastMonitor;
 
-    DXGI_SWAP_CHAIN_DESC SwapChainDesc;
-    IDXGISwapChain*      pSwapchain;
-    ID3D11Device*        pDevice;
-    ID3D11DeviceContext* pDeviceContext;
+    DXGI_SWAP_CHAIN_DESC1 SwapChainDesc1;
+    DXGI_MODE_DESC        ModeDesc;
+    IDXGISwapChain1*      pSwapchain1;
+    ID3D11Device*         pDevice;
+    ID3D11DeviceContext*  pDeviceContext;
 
     ID3D11Texture2D*        pRenderTarget;
     ID3D11RenderTargetView* pRenderTargetView;
@@ -825,18 +826,19 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
 {
     // cplug_log("pw_dx11_create_render_target => %p", pw);
 
-    PW_ASSERT(pw->pSwapchain);
+    PW_ASSERT(pw->pSwapchain1);
 
-    HRESULT hr = pw->pSwapchain->lpVtbl->GetBuffer(pw->pSwapchain, 0, &IID_ID3D11Texture2D, (void**)&pw->pRenderTarget);
+    HRESULT hr =
+        pw->pSwapchain1->lpVtbl->GetBuffer(pw->pSwapchain1, 0, &IID_ID3D11Texture2D, (void**)&pw->pRenderTarget);
     PW_ASSERT(SUCCEEDED(hr));
     PW_ASSERT(pw->pRenderTarget);
     if (pw->pRenderTarget)
     {
         D3D11_RENDER_TARGET_VIEW_DESC ViewDesc;
         memset(&ViewDesc, 0, sizeof(ViewDesc));
-        ViewDesc.Format = pw->SwapChainDesc.BufferDesc.Format;
+        ViewDesc.Format = pw->SwapChainDesc1.Format;
         ViewDesc.ViewDimension =
-            (pw->SwapChainDesc.SampleDesc.Count > 1) ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
+            (pw->SwapChainDesc1.SampleDesc.Count > 1) ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 
         hr = pw->pDevice->lpVtbl->CreateRenderTargetView(
             pw->pDevice,
@@ -852,11 +854,11 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
     DepthStencilDesc.ArraySize          = 1;
     DepthStencilDesc.BindFlags          = D3D11_BIND_DEPTH_STENCIL;
     DepthStencilDesc.Format             = DXGI_FORMAT_D24_UNORM_S8_UINT;
-    DepthStencilDesc.Width              = pw->SwapChainDesc.BufferDesc.Width;
-    DepthStencilDesc.Height             = pw->SwapChainDesc.BufferDesc.Height;
+    DepthStencilDesc.Width              = pw->SwapChainDesc1.Width;
+    DepthStencilDesc.Height             = pw->SwapChainDesc1.Height;
     DepthStencilDesc.MipLevels          = 1;
-    DepthStencilDesc.SampleDesc.Count   = pw->SwapChainDesc.SampleDesc.Count;
-    DepthStencilDesc.SampleDesc.Quality = pw->SwapChainDesc.SampleDesc.Quality;
+    DepthStencilDesc.SampleDesc.Count   = pw->SwapChainDesc1.SampleDesc.Count;
+    DepthStencilDesc.SampleDesc.Quality = pw->SwapChainDesc1.SampleDesc.Quality;
 
     hr = pw->pDevice->lpVtbl->CreateTexture2D(pw->pDevice, &DepthStencilDesc, NULL, &pw->pDepthStencil);
     PW_ASSERT(SUCCEEDED(hr));
@@ -867,7 +869,7 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
         memset(&DepthViewDesc, 0, sizeof(DepthViewDesc));
         DepthViewDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
         DepthViewDesc.ViewDimension =
-            (pw->SwapChainDesc.SampleDesc.Count > 1) ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
+            (pw->SwapChainDesc1.SampleDesc.Count > 1) ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
         hr = pw->pDevice->lpVtbl->CreateDepthStencilView(
             pw->pDevice,
             (ID3D11Resource*)pw->pDepthStencil,
@@ -1116,12 +1118,12 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 pw->LastMonitor = CurrentMonitor;
 
                 DWORD NewDisplayFrequency = pw_get_monitor_display_frequency(pw);
-                if (NewDisplayFrequency != pw->SwapChainDesc.BufferDesc.RefreshRate.Numerator)
+                if (NewDisplayFrequency != pw->ModeDesc.RefreshRate.Numerator)
                 {
-                    pw->SwapChainDesc.BufferDesc.RefreshRate.Numerator = NewDisplayFrequency;
+                    pw->ModeDesc.RefreshRate.Numerator = NewDisplayFrequency;
 
                     // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizetarget
-                    HRESULT hr = pw->pSwapchain->lpVtbl->ResizeTarget(pw->pSwapchain, &pw->SwapChainDesc.BufferDesc);
+                    HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
                     PW_ASSERT(SUCCEEDED(hr));
                 }
             }
@@ -1134,7 +1136,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         UINT Flags = 0;
         if (pw->IsWindows10OrGreater)
             Flags |= DXGI_PRESENT_DO_NOT_WAIT;
-        pw->pSwapchain->lpVtbl->Present(pw->pSwapchain, 0, Flags);
+        pw->pSwapchain1->lpVtbl->Present(pw->pSwapchain1, 0, Flags);
 #endif
         return 0;
     }
@@ -1698,10 +1700,10 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     PW_ASSERT(SUCCEEDED(hr));
 
 #ifdef PW_DX11
-    IDXGIOutput*  pOutput     = NULL;
-    IDXGIAdapter* pAdapter    = NULL;
-    IDXGIFactory* pFactory    = NULL;
-    IDXGIDevice1* pDXGIDevice = NULL;
+    IDXGIOutput*   pOutput      = NULL;
+    IDXGIAdapter*  pAdapter     = NULL;
+    IDXGIFactory2* pFactory2    = NULL;
+    IDXGIDevice1*  pDXGIDevice1 = NULL;
 
     // https://learn.microsoft.com/en-us/windows/win32/api/d3dcommon/ne-d3dcommon-d3d_driver_type
     static const D3D_DRIVER_TYPE DriverTypes[] = {
@@ -1761,30 +1763,30 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
     if (pw->pDevice)
     {
-        hr = pw->pDevice->lpVtbl->QueryInterface(pw->pDevice, &IID_IDXGIDevice1, (void**)&pDXGIDevice);
+        hr = pw->pDevice->lpVtbl->QueryInterface(pw->pDevice, &IID_IDXGIDevice1, (void**)&pDXGIDevice1);
         PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pDXGIDevice);
+        PW_ASSERT(pDXGIDevice1);
     }
 
-    if (pDXGIDevice)
+    if (pDXGIDevice1)
     {
-        hr = pDXGIDevice->lpVtbl->SetMaximumFrameLatency(pDXGIDevice, 1);
+        hr = pDXGIDevice1->lpVtbl->SetMaximumFrameLatency(pDXGIDevice1, 1);
         PW_ASSERT(SUCCEEDED(hr));
-        hr = pDXGIDevice->lpVtbl->GetAdapter(pDXGIDevice, &pAdapter);
+        hr = pDXGIDevice1->lpVtbl->GetAdapter(pDXGIDevice1, &pAdapter);
         PW_ASSERT(SUCCEEDED(hr));
         PW_ASSERT(pAdapter);
         if (pAdapter)
         {
-            hr = pAdapter->lpVtbl->GetParent(pAdapter, &IID_IDXGIFactory, (void**)&pFactory);
+            hr = pAdapter->lpVtbl->GetParent(pAdapter, &IID_IDXGIFactory2, (void**)&pFactory2);
             PW_ASSERT(SUCCEEDED(hr));
-            PW_ASSERT(pFactory);
+            PW_ASSERT(pFactory2);
             hr = pAdapter->lpVtbl->EnumOutputs(pAdapter, 0, &pOutput);
             PW_ASSERT(SUCCEEDED(hr));
             PW_ASSERT(pOutput);
         }
     }
 
-    if (pFactory)
+    if (pFactory2)
     {
         // Get default monitor
         if (pOutput)
@@ -1813,12 +1815,11 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
             pw->IsWindows10OrGreater = osInfo.dwMajorVersion >= 10;
         }
 
-        DXGI_SWAP_CHAIN_DESC* pSwapDesc               = &pw->SwapChainDesc;
-        pSwapDesc->BufferDesc.Width                   = Info.init_size.width;
-        pSwapDesc->BufferDesc.Height                  = Info.init_size.height;
-        pSwapDesc->BufferDesc.Format                  = DXGI_FORMAT_B8G8R8A8_UNORM;
-        pSwapDesc->BufferDesc.RefreshRate.Numerator   = DisplayFrequency;
-        pSwapDesc->BufferDesc.RefreshRate.Denominator = 1;
+        DXGI_SWAP_CHAIN_DESC1* pSwapDesc = &pw->SwapChainDesc1;
+        pSwapDesc->Width                 = Info.init_size.width;
+        pSwapDesc->Height                = Info.init_size.height;
+        pSwapDesc->Format                = DXGI_FORMAT_B8G8R8A8_UNORM;
+        pSwapDesc->Scaling               = DXGI_SCALING_NONE;
         // Flip discard is the recommended setting for optimal performance. IIRC it helps to remove any waiting for the
         // backbuffer to become available. This was introduced in Windows 10.
         if (pw->IsWindows10OrGreater)
@@ -1834,15 +1835,26 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         pSwapDesc->SampleDesc.Count   = 1;
         pSwapDesc->SampleDesc.Quality = 0;
         pSwapDesc->BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        pSwapDesc->OutputWindow       = pw->hwnd;
-        pSwapDesc->Windowed           = true;
 
-        hr = pFactory->lpVtbl->CreateSwapChain(pFactory, (IUnknown*)pw->pDevice, pSwapDesc, &pw->pSwapchain);
+        pw->ModeDesc.Width                   = pSwapDesc->Width;
+        pw->ModeDesc.Height                  = pSwapDesc->Height;
+        pw->ModeDesc.RefreshRate.Numerator   = DisplayFrequency;
+        pw->ModeDesc.RefreshRate.Denominator = 1;
+        pw->ModeDesc.Format                  = pSwapDesc->Format;
+
+        hr = pFactory2->lpVtbl->CreateSwapChainForHwnd(
+            pFactory2,
+            (IUnknown*)pw->pDevice,
+            pw->hwnd,
+            pSwapDesc,
+            NULL,
+            NULL,
+            &pw->pSwapchain1);
         PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pw->pSwapchain);
+        PW_ASSERT(pw->pSwapchain1);
     }
 
-    if (pw->pSwapchain)
+    if (pw->pSwapchain1)
     {
         hr = pw_dx11_create_render_target(pw);
         PW_ASSERT(SUCCEEDED(hr));
@@ -1852,10 +1864,10 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_ASSERT(pw->pDepthStencilView);
     }
 
-    PW_DX11_RELEASE(pFactory)
+    PW_DX11_RELEASE(pFactory2)
     PW_DX11_RELEASE(pAdapter)
     PW_DX11_RELEASE(pOutput)
-    PW_DX11_RELEASE(pDXGIDevice)
+    PW_DX11_RELEASE(pDXGIDevice1)
 #endif
 
     pw->gui = pw_create_gui(pw->plugin, pw);
@@ -1895,7 +1907,7 @@ void cplug_destroyGUI(void* userGUI)
     PW_DX11_RELEASE(pw->pRenderTargetView)
     PW_DX11_RELEASE(pw->pDepthStencil)
     PW_DX11_RELEASE(pw->pDepthStencilView)
-    PW_DX11_RELEASE(pw->pSwapchain)
+    PW_DX11_RELEASE(pw->pSwapchain1)
     PW_DX11_RELEASE(pw->pDeviceContext)
     PW_DX11_RELEASE(pw->pDevice)
 #endif
@@ -2041,18 +2053,23 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     PW_DX11_RELEASE(pw->pDepthStencil)
     PW_DX11_RELEASE(pw->pDepthStencilView)
 
-    pw->SwapChainDesc.BufferDesc.Width  = width;
-    pw->SwapChainDesc.BufferDesc.Height = height;
+    pw->SwapChainDesc1.Width  = width;
+    pw->SwapChainDesc1.Height = height;
+    pw->ModeDesc.Width        = width;
+    pw->ModeDesc.Height       = height;
 
-    if (pw->pSwapchain)
+    if (pw->pSwapchain1)
     {
-        HRESULT hr = pw->pSwapchain->lpVtbl->ResizeBuffers(
-            pw->pSwapchain,
-            pw->SwapChainDesc.BufferCount,
-            pw->SwapChainDesc.BufferDesc.Width,
-            pw->SwapChainDesc.BufferDesc.Height,
-            pw->SwapChainDesc.BufferDesc.Format,
+        HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeBuffers(
+            pw->pSwapchain1,
+            pw->SwapChainDesc1.BufferCount,
+            pw->SwapChainDesc1.Width,
+            pw->SwapChainDesc1.Height,
+            pw->SwapChainDesc1.Format,
             0);
+        PW_ASSERT(SUCCEEDED(hr));
+
+        hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
         PW_ASSERT(SUCCEEDED(hr));
 
         hr = pw_dx11_create_render_target(pw);
