@@ -887,6 +887,7 @@ void* cplug_createGUI(CplugHostContext* hostCtx, void* userPlugin)
     [pw registerForDraggedTypes:[NSArray arrayWithObjects:NSFilenamesPboardType, nil]];
 
     pw.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+    pw.layerContentsPlacement    = NSViewLayerContentsPlacementTopLeft;
     pw.layer.opaque              = YES;
 
 #ifdef PW_METAL
