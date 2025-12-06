@@ -1254,9 +1254,9 @@ static OSStatus AUMethodProcessAudio(
         CplugProcessContext* ctx    = &translator.cplugContext;
         HostCallbackInfo*    hostcb = &auv2->mHostCallbackInfo;
 
-        ctx->numFrames  = inNumFrames;
-        ctx->numInputs  = ioData->mNumberBuffers;
-        ctx->numOutputs = ioData->mNumberBuffers;
+        ctx->numFrames       = inNumFrames;
+        ctx->numInputBusses  = ioData->mNumberBuffers;
+        ctx->numOutputBusses = ioData->mNumberBuffers;
 
         if (hostcb->beatAndTempoProc)
         {

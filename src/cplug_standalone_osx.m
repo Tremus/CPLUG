@@ -951,13 +951,13 @@ OSStatus STAND_audioIOProc(
 
     OSXProcessContextTranlator translator;
     memset(&translator, 0, sizeof(translator));
-    translator.cplugContext.numFrames      = g_audioBlockSize;
-    translator.cplugContext.numInputs      = 0;
-    translator.cplugContext.numOutputs     = 2;
-    translator.cplugContext.enqueueEvent   = OSXProcessContext_enqueueEvent;
-    translator.cplugContext.dequeueEvent   = OSXProcessContext_dequeueEvent;
-    translator.cplugContext.getAudioInput  = OSXProcessContext_getAudioInput;
-    translator.cplugContext.getAudioOutput = OSXProcessContext_getAudioOutput;
+    translator.cplugContext.numFrames       = g_audioBlockSize;
+    translator.cplugContext.numInputBusses  = 0;
+    translator.cplugContext.numOutputBusses = 1;
+    translator.cplugContext.enqueueEvent    = OSXProcessContext_enqueueEvent;
+    translator.cplugContext.dequeueEvent    = OSXProcessContext_dequeueEvent;
+    translator.cplugContext.getAudioInput   = OSXProcessContext_getAudioInput;
+    translator.cplugContext.getAudioOutput  = OSXProcessContext_getAudioOutput;
 
     translator.output[0] = (float*)STAND_roundUp((UInt64)&g_audioBuffer, 32);
     translator.output[1] = translator.output[0] + g_audioBlockSize;
