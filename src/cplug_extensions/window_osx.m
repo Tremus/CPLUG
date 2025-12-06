@@ -144,6 +144,9 @@ bool pwHandleKeyDown(CplugWindow* pw, NSEvent* event)
     e.key.modifiers   = pwTranslateModifierFlags(pw, event);
     e.key.virtual_key = [event keyCode];
 
+    if (event.isARepeat)
+        e.key.modifiers |= PW_MOD_KEY_REPEAT;
+
     eventConsumed = pw_event(&e);
 
     if (pw_check_keyboard_focus(pw))

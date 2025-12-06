@@ -588,9 +588,11 @@ enum
     PW_MOD_KEY_SHIFT     = 1 << 5,
     PW_MOD_KEY_CMD       = 1 << 6,
     PW_MOD_KEY_OPTION    = 1 << 7,
+    // User is holding down the key and the OS is spamming events
+    PW_MOD_KEY_REPEAT = 1 << 8,
     // Flag set when touch events are inverted on Apple devices
     // See: [NSEvent isDirectionInvertedFromDevice]
-    PW_MOD_INVERTED_SCROLL = 1 << 8,
+    PW_MOD_INVERTED_SCROLL = 1 << 9,
 
 #ifdef _WIN32
     PW_MOD_PLATFORM_KEY_CTRL = PW_MOD_KEY_CTRL,
