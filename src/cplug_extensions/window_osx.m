@@ -887,6 +887,8 @@ void* cplug_createGUI(CplugHostContext* hostCtx, void* userPlugin)
     [pw registerForDraggedTypes:[NSArray arrayWithObjects:NSFilenamesPboardType, nil]];
 
     pw.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+    // Setting layerContentsPlacement helps prevent gross looking stretching when resizing a window
+    // https://thume.ca/2019/06/19/glitchless-metal-window-resizing/
     pw.layerContentsPlacement    = NSViewLayerContentsPlacementTopLeft;
     pw.layer.opaque              = YES;
 

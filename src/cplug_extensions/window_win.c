@@ -1819,6 +1819,8 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         pSwapDesc->Width                 = Info.init_size.width;
         pSwapDesc->Height                = Info.init_size.height;
         pSwapDesc->Format                = DXGI_FORMAT_B8G8R8A8_UNORM;
+        // Defaults to stretch, but that looks bad when resizing. 
+        // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/ne-dxgi1_2-dxgi_scaling
         pSwapDesc->Scaling               = DXGI_SCALING_NONE;
         // Flip discard is the recommended setting for optimal performance. IIRC it helps to remove any waiting for the
         // backbuffer to become available. This was introduced in Windows 10.
