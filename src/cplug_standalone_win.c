@@ -317,6 +317,7 @@ HCMNOTIFICATION g_hCMNotification;
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 HWND             g_hwnd = NULL;
+float            g_dpi  = 1;
 
 static inline UINT64 CPWIN_RoundUp(UINT64 v, UINT64 align)
 {
@@ -355,6 +356,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     memset(&g_MIDI, 0, sizeof(g_MIDI));
     memset(&g_Audio, 0, sizeof(g_Audio));
     memset(&g_Menus, 0, sizeof(g_Menus));
+
+    // Warning: Windows 10+
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setprocessdpiawarenesscontext
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
 
     CPWIN_LoadPlugin();
 
@@ -401,11 +408,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     // INIT WINDOW //
     /////////////////
 
-    // Warning: Windows 10+
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setprocessdpiawarenesscontext
-    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+    g_dpi = (float)GetDpiForSystem() / (float)USER_DEFAULT_SCREEN_DPI;
+
+    g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
+    cplug_assert(g_plugin.UserGUI != NULL);
+
+    g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
+
+    uint32_t guiWidth, guiHeight;
+    g_plugin.getSize(g_plugin.UserGUI, &guiWidth, &guiHeight);
 
     MSG msg;
 
@@ -425,12 +436,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         fprintf(stderr, "Could not register window class\n");
         return 1;
     }
-
-    g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
-    cplug_assert(g_plugin.UserGUI != NULL);
-
-    uint32_t guiWidth, guiHeight;
-    g_plugin.getSize(g_plugin.UserGUI, &guiWidth, &guiHeight);
 
     RECT rect = {0, 0, (LONG)guiWidth, (LONG)guiHeight};
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
@@ -722,6 +727,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
                 g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
                 cplug_assert(g_plugin.UserGUI != NULL);
+                g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
                 if (width && height)
                     g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
 
@@ -877,11 +883,13 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         }
         return 0;
     }
+    // https://learn.microsoft.com/en-us/windows/win32/hidpi/wm-dpichanged
     case WM_DPICHANGED:
     {
-        int   g_dpi  = HIWORD(wParam);
-        FLOAT fscale = (float)g_dpi / USER_DEFAULT_SCREEN_DPI;
-        g_plugin.setScaleFactor(g_plugin.UserGUI, fscale);
+        int Yaxis = HIWORD(wParam);
+        int Xaxis = LOWORD(wParam);
+        g_dpi     = (float)Yaxis / USER_DEFAULT_SCREEN_DPI;
+        g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
 
         RECT* const prcNewWindow = (RECT*)lParam;
         SetWindowPos(

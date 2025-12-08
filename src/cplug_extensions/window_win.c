@@ -1688,9 +1688,9 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_UNIQUE_INT_ID = EpochTimeMs;
     SetWindowLongPtrW(pw->hwnd, GWLP_ID, PW_UNIQUE_INT_ID);
 
-    // GetDpiForWindow is Windows 10+
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow
-    pw->dpi = GetDpiForWindow(pw->hwnd) / 96.0f;
+    // NOTE: Ableton and FL Studio have options to allow users to disable DPI scaling, which causes the DAW to stop
+    // calling cplug_setScaleFactor()
+    pw->dpi = 1.0f;
 
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-oleinitialize
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-registerdragdrop
@@ -1819,9 +1819,9 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         pSwapDesc->Width                 = Info.init_size.width;
         pSwapDesc->Height                = Info.init_size.height;
         pSwapDesc->Format                = DXGI_FORMAT_B8G8R8A8_UNORM;
-        // Defaults to stretch, but that looks bad when resizing. 
+        // Defaults to stretch, but that looks bad when resizing.
         // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/ne-dxgi1_2-dxgi_scaling
-        pSwapDesc->Scaling               = DXGI_SCALING_NONE;
+        pSwapDesc->Scaling = DXGI_SCALING_NONE;
         // Flip discard is the recommended setting for optimal performance. IIRC it helps to remove any waiting for the
         // backbuffer to become available. This was introduced in Windows 10.
         if (pw->IsWindows10OrGreater)
@@ -2003,7 +2003,7 @@ void cplug_setVisible(void* userGUI, bool visible)
 
 void cplug_setScaleFactor(void* userGUI, float scale)
 {
-    // cplug_log("cplug_setScaleFactor => %p %f", userGUI, scale);
+    cplug_log("cplug_setScaleFactor => %p %f", userGUI, scale);
     CplugWindow* pw = userGUI;
     pw->dpi         = scale;
 
