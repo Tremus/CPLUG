@@ -603,9 +603,28 @@ enum
 #endif
 };
 
+typedef enum PWResizeDirection
+{
+    PW_RESIZE_UNKNOWN,
+    PW_RESIZE_LEFT,
+    PW_RESIZE_RIGHT,
+    PW_RESIZE_TOP,
+    PW_RESIZE_TOPLEFT,
+    PW_RESIZE_TOPRIGHT,
+    PW_RESIZE_BOTTOM,
+    PW_RESIZE_BOTTOMLEFT,
+    PW_RESIZE_BOTTOMRIGHT,
+} PWResizeDirection;
+
 enum PWEventType
 {
-    PW_EVENT_RESIZE,
+    // Sent when user is begins resizing from corner or edge
+    PW_EVENT_RESIZE_BEGIN,
+    // The host window is requesting to update to a new size
+    // Note that this may not be preceded by PW_EVENT_RESIZE_BEGIN, or followed by PW_EVENT_RESIZE_END
+    PW_EVENT_RESIZE_UPDATE,
+    // Sent when user has finished resizing from corner or edge
+    PW_EVENT_RESIZE_END,
     PW_EVENT_DPI_CHANGED,
 
     PW_EVENT_MOUSE_EXIT,
@@ -640,10 +659,12 @@ typedef struct PWEvent
 
     union
     {
-        // PW_EVENT_RESIZE
+        // PW_EVENT_RESIZE_UPDATE
         struct
         {
             uint32_t width, height;
+
+            PWResizeDirection direction;
         } resize;
 
         // PW_EVENT_DPI_CHANGED
@@ -708,19 +729,6 @@ enum PWInfoType
     PW_INFO_INIT_SIZE,
     PW_INFO_CONSTRAIN_SIZE,
 };
-
-typedef enum PWResizeDirection
-{
-    PW_RESIZE_UNKNOWN,
-    PW_RESIZE_LEFT,
-    PW_RESIZE_RIGHT,
-    PW_RESIZE_TOP,
-    PW_RESIZE_TOPLEFT,
-    PW_RESIZE_TOPRIGHT,
-    PW_RESIZE_BOTTOM,
-    PW_RESIZE_BOTTOMLEFT,
-    PW_RESIZE_BOTTOMRIGHT,
-} PWResizeDirection;
 
 typedef struct PWGetInfo
 {

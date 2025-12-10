@@ -54,8 +54,6 @@
 
 // This is required by a hack to tag our window within a Hook Proc
 static UINT_PTR PW_UNIQUE_INT_ID = 0;
-// This is required by a hack to detect how the parent window is resizing.
-static PWResizeDirection g_ResizeDirection = PW_RESIZE_UNKNOWN;
 #ifdef PW_DX11
 // This is required by a hack that detects when the window and moved to a new monitor
 // It's also a lazy solution to avoid managing a dynamic array of pointers
@@ -91,6 +89,9 @@ typedef struct CplugWindow
 
     // Windows has no WM_MOUSEMOVE event, so we have to do this.
     BOOL MouseIsOver;
+
+    // BOOL IsResizingFromCornerOrEdge;
+    PWResizeDirection ResizeDirection;
 
     float dpi;
 
@@ -1156,8 +1157,8 @@ LRESULT CALLBACK PWGetMsgProc(int nCode, WPARAM wParam, LPARAM lParam)
     // Check application is trying to dequeue a message
     if (nCode == HC_ACTION && wParam == PM_REMOVE)
     {
-        if ((msg->message == WM_KEYDOWN || msg->message == WM_KEYUP || msg->message == WM_CHAR) &&
-            GetWindowLongPtrW(msg->hwnd, GWLP_ID) == PW_UNIQUE_INT_ID)
+        BOOL IsKeyEvent = msg->message == WM_KEYDOWN | msg->message == WM_KEYUP | msg->message == WM_CHAR;
+        if (IsKeyEvent && GetWindowLongPtrW(msg->hwnd, GWLP_ID) == PW_UNIQUE_INT_ID)
         {
             PWWndProc(msg->hwnd, msg->message, msg->wParam, msg->lParam);
 
@@ -1183,6 +1184,27 @@ LRESULT CALLBACK PWGetMsgProc(int nCode, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
+// https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/ms633493(v=vs.85)
+BOOL PWFindWindow_EnumChildProc(HWND hwnd, LPARAM UserData)
+{
+    BOOL IsOurWindow = GetWindowLongPtrW(hwnd, GWLP_ID) == PW_UNIQUE_INT_ID;
+    if (IsOurWindow)
+    {
+        CplugWindow*  pw  = (void*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        CplugWindow** ppw = (CplugWindow**)UserData;
+        *ppw              = pw;
+    }
+    return !IsOurWindow;
+}
+
+CplugWindow* PWFindWindow(HWND hwnd)
+{
+    CplugWindow* pw = NULL;
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumchildwindows
+    EnumChildWindows(hwnd, PWFindWindow_EnumChildProc, (LPARAM)&pw);
+    return pw;
+}
+
 // https://learn.microsoft.com/en-us/windows/win32/winmsg/callwndproc
 LRESULT CALLBACK PWCallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
@@ -1191,14 +1213,34 @@ LRESULT CALLBACK PWCallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
     {
         CWPSTRUCT* cwp = (CWPSTRUCT*)lParam;
 
-        if (cwp->message == WM_SIZING)
+        // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-entersizemove
+        // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-exitsizemove
+        // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
+        if (cwp->message == WM_ENTERSIZEMOVE || cwp->message == WM_EXITSIZEMOVE || cwp->message == WM_SIZING)
         {
-            // I've spotted Windows 11 sending cwp->wParam == 9, which is undocumented and possibly a bug
-            // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
-            if (cwp->wParam > PW_RESIZE_UNKNOWN && cwp->wParam <= PW_RESIZE_BOTTOMRIGHT)
-                g_ResizeDirection = cwp->wParam;
-            else
-                g_ResizeDirection = PW_RESIZE_UNKNOWN;
+            CplugWindow* pw = PWFindWindow(cwp->hwnd);
+            if (pw)
+            {
+                if (cwp->message == WM_SIZING)
+                {
+                    // I've spotted Windows 11 sending cwp->wParam == 9, which is undocumented and possibly a bug
+                    if (cwp->wParam > PW_RESIZE_UNKNOWN && cwp->wParam <= PW_RESIZE_BOTTOMRIGHT)
+                        pw->ResizeDirection = cwp->wParam;
+                    else
+                        pw->ResizeDirection = PW_RESIZE_UNKNOWN;
+                }
+                if (cwp->message == WM_ENTERSIZEMOVE)
+                {
+                    PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN};
+                    pw_event(&event);
+                }
+                if (cwp->message == WM_EXITSIZEMOVE)
+                {
+                    PWEvent event = {.type = PW_EVENT_RESIZE_END};
+                    pw_event(&event);
+                    pw->ResizeDirection = PW_RESIZE_UNKNOWN;
+                }
+            }
         }
     }
     return 0;
@@ -2035,7 +2077,7 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
            .constrain_size.gui       = pw->gui,
            .constrain_size.width     = *width,
            .constrain_size.height    = *height,
-           .constrain_size.direction = g_ResizeDirection,
+           .constrain_size.direction = pw->ResizeDirection,
     };
     pw_get_info(&Info);
     *width  = Info.constrain_size.width;
@@ -2084,10 +2126,11 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 #endif
 
     pw_event(&(PWEvent){
-        .type          = PW_EVENT_RESIZE,
-        .gui           = pw->gui,
-        .resize.width  = width,
-        .resize.height = height,
+        .type             = PW_EVENT_RESIZE_UPDATE,
+        .gui              = pw->gui,
+        .resize.width     = width,
+        .resize.height    = height,
+        .resize.direction = pw->ResizeDirection,
     });
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos
     const UINT uFlags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOMOVE;
