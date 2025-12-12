@@ -1699,6 +1699,48 @@ bool VST3ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const C
         Steinberg_tresult result = queue->lpVtbl->addPoint(queue, frameIdx, normalised, &idx);
         return result == Steinberg_kResultOk;
     }
+    // TODO: Get this or similar working in Bitwig
+    // The hope is that we can relay MIDI/note on/off events to FX plugins later in the FX chain
+    /*
+    case CPLUG_EVENT_MIDI:
+    {
+        if (vst3ctx->data->outputEvents && vst3ctx->data->outputEvents->lpVtbl->addEvent)
+        {
+            struct Steinberg_Vst_Event vst3Midi;
+            memset(&vst3Midi, 0, sizeof(vst3Midi));
+            vst3Midi.sampleOffset = frameIdx;
+
+            if ((event->midi.status & 0xf0) == 0x90)
+            {
+                struct Steinberg_Vst_NoteOnEvent* noteOn = &vst3Midi.Steinberg_Vst_Event_noteOn;
+
+                vst3Midi.type    = Steinberg_Vst_Event_EventTypes_kNoteOnEvent;
+                noteOn->channel  = event->midi.status & 0x0f;
+                noteOn->pitch    = event->midi.data1;
+                noteOn->velocity = (float)event->midi.data2 / 127.0f;
+                noteOn->noteId   = event->midi.data1;
+                if (noteOn->velocity > 1)
+                    noteOn->velocity = 1;
+                Steinberg_tresult result = vst3ctx->data->outputEvents->lpVtbl->addEvent(vst3ctx->data, &vst3Midi);
+                return result == Steinberg_kResultOk;
+            }
+            else if ((event->midi.status & 0xf0) == 0x80)
+            {
+                struct Steinberg_Vst_NoteOffEvent* noteOff = &vst3Midi.Steinberg_Vst_Event_noteOff;
+
+                vst3Midi.type     = Steinberg_Vst_Event_EventTypes_kNoteOffEvent;
+                noteOff->channel  = event->midi.status & 0x0f;
+                noteOff->pitch    = event->midi.data1;
+                noteOff->velocity = (float)event->midi.data2 / 127.0f;
+                noteOff->noteId   = event->midi.data1;
+                if (noteOff->velocity > 1)
+                    noteOff->velocity = 1;
+                Steinberg_tresult result = vst3ctx->data->outputEvents->lpVtbl->addEvent(vst3ctx->data, &vst3Midi);
+                return result == Steinberg_kResultOk;
+            }
+        }
+    }
+    */
     default:
         break;
     }

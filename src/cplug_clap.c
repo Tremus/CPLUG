@@ -567,12 +567,12 @@ typedef struct ClapProcessContextTranslator
     uint32_t              numEvents;
 } ClapProcessContextTranslator;
 
-bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const CplugEvent* paramEvent, uint32_t frameIdx)
+bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const CplugEvent* cplugEvent, uint32_t frameIdx)
 {
     ClapProcessContextTranslator* translator = (ClapProcessContextTranslator*)ctx;
     const clap_process_t*         process    = translator->process;
 
-    switch (paramEvent->type)
+    switch (cplugEvent->type)
     {
     case CPLUG_EVENT_PARAM_CHANGE_BEGIN:
     case CPLUG_EVENT_PARAM_CHANGE_END:
@@ -580,9 +580,10 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         clap_event_param_gesture_t event;
         memset(&event, 0, sizeof(event));
         event.header.size = sizeof(event);
-        event.header.type = paramEvent->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN ? CLAP_EVENT_PARAM_GESTURE_BEGIN
+        event.header.time = frameIdx;
+        event.header.type = cplugEvent->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN ? CLAP_EVENT_PARAM_GESTURE_BEGIN
                                                                                : CLAP_EVENT_PARAM_GESTURE_END;
-        event.param_id    = paramEvent->parameter.id;
+        event.param_id    = cplugEvent->parameter.id;
         return process->out_events->try_push(process->out_events, &event.header);
     }
     case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
@@ -590,9 +591,24 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         clap_event_param_value_t event;
         memset(&event, 0, sizeof(event));
         event.header.size = sizeof(event);
+        event.header.time = frameIdx;
         event.header.type = CLAP_EVENT_PARAM_VALUE;
-        event.param_id    = paramEvent->parameter.id;
-        event.value       = paramEvent->parameter.value;
+        event.param_id    = cplugEvent->parameter.id;
+        event.value       = cplugEvent->parameter.value;
+        return process->out_events->try_push(process->out_events, &event.header);
+    }
+    case CPLUG_EVENT_MIDI:
+    {
+        clap_event_midi_t event;
+        memset(&event, 0, sizeof(event));
+        event.header.size = sizeof(event);
+        event.header.time = frameIdx;
+        event.header.type = CLAP_EVENT_MIDI;
+
+        event.data[0] = cplugEvent->midi.bytes[0];
+        event.data[1] = cplugEvent->midi.bytes[1];
+        event.data[2] = cplugEvent->midi.bytes[2];
+
         return process->out_events->try_push(process->out_events, &event.header);
     }
     default:
