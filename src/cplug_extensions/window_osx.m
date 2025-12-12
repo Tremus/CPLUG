@@ -369,7 +369,7 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
     {
         const PWEvent event = {
             .gui    = gui,
-            .type   = PW_EVENT_RESIZE,
+            .type   = PW_EVENT_RESIZE_UPDATE,
             .resize = {
                 .width  = newSize.width,
                 .height = newSize.height,
@@ -418,14 +418,18 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
 
 - (void)parentWindowStartResize
 {
-    NSRect rect            = self.window.frame;
-    self->resizeStartFrame = rect;
-    self->pwResizeFlags    = PW_FLAG_RESIZE_UNKNOWN;
+    NSRect rect                = self.window.frame;
+    self->resizeStartFrame     = rect;
+    self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
+    const struct PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN, .gui = self};
+    pw_event(&event);
 }
 
 - (void)parentWindowEndResize
 {
-    self->pwResizeFlags = PW_FLAG_RESIZE_UNKNOWN;
+    self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
+    const struct PWEvent event = {.type = PW_EVENT_RESIZE_END, .gui = self};
+    pw_event(&event);
 }
 
 - (void)parentWindowLostKeyboardFocus
@@ -889,8 +893,8 @@ void* cplug_createGUI(CplugHostContext* hostCtx, void* userPlugin)
     pw.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     // Setting layerContentsPlacement helps prevent gross looking stretching when resizing a window
     // https://thume.ca/2019/06/19/glitchless-metal-window-resizing/
-    pw.layerContentsPlacement    = NSViewLayerContentsPlacementTopLeft;
-    pw.layer.opaque              = YES;
+    pw.layerContentsPlacement = NSViewLayerContentsPlacementTopLeft;
+    pw.layer.opaque           = YES;
 
 #ifdef PW_METAL
     pw.device                  = MTLCreateSystemDefaultDevice();
