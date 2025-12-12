@@ -1231,12 +1231,12 @@ LRESULT CALLBACK PWCallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
                 }
                 if (cwp->message == WM_ENTERSIZEMOVE)
                 {
-                    PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN};
+                    PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN, .gui = pw->gui};
                     pw_event(&event);
                 }
                 if (cwp->message == WM_EXITSIZEMOVE)
                 {
-                    PWEvent event = {.type = PW_EVENT_RESIZE_END};
+                    PWEvent event = {.type = PW_EVENT_RESIZE_END, .gui = pw->gui};
                     pw_event(&event);
                     pw->ResizeDirection = PW_RESIZE_UNKNOWN;
                 }
