@@ -2092,36 +2092,39 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     PW_ASSERT(height > 0);
 
 #ifdef PW_DX11
-    PW_DX11_RELEASE(pw->pRenderTarget)
-    PW_DX11_RELEASE(pw->pRenderTargetView)
-    PW_DX11_RELEASE(pw->pDepthStencil)
-    PW_DX11_RELEASE(pw->pDepthStencilView)
-
-    pw->SwapChainDesc1.Width  = width;
-    pw->SwapChainDesc1.Height = height;
-    pw->ModeDesc.Width        = width;
-    pw->ModeDesc.Height       = height;
-
-    if (pw->pSwapchain1)
+    if (width != pw->SwapChainDesc1.Width || height != pw->SwapChainDesc1.Height)
     {
-        HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeBuffers(
-            pw->pSwapchain1,
-            pw->SwapChainDesc1.BufferCount,
-            pw->SwapChainDesc1.Width,
-            pw->SwapChainDesc1.Height,
-            pw->SwapChainDesc1.Format,
-            0);
-        PW_ASSERT(SUCCEEDED(hr));
+        PW_DX11_RELEASE(pw->pRenderTarget)
+        PW_DX11_RELEASE(pw->pRenderTargetView)
+        PW_DX11_RELEASE(pw->pDepthStencil)
+        PW_DX11_RELEASE(pw->pDepthStencilView)
 
-        hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
-        PW_ASSERT(SUCCEEDED(hr));
+        pw->SwapChainDesc1.Width  = width;
+        pw->SwapChainDesc1.Height = height;
+        pw->ModeDesc.Width        = width;
+        pw->ModeDesc.Height       = height;
 
-        hr = pw_dx11_create_render_target(pw);
-        PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pw->pRenderTarget);
-        PW_ASSERT(pw->pRenderTargetView);
-        PW_ASSERT(pw->pDepthStencil);
-        PW_ASSERT(pw->pDepthStencilView);
+        if (pw->pSwapchain1)
+        {
+            HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeBuffers(
+                pw->pSwapchain1,
+                pw->SwapChainDesc1.BufferCount,
+                pw->SwapChainDesc1.Width,
+                pw->SwapChainDesc1.Height,
+                pw->SwapChainDesc1.Format,
+                0);
+            PW_ASSERT(SUCCEEDED(hr));
+
+            hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
+            PW_ASSERT(SUCCEEDED(hr));
+
+            hr = pw_dx11_create_render_target(pw);
+            PW_ASSERT(SUCCEEDED(hr));
+            PW_ASSERT(pw->pRenderTarget);
+            PW_ASSERT(pw->pRenderTargetView);
+            PW_ASSERT(pw->pDepthStencil);
+            PW_ASSERT(pw->pDepthStencilView);
+        }
     }
 #endif
 
