@@ -129,7 +129,7 @@ void pw_tick(void* _gui)
 
 bool pw_event(const PWEvent* event)
 {
-    if (event->type == PW_EVENT_RESIZE)
+    if (event->type == PW_EVENT_RESIZE_UPDATE)
     {
         GUI*    gui    = event->gui;
         Plugin* plugin = gui->plugin;
