@@ -2045,7 +2045,7 @@ void cplug_setVisible(void* userGUI, bool visible)
 
 void cplug_setScaleFactor(void* userGUI, float scale)
 {
-    cplug_log("cplug_setScaleFactor => %p %f", userGUI, scale);
+    // cplug_log("cplug_setScaleFactor => %p %f", userGUI, scale);
     CplugWindow* pw = userGUI;
     pw->dpi         = scale;
 
