@@ -1053,8 +1053,10 @@ int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numByt
     cplug_assert(numBytesToWrite < (ctx->BytesReserved - ctx->BytesCommited));
     if (numBytesToWrite > (ctx->BytesCommited - ctx->BytesWritten))
     {
-        SIZE_T nextcommit = 2 * ctx->BytesCommited;
-        LPVOID retval     = VirtualAlloc(ctx->Data, nextcommit, MEM_COMMIT, PAGE_READWRITE);
+        SIZE_T nextcommit = 2 * (numBytesToWrite + ctx->BytesCommited);
+        if (nextcommit > ctx->BytesReserved)
+            nextcommit = ctx->BytesReserved;
+        LPVOID retval = VirtualAlloc(ctx->Data, nextcommit, MEM_COMMIT, PAGE_READWRITE);
         cplug_assert(retval != NULL);
         ctx->BytesCommited = nextcommit;
     }
