@@ -1000,7 +1000,9 @@ void pw_get_screen_size(uint32_t* width, uint32_t* height)
     *height     = rect.size.height;
 }
 
-float pw_get_dpi(void* _pw)
+float pw_get_content_scale_factor(void* _pw) { return 1; }
+
+float pw_get_backing_scale_factor(void* _pw)
 {
     PW_ASSERT(_pw);
     CplugWindow* pw = (CplugWindow*)_pw;

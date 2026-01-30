@@ -256,7 +256,31 @@ void  pw_get_keyboard_focus(void* pw);
 bool  pw_check_keyboard_focus(const void* pw);
 void  pw_release_keyboard_focus(void* pw);
 void  pw_get_screen_size(uint32_t* width, uint32_t* height);
-float pw_get_dpi(void* pw);
+
+// My current understanding of 'hi-dpi scaling' is that Windows recommends (without requiring) apps to manually scale
+// content such as text, padding, and icons in their app by a given factor. 'DPI', which stands for 'dots per inch',
+// has been put in the title of all the related APIs, which is a little confusing. The history goes, 4k displays came
+// about and they had a higher number of pixels per inch (higher DPI), and that made text small hard to read, and so
+// Windows introduced content scaling factors.
+// Windows 11 users control this by going to Settings > System > Display > Scale
+// Good reading:
+// https://learn.microsoft.com/en-us/windows/win32/learnwin32/dpi-and-device-independent-pixels
+float pw_get_content_scale_factor(void* pw); // Windows: 1.0 (100%), 1.25 (125%), 1.5 (150%), 2.0, ... 5.0
+// 'backingScaleFactor' on macOS is a different concept, whilst still a strategy solve the high DPI small text problem.
+// macOS offers a series of 'supported resolutions', often with a smaller number of units than the specified number of
+// pixels on the monitor, but then forces developers to 2x or 3x oversample images used by their apps.
+// eg. A MacBook with a Retina display may have 2560x1600 pixels listed on the hardware specs, with macOS displaying
+// contents at a resolution of 1680x1050. The backingScaleFactor of the window is 2, and so 2x 1680x1050 pixels are
+// rendered to a buffer of size 3360x2100. Then, hidden away from the developer, macOS will resize this stretch this to
+// the actual display size of 2560x1600. This is an strange 21:16 ratio, and macOS supports many more awkward ratios
+// like this, including classic 2:1 MSAA
+// As developers, we should take care when sampling pixel data from images, or rendering
+// data to images, that we scale by the backingScaleFactor. For example, text is often rendered to an atlas. Be careful
+// to scale the font size, as well as its allocated space in the atlas. A gotcha is that the 'swapchains' width &
+// height in Metal should match the window size, whilst framebuffers must be scaled by backingScaleFactor
+// Good reading:
+// https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
+float pw_get_backing_scale_factor(void* pw); // macOS: 1/2/3
 
 void pw_set_clipboard_text(void* pw, const char* text);
 // Get a pointer to a \0 terminated C string.
@@ -625,7 +649,8 @@ enum PWEventType
     PW_EVENT_RESIZE_UPDATE,
     // Sent when user has finished resizing from corner or edge
     PW_EVENT_RESIZE_END,
-    PW_EVENT_DPI_CHANGED,
+    // Windows only. User has changed their display scale settings
+    PW_EVENT_CONTENT_SCALE_FACTOR_CHANGED,
 
     PW_EVENT_MOUSE_EXIT,
     PW_EVENT_MOUSE_ENTER,
@@ -667,8 +692,8 @@ typedef struct PWEvent
             PWResizeDirection direction;
         } resize;
 
-        // PW_EVENT_DPI_CHANGED
-        float dpi;
+        // PW_EVENT_CONTENT_SCALE_FACTOR_CHANGED
+        float content_scale_factor;
 
         // PW_EVENT_MOUSE_EXIT - N/A
 

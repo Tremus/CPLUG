@@ -93,7 +93,7 @@ typedef struct CplugWindow
     // BOOL IsResizingFromCornerOrEdge;
     PWResizeDirection ResizeDirection;
 
-    float dpi;
+    float content_scale_factor;
 
     struct
     {
@@ -782,12 +782,13 @@ void pw_get_screen_size(uint32_t* width, uint32_t* height)
     *height = Rect.bottom - Rect.top;
 }
 
-float pw_get_dpi(void* _pw)
+float pw_get_content_scale_factor(void* _pw)
 {
-    // cplug_log("pw_get_dpi => %p", _pw);
+    // cplug_log("pw_get_content_scale_factor => %p", _pw);
     CplugWindow* pw = _pw;
-    return pw->dpi;
+    return pw->content_scale_factor;
 }
+float pw_get_backing_scale_factor(void* _pw) { return 1.0f; }
 
 void* pw_get_native_window(void* _pw)
 {
@@ -1732,7 +1733,11 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
     // NOTE: Ableton and FL Studio have options to allow users to disable DPI scaling, which causes the DAW to stop
     // calling cplug_setScaleFactor()
-    pw->dpi = 1.0f;
+    // In Ableton this is "Auto scale on", which is on by default and DPI "unaware". Right click on plugin instances
+    // to find this option
+    // In FL Studio, load a plugin, go to the setting in the window wrapper and toggle "DPI aware"
+    // Bug to be aware of: https://anukari.com/blog/devlog/lions-tigers-and-high-dpi-oh-my
+    pw->content_scale_factor = 1.0f;
 
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-oleinitialize
     // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-registerdragdrop
@@ -2046,13 +2051,13 @@ void cplug_setVisible(void* userGUI, bool visible)
 void cplug_setScaleFactor(void* userGUI, float scale)
 {
     // cplug_log("cplug_setScaleFactor => %p %f", userGUI, scale);
-    CplugWindow* pw = userGUI;
-    pw->dpi         = scale;
+    CplugWindow* pw          = userGUI;
+    pw->content_scale_factor = scale;
 
     PWEvent e = {
-        .type = PW_EVENT_DPI_CHANGED,
-        .gui  = pw->gui,
-        .dpi  = scale,
+        .type                 = PW_EVENT_CONTENT_SCALE_FACTOR_CHANGED,
+        .gui                  = pw->gui,
+        .content_scale_factor = scale,
     };
     pw_event(&e);
 }
