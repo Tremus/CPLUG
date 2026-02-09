@@ -943,6 +943,13 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
 {
     CplugWindow* pw = (CplugWindow*)userGUI;
 
+    // Reaper may try resizing your VST3 window before attaching your window to the parent, which is where we create the
+    // GUI and register necessary delegates & observers
+    if (pw->gui == NULL)
+    {
+        return;
+    }
+
     if (pw.window.inLiveResize)
     {
         NSRect rect = pw.window.frame;
