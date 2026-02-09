@@ -7,9 +7,6 @@
 #ifndef _UNICODE
 #define _UNICODE
 #endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -31,6 +28,10 @@
 #ifdef PW_DX11
 #include <d3d11.h>
 #include <dxgi1_2.h>
+
+// Requires WIN32_LEAN_AND_MEAN not defined
+#include <d3dkmthk.h>
+#include <winnt.h>
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxguid.lib")
 
@@ -51,6 +52,7 @@
 #endif
 
 #define PW_TIMER_ID 1
+#define WM_VBLANK   (WM_USER + 1)
 
 // This is required by a hack to tag our window within a Hook Proc
 static UINT_PTR PW_UNIQUE_INT_ID = 0;
@@ -115,12 +117,17 @@ typedef struct CplugWindow
 #ifdef PW_DX11
     BOOL IsWindows10OrGreater;
 
+    BOOL   VBlankThreadShouldExit;
+    HANDLE hVBlankThread;
+
     D3D_DRIVER_TYPE   DriverType;
     D3D_FEATURE_LEVEL FeatureLevel;
 
     UINT64   OpenWindowBit;
     HMONITOR LastMonitor;
 
+    UINT                  NextWidth;
+    UINT                  NextHeight;
     DXGI_SWAP_CHAIN_DESC1 SwapChainDesc1;
     DXGI_MODE_DESC        ModeDesc;
     IDXGISwapChain1*      pSwapchain1;
@@ -920,6 +927,77 @@ DWORD pw_get_monitor_display_frequency(CplugWindow* pw)
     }
     return DisplayFrequency;
 }
+
+DWORD pw_vblank_thread(_In_ LPVOID lpParameter)
+{
+    // Worth a read
+    // https://stackoverflow.com/questions/49244480/correct-way-to-wait-for-vblank-on-windows-10-in-windowed-mode
+    // https://armageddongames.net/archive/index.php/t-96793.html
+    // https://learn.microsoft.com/en-au/windows/win32/api/dxgi/nf-dxgi-idxgioutput-waitforvblank
+
+    CplugWindow* pw = lpParameter;
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdc
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtopenadapterfromhdc
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtwaitforverticalblankevent
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtcloseadapter
+
+    D3DKMT_WAITFORVERTICALBLANKEVENT Wait = {0};
+
+    while (pw->VBlankThreadShouldExit == FALSE)
+    {
+        if (Wait.hAdapter == 0)
+        {
+            HDC                       hDc    = GetDC(pw->hwnd);
+            D3DKMT_OPENADAPTERFROMHDC Open   = {.hDc = hDc};
+            NTSTATUS                  Status = D3DKMTOpenAdapterFromHdc(&Open);
+
+            if (SUCCEEDED(Status))
+            {
+                Wait.hAdapter = Open.hAdapter;
+                // TODO? Docs say this will save power with OpenGL. We aren't using that, maybe we should anyway?
+                // Lets hope we don't need to loop through monitors
+                Wait.hDevice       = 0;
+                Wait.VidPnSourceId = Open.VidPnSourceId;
+            }
+
+            DeleteDC(hDc);
+        }
+
+        if (Wait.hAdapter)
+        {
+            NTSTATUS Status = D3DKMTWaitForVerticalBlankEvent(&Wait);
+            PW_ASSERT(Status != STATUS_INVALID_PARAMETER);
+            BOOL ok = SUCCEEDED(Status);
+
+#ifndef STATUS_DEVICE_REMOVED
+#define STATUS_DEVICE_REMOVED ((NTSTATUS)0xC00002B6L)
+#endif
+            if (ok)
+            {
+                PostMessageW(pw->hwnd, WM_VBLANK, 0, 0);
+            }
+            else // May be STATUS_DEVICE_REMOVED error
+            {
+                D3DKMT_CLOSEADAPTER Close = {Wait.hAdapter};
+                D3DKMTCloseAdapter(&Close);
+                Wait.hAdapter      = 0;
+                Wait.VidPnSourceId = 0;
+            }
+        }
+        if (Wait.hAdapter == 0)
+        {
+            Sleep(10);
+        }
+    }
+    if (Wait.hAdapter)
+    {
+        D3DKMT_CLOSEADAPTER Close = {Wait.hAdapter};
+        D3DKMTCloseAdapter(&Close);
+    }
+    return 0;
+}
+
 #endif
 
 // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nc-winuser-wndproc
@@ -1102,8 +1180,12 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         break;
     }
+#ifdef PW_DX11
+    case WM_VBLANK:
+#else
     // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-timer
     case WM_TIMER:
+#endif
     {
         PW_ASSERT(pw->gui != NULL);
 #ifdef PW_DX11
@@ -1130,15 +1212,54 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 }
             }
         }
+        PW_ASSERT(pw->NextWidth != 0);
+        PW_ASSERT(pw->NextHeight != 0);
+        if (pw->NextWidth != pw->SwapChainDesc1.Width || pw->NextHeight != pw->SwapChainDesc1.Height)
+        {
+            PW_DX11_RELEASE(pw->pRenderTarget)
+            PW_DX11_RELEASE(pw->pRenderTargetView)
+            PW_DX11_RELEASE(pw->pDepthStencil)
+            PW_DX11_RELEASE(pw->pDepthStencilView)
+
+            pw->SwapChainDesc1.Width  = pw->NextWidth;
+            pw->SwapChainDesc1.Height = pw->NextHeight;
+            pw->ModeDesc.Width        = pw->NextWidth;
+            pw->ModeDesc.Height       = pw->NextHeight;
+
+            if (pw->pSwapchain1)
+            {
+                HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeBuffers(
+                    pw->pSwapchain1,
+                    pw->SwapChainDesc1.BufferCount,
+                    pw->SwapChainDesc1.Width,
+                    pw->SwapChainDesc1.Height,
+                    pw->SwapChainDesc1.Format,
+                    0);
+                PW_ASSERT(SUCCEEDED(hr));
+
+                hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
+                PW_ASSERT(SUCCEEDED(hr));
+
+                hr = pw_dx11_create_render_target(pw);
+                PW_ASSERT(SUCCEEDED(hr));
+                PW_ASSERT(pw->pRenderTarget);
+                PW_ASSERT(pw->pRenderTargetView);
+                PW_ASSERT(pw->pDepthStencil);
+                PW_ASSERT(pw->pDepthStencilView);
+            }
+        }
 #endif
         pw_tick(pw->gui);
 
 #ifdef PW_DX11
         // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-present
+        // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgiswapchain1-present1
         UINT Flags = 0;
         if (pw->IsWindows10OrGreater)
             Flags |= DXGI_PRESENT_DO_NOT_WAIT;
-        pw->pSwapchain1->lpVtbl->Present(pw->pSwapchain1, 0, Flags);
+        // pw->pSwapchain1->lpVtbl->Present(pw->pSwapchain1, 0, Flags);
+        DXGI_PRESENT_PARAMETERS params = {0};
+        pw->pSwapchain1->lpVtbl->Present1(pw->pSwapchain1, 0, Flags, &params);
 #endif
         return 0;
     }
@@ -1862,6 +1983,9 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
             pw->IsWindows10OrGreater = osInfo.dwMajorVersion >= 10;
         }
 
+        pw->NextWidth  = Info.init_size.width;
+        pw->NextHeight = Info.init_size.height;
+
         DXGI_SWAP_CHAIN_DESC1* pSwapDesc = &pw->SwapChainDesc1;
         pSwapDesc->Width                 = Info.init_size.width;
         pSwapDesc->Height                = Info.init_size.height;
@@ -1996,14 +2120,24 @@ void cplug_setParent(void* userGUI, void* newParent)
     HWND oldParent = GetParent(pw->hwnd);
     if (oldParent)
     {
-        KillTimer(pw->hwnd, PW_TIMER_ID);
-        SetParent(pw->hwnd, NULL);
 #ifdef PW_DX11
-        g_OpenWindowFlags  &= ~pw->OpenWindowBit;
-        g_WindowMovedFlags &= ~pw->OpenWindowBit;
-        pw->OpenWindowBit   = 0;
-        pw->LastMonitor     = NULL;
+        g_OpenWindowFlags          &= ~pw->OpenWindowBit;
+        g_WindowMovedFlags         &= ~pw->OpenWindowBit;
+        pw->OpenWindowBit           = 0;
+        pw->LastMonitor             = NULL;
+        pw->VBlankThreadShouldExit  = TRUE;
+        if (pw->hVBlankThread)
+        {
+            WaitForSingleObject(pw->hVBlankThread, INFINITE);
+            CloseHandle(pw->hVBlankThread);
+        }
+        pw->hVBlankThread          = 0;
+        pw->hVBlankThread          = NULL;
+        pw->VBlankThreadShouldExit = FALSE;
+#else
+        KillTimer(pw->hwnd, PW_TIMER_ID);
 #endif
+        SetParent(pw->hwnd, NULL);
     }
 
     if (newParent)
@@ -2024,6 +2158,8 @@ void cplug_setParent(void* userGUI, void* newParent)
                     break;
                 }
             }
+            if (pw->hVBlankThread == NULL)
+                pw->hVBlankThread = CreateThread(0, 0, pw_vblank_thread, pw, 0, 0);
 #endif
 
             // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocessid
@@ -2035,8 +2171,6 @@ void cplug_setParent(void* userGUI, void* newParent)
             pw->hCallWndHook = SetWindowsHookExW(WH_CALLWNDPROC, PWCallWndProc, module, tid);
             PW_ASSERT(pw->hCallWndHook);
         }
-
-        SetTimer(pw->hwnd, PW_TIMER_ID, 10, NULL);
     }
 }
 
@@ -2097,40 +2231,8 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     PW_ASSERT(height > 0);
 
 #ifdef PW_DX11
-    if (width != pw->SwapChainDesc1.Width || height != pw->SwapChainDesc1.Height)
-    {
-        PW_DX11_RELEASE(pw->pRenderTarget)
-        PW_DX11_RELEASE(pw->pRenderTargetView)
-        PW_DX11_RELEASE(pw->pDepthStencil)
-        PW_DX11_RELEASE(pw->pDepthStencilView)
-
-        pw->SwapChainDesc1.Width  = width;
-        pw->SwapChainDesc1.Height = height;
-        pw->ModeDesc.Width        = width;
-        pw->ModeDesc.Height       = height;
-
-        if (pw->pSwapchain1)
-        {
-            HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeBuffers(
-                pw->pSwapchain1,
-                pw->SwapChainDesc1.BufferCount,
-                pw->SwapChainDesc1.Width,
-                pw->SwapChainDesc1.Height,
-                pw->SwapChainDesc1.Format,
-                0);
-            PW_ASSERT(SUCCEEDED(hr));
-
-            hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
-            PW_ASSERT(SUCCEEDED(hr));
-
-            hr = pw_dx11_create_render_target(pw);
-            PW_ASSERT(SUCCEEDED(hr));
-            PW_ASSERT(pw->pRenderTarget);
-            PW_ASSERT(pw->pRenderTargetView);
-            PW_ASSERT(pw->pDepthStencil);
-            PW_ASSERT(pw->pDepthStencilView);
-        }
-    }
+    pw->NextWidth  = width;
+    pw->NextHeight = height;
 #endif
 
     pw_event(&(PWEvent){
