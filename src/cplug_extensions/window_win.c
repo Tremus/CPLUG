@@ -138,6 +138,8 @@ typedef struct CplugWindow
     ID3D11RenderTargetView* pRenderTargetView;
     ID3D11Texture2D*        pDepthStencil;
     ID3D11DepthStencilView* pDepthStencilView;
+
+    IDXGIFactory2* pFactory2;
 #endif
 
     struct
@@ -928,6 +930,16 @@ DWORD pw_get_monitor_display_frequency(CplugWindow* pw)
     return DisplayFrequency;
 }
 
+void _pw_close_vblank_adapter(D3DKMT_WAITFORVERTICALBLANKEVENT* pWait)
+{
+    if (pWait->hAdapter)
+    {
+        D3DKMT_CLOSEADAPTER Close = {pWait->hAdapter};
+        D3DKMTCloseAdapter(&Close);
+    }
+    memset(pWait, 0, sizeof(*pWait));
+}
+
 DWORD pw_vblank_thread(_In_ LPVOID lpParameter)
 {
     // Worth a read
@@ -937,7 +949,10 @@ DWORD pw_vblank_thread(_In_ LPVOID lpParameter)
 
     CplugWindow* pw = lpParameter;
 
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow
+    // NOTE: CreateDCW() is better for multi-window
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdc
+    // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createdcw
     // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtopenadapterfromhdc
     // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtwaitforverticalblankevent
     // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtcloseadapter
@@ -948,20 +963,29 @@ DWORD pw_vblank_thread(_In_ LPVOID lpParameter)
     {
         if (Wait.hAdapter == 0)
         {
-            HDC                       hDc    = GetDC(pw->hwnd);
-            D3DKMT_OPENADAPTERFROMHDC Open   = {.hDc = hDc};
-            NTSTATUS                  Status = D3DKMTOpenAdapterFromHdc(&Open);
+            HMONITOR       hMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
+            MONITORINFOEXW Info     = {0};
+            Info.cbSize             = sizeof(MONITORINFOEXW);
+            BOOL ok                 = GetMonitorInfoW(hMonitor, (LPMONITORINFO)&Info);
 
-            if (SUCCEEDED(Status))
+            if (ok)
             {
-                Wait.hAdapter = Open.hAdapter;
-                // TODO? Docs say this will save power with OpenGL. We aren't using that, maybe we should anyway?
-                // Lets hope we don't need to loop through monitors
-                Wait.hDevice       = 0;
-                Wait.VidPnSourceId = Open.VidPnSourceId;
-            }
+                HDC                       hDc    = CreateDCW(NULL, Info.szDevice, NULL, NULL);
+                D3DKMT_OPENADAPTERFROMHDC Open   = {.hDc = hDc};
+                NTSTATUS                  Status = D3DKMTOpenAdapterFromHdc(&Open);
+                PW_ASSERT(Status != STATUS_INVALID_PARAMETER);
 
-            DeleteDC(hDc);
+                if (SUCCEEDED(Status))
+                {
+                    Wait.hAdapter = Open.hAdapter;
+                    // TODO? Docs say this will save power with OpenGL. We aren't using that, maybe we should anyway?
+                    // Lets hope we don't need to loop through monitors
+                    Wait.hDevice       = 0;
+                    Wait.VidPnSourceId = Open.VidPnSourceId;
+                }
+
+                DeleteDC(hDc);
+            }
         }
 
         if (Wait.hAdapter)
@@ -969,6 +993,7 @@ DWORD pw_vblank_thread(_In_ LPVOID lpParameter)
             NTSTATUS Status = D3DKMTWaitForVerticalBlankEvent(&Wait);
             PW_ASSERT(Status != STATUS_INVALID_PARAMETER);
             BOOL ok = SUCCEEDED(Status);
+            // PW_ASSERT(ok);
 
 #ifndef STATUS_DEVICE_REMOVED
 #define STATUS_DEVICE_REMOVED ((NTSTATUS)0xC00002B6L)
@@ -979,22 +1004,94 @@ DWORD pw_vblank_thread(_In_ LPVOID lpParameter)
             }
             else // May be STATUS_DEVICE_REMOVED error
             {
-                D3DKMT_CLOSEADAPTER Close = {Wait.hAdapter};
-                D3DKMTCloseAdapter(&Close);
-                Wait.hAdapter      = 0;
-                Wait.VidPnSourceId = 0;
+                _pw_close_vblank_adapter(&Wait);
             }
         }
         if (Wait.hAdapter == 0)
         {
+            PostMessageW(pw->hwnd, WM_VBLANK, 0, 0); // lazy fallback
             Sleep(10);
         }
     }
-    if (Wait.hAdapter)
+    _pw_close_vblank_adapter(&Wait);
+    return 0;
+}
+
+IDXGIOutput* _pw_find_dxgioutput(HMONITOR hMonitor, IDXGIFactory2* pFactory2)
+{
+    IDXGIOutput* pOutput = NULL;
+    if (hMonitor != NULL && pFactory2 != NULL)
     {
-        D3DKMT_CLOSEADAPTER Close = {Wait.hAdapter};
-        D3DKMTCloseAdapter(&Close);
+        IDXGIAdapter* pAdapter_It = NULL;
+        for (int i = 0;
+             pOutput == NULL && pFactory2->lpVtbl->EnumAdapters(pFactory2, i, &pAdapter_It) != DXGI_ERROR_NOT_FOUND;
+             i++)
+        {
+            IDXGIOutput* pOutput_It = NULL;
+            for (int j = 0; pOutput == NULL &&
+                            pAdapter_It->lpVtbl->EnumOutputs(pAdapter_It, j, &pOutput_It) != DXGI_ERROR_NOT_FOUND;
+                 j++)
+            {
+                DXGI_OUTPUT_DESC Desc = {0};
+                pOutput_It->lpVtbl->GetDesc(pOutput_It, &Desc);
+                if (Desc.Monitor == hMonitor) // match
+                {
+                    pOutput = pOutput_It;
+                    pOutput_It->lpVtbl->AddRef(pOutput_It);
+                }
+                PW_DX11_RELEASE(pOutput_It)
+            }
+
+            PW_DX11_RELEASE(pAdapter_It)
+        }
     }
+    return pOutput;
+}
+
+DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
+{
+    CplugWindow* pw = lpParameter;
+
+    HMONITOR hMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
+
+    IDXGIOutput*   pOutput   = NULL;
+    IDXGIFactory2* pFactory2 = pw->pFactory2;
+
+    while (pw->VBlankThreadShouldExit == FALSE)
+    {
+        if (hMonitor != pw->LastMonitor)
+        {
+            hMonitor = pw->LastMonitor;
+            if (pOutput != NULL)
+            {
+                PW_DX11_RELEASE(pOutput)
+            }
+            pOutput = _pw_find_dxgioutput(hMonitor, pFactory2);
+        }
+
+        if (pOutput)
+        {
+            pOutput->lpVtbl->WaitForVBlank(pOutput);
+        }
+        else
+        {
+            DWORD dwMilliseconds = 16; // Naive fallback
+
+            if (pw->ModeDesc.RefreshRate.Numerator && pw->ModeDesc.RefreshRate.Denominator)
+            {
+                double RefreshRate =
+                    (double)pw->ModeDesc.RefreshRate.Numerator / (double)pw->ModeDesc.RefreshRate.Denominator;
+                dwMilliseconds  = (DWORD)(1000 / RefreshRate);
+                dwMilliseconds += 0;
+            }
+            Sleep(dwMilliseconds);
+        }
+
+        PostMessageW(pw->hwnd, WM_VBLANK, 0, 0); // Always tick
+    }
+
+    PW_DX11_RELEASE(pOutput)
+
     return 0;
 }
 
@@ -1868,10 +1965,9 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     PW_ASSERT(SUCCEEDED(hr));
 
 #ifdef PW_DX11
-    IDXGIOutput*   pOutput      = NULL;
-    IDXGIAdapter*  pAdapter     = NULL;
-    IDXGIFactory2* pFactory2    = NULL;
-    IDXGIDevice1*  pDXGIDevice1 = NULL;
+    IDXGIOutput*  pOutput      = NULL;
+    IDXGIAdapter* pAdapter     = NULL;
+    IDXGIDevice1* pDXGIDevice1 = NULL;
 
     // https://learn.microsoft.com/en-us/windows/win32/api/d3dcommon/ne-d3dcommon-d3d_driver_type
     static const D3D_DRIVER_TYPE DriverTypes[] = {
@@ -1938,24 +2034,22 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
     if (pDXGIDevice1)
     {
-        hr = pDXGIDevice1->lpVtbl->SetMaximumFrameLatency(pDXGIDevice1, 1);
-        PW_ASSERT(SUCCEEDED(hr));
         hr = pDXGIDevice1->lpVtbl->GetAdapter(pDXGIDevice1, &pAdapter);
         PW_ASSERT(SUCCEEDED(hr));
         PW_ASSERT(pAdapter);
-        if (pAdapter)
-        {
-            hr = pAdapter->lpVtbl->GetParent(pAdapter, &IID_IDXGIFactory2, (void**)&pFactory2);
-            PW_ASSERT(SUCCEEDED(hr));
-            PW_ASSERT(pFactory2);
-            hr = pAdapter->lpVtbl->EnumOutputs(pAdapter, 0, &pOutput);
-            PW_ASSERT(SUCCEEDED(hr));
-            PW_ASSERT(pOutput);
-        }
     }
 
-    if (pFactory2)
+    if (pAdapter)
     {
+        hr = pAdapter->lpVtbl->GetParent(pAdapter, &IID_IDXGIFactory2, (void**)&pw->pFactory2);
+        PW_ASSERT(SUCCEEDED(hr));
+        PW_ASSERT(pw->pFactory2);
+    }
+
+    if (pw->pFactory2)
+    {
+        pw->LastMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
+        pOutput         = _pw_find_dxgioutput(pw->LastMonitor, pw->pFactory2);
         // Get default monitor
         if (pOutput)
         {
@@ -2015,8 +2109,8 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         pw->ModeDesc.RefreshRate.Denominator = 1;
         pw->ModeDesc.Format                  = pSwapDesc->Format;
 
-        hr = pFactory2->lpVtbl->CreateSwapChainForHwnd(
-            pFactory2,
+        hr = pw->pFactory2->lpVtbl->CreateSwapChainForHwnd(
+            pw->pFactory2,
             (IUnknown*)pw->pDevice,
             pw->hwnd,
             pSwapDesc,
@@ -2026,6 +2120,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_ASSERT(SUCCEEDED(hr));
         PW_ASSERT(pw->pSwapchain1);
     }
+    PW_ASSERT(pw->pSwapchain1);
 
     if (pw->pSwapchain1)
     {
@@ -2037,7 +2132,6 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_ASSERT(pw->pDepthStencilView);
     }
 
-    PW_DX11_RELEASE(pFactory2)
     PW_DX11_RELEASE(pAdapter)
     PW_DX11_RELEASE(pOutput)
     PW_DX11_RELEASE(pDXGIDevice1)
@@ -2083,6 +2177,7 @@ void cplug_destroyGUI(void* userGUI)
     PW_DX11_RELEASE(pw->pSwapchain1)
     PW_DX11_RELEASE(pw->pDeviceContext)
     PW_DX11_RELEASE(pw->pDevice)
+    PW_DX11_RELEASE(pw->pFactory2)
 #endif
 
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroywindow
@@ -2159,7 +2254,7 @@ void cplug_setParent(void* userGUI, void* newParent)
                 }
             }
             if (pw->hVBlankThread == NULL)
-                pw->hVBlankThread = CreateThread(0, 0, pw_vblank_thread, pw, 0, 0);
+                pw->hVBlankThread = CreateThread(0, 0, pw_vblank_thread2, pw, 0, 0);
 #endif
 
             // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocessid
