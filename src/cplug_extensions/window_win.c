@@ -52,26 +52,12 @@
 #endif
 
 #define PW_TIMER_ID 1
-#define WM_VBLANK   (WM_USER + 1)
+// https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-user
+#define WM_VBLANK               (WM_USER + 1)
+#define WM_CHOOSE_FILE_CALLBACK (WM_USER + 2)
 
 // This is required by a hack to tag our window within a Hook Proc
 static UINT_PTR PW_UNIQUE_INT_ID = 0;
-#ifdef PW_DX11
-// This is required by a hack that detects when the window and moved to a new monitor
-// It's also a lazy solution to avoid managing a dynamic array of pointers
-// Each new window searches for a free 0 bit inside "g_OpenWindowFlags", sets the bit, and stores a copy of that bit
-// within its own instance.
-// When our hook procedure detects a window moved, it sets g_WindowMovedFlags to g_OpenWindowFlags, then when the plugin
-// redraws, it can check and clear the flag amd poll for a monitor change.
-// An limitation is that this only supports a maximum of 64 open windows, while a benefit is we don't juggle pointers
-static UINT64 g_OpenWindowFlags  = 0;
-static UINT64 g_WindowMovedFlags = 0;
-#endif
-
-enum PW_WM_COMMAND
-{
-    PW_WM_COMMAND_ChooseFile = 69 // Magic number
-};
 
 typedef struct CplugWindow
 {
@@ -116,6 +102,7 @@ typedef struct CplugWindow
 
 #ifdef PW_DX11
     BOOL IsWindows10OrGreater;
+    BOOL WindowMoved;
 
     BOOL   VBlankThreadShouldExit;
     HANDLE hVBlankThread;
@@ -123,7 +110,6 @@ typedef struct CplugWindow
     D3D_DRIVER_TYPE   DriverType;
     D3D_FEATURE_LEVEL FeatureLevel;
 
-    UINT64   OpenWindowBit;
     HMONITOR LastMonitor;
 
     UINT                  NextWidth;
@@ -892,10 +878,11 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
     return hr;
 }
 
-DWORD pw_get_monitor_display_frequency(CplugWindow* pw)
+// https://stackoverflow.com/questions/15583294/how-to-get-current-display-mode-resolution-refresh-rate-of-a-monitor-output-i
+DWORD pw_get_monitor_display_frequency(HMONITOR monitor)
 {
     DWORD DisplayFrequency = 60; // Default
-    if (pw->LastMonitor)
+    if (monitor)
     {
         // https://stackoverflow.com/questions/15583294/how-to-get-current-display-mode-resolution-refresh-rate-of-a-monitor-output-i
         // DXGI_OUTPUT_DESC OutputDesc;
@@ -907,7 +894,7 @@ DWORD pw_get_monitor_display_frequency(CplugWindow* pw)
         MonitorInfo.cbSize    = sizeof(MONITORINFOEX);
 
         // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow
-        BOOL ok = GetMonitorInfoW(pw->LastMonitor, (LPMONITORINFO)&MonitorInfo);
+        BOOL ok = GetMonitorInfoW(monitor, (LPMONITORINFO)&MonitorInfo);
         PW_ASSERT(ok);
 
         // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaysettingsw
@@ -998,20 +985,16 @@ DWORD pw_vblank_thread(_In_ LPVOID lpParameter)
 #ifndef STATUS_DEVICE_REMOVED
 #define STATUS_DEVICE_REMOVED ((NTSTATUS)0xC00002B6L)
 #endif
-            if (ok)
-            {
-                PostMessageW(pw->hwnd, WM_VBLANK, 0, 0);
-            }
-            else // May be STATUS_DEVICE_REMOVED error
+            if (ok == FALSE) // May be STATUS_DEVICE_REMOVED error
             {
                 _pw_close_vblank_adapter(&Wait);
             }
         }
         if (Wait.hAdapter == 0)
         {
-            PostMessageW(pw->hwnd, WM_VBLANK, 0, 0); // lazy fallback
-            Sleep(10);
+            Sleep(10); // Fallback draw interval
         }
+        PostMessageW(pw->hwnd, WM_VBLANK, 0, 0);
     }
     _pw_close_vblank_adapter(&Wait);
     return 0;
@@ -1054,8 +1037,7 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
 
     HMONITOR hMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
 
-    IDXGIOutput*   pOutput   = NULL;
-    IDXGIFactory2* pFactory2 = pw->pFactory2;
+    IDXGIOutput* pOutput = NULL;
 
     while (pw->VBlankThreadShouldExit == FALSE)
     {
@@ -1066,7 +1048,7 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
             {
                 PW_DX11_RELEASE(pOutput)
             }
-            pOutput = _pw_find_dxgioutput(hMonitor, pFactory2);
+            pOutput = _pw_find_dxgioutput(hMonitor, pw->pFactory2);
         }
 
         if (pOutput)
@@ -1077,7 +1059,7 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
         {
             DWORD dwMilliseconds = 16; // Naive fallback
 
-            if (pw->ModeDesc.RefreshRate.Numerator && pw->ModeDesc.RefreshRate.Denominator)
+            if (pw->ModeDesc.RefreshRate.Numerator && pw->ModeDesc.RefreshRate.Denominator) // May be 0?
             {
                 double RefreshRate =
                     (double)pw->ModeDesc.RefreshRate.Numerator / (double)pw->ModeDesc.RefreshRate.Denominator;
@@ -1110,6 +1092,14 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_PAINT:
         break;
     case WM_DESTROY:
+        break;
+    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-move
+    case WM_MOVE:
+#if PW_DX11
+        if (pw) // May be NULL. WM_MOVE Gets sent before we set PWWndProc
+            pw->WindowMoved = TRUE;
+        return 0;
+#endif
         break;
     case WM_SETCURSOR:
         return 0;
@@ -1256,25 +1246,22 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         pw_event(&e);
         return 0;
     }
-    case WM_COMMAND: // clicking nav menu items triggers commands. You can also send commands for other things
+    case WM_CHOOSE_FILE_CALLBACK:
     {
-        if (wParam == PW_WM_COMMAND_ChooseFile)
+        if (pw->ChooseFile.callback)
+            pw->ChooseFile.callback(
+                pw->ChooseFile.callback_data,
+                (const char* const*)pw->ChooseFile.pFilePaths,
+                pw->ChooseFile.NumPaths);
+
+        if (pw->ChooseFile.hThread)
         {
-            if (pw->ChooseFile.callback)
-                pw->ChooseFile.callback(
-                    pw->ChooseFile.callback_data,
-                    (const char* const*)pw->ChooseFile.pFilePaths,
-                    pw->ChooseFile.NumPaths);
-
-            if (pw->ChooseFile.hThread)
-            {
-                WaitForSingleObject(pw->ChooseFile.hThread, INFINITE);
-                CloseHandle(pw->ChooseFile.hThread);
-                pw->ChooseFile.hThread = NULL;
-            }
-
-            PWFreeChooseFile(pw);
+            WaitForSingleObject(pw->ChooseFile.hThread, INFINITE);
+            CloseHandle(pw->ChooseFile.hThread);
+            pw->ChooseFile.hThread = NULL;
         }
+
+        PWFreeChooseFile(pw);
         break;
     }
 #ifdef PW_DX11
@@ -1286,10 +1273,13 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         PW_ASSERT(pw->gui != NULL);
 #ifdef PW_DX11
+        BOOL ShouldResizeBuffers = FALSE;
+        BOOL ShouldResizeTarget  = FALSE;
+
         // Check if the window has moved to a new monitor...
-        if (g_WindowMovedFlags & pw->OpenWindowBit)
+        if (pw->WindowMoved)
         {
-            g_WindowMovedFlags ^= pw->OpenWindowBit;
+            pw->WindowMoved = FALSE;
 
             // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-monitorfromwindow
             // https://stackoverflow.com/questions/65677032/is-there-a-notification-when-a-window-is-moved-to-another-monitor
@@ -1298,14 +1288,12 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             {
                 pw->LastMonitor = CurrentMonitor;
 
-                DWORD NewDisplayFrequency = pw_get_monitor_display_frequency(pw);
+                DWORD NewDisplayFrequency = pw_get_monitor_display_frequency(CurrentMonitor);
                 if (NewDisplayFrequency != pw->ModeDesc.RefreshRate.Numerator)
                 {
                     pw->ModeDesc.RefreshRate.Numerator = NewDisplayFrequency;
 
-                    // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizetarget
-                    HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
-                    PW_ASSERT(SUCCEEDED(hr));
+                    ShouldResizeTarget = TRUE;
                 }
             }
         }
@@ -1323,7 +1311,13 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             pw->ModeDesc.Width        = pw->NextWidth;
             pw->ModeDesc.Height       = pw->NextHeight;
 
-            if (pw->pSwapchain1)
+            ShouldResizeBuffers = TRUE;
+            ShouldResizeTarget  = TRUE;
+        }
+
+        if (pw->pSwapchain1)
+        {
+            if (ShouldResizeBuffers)
             {
                 HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeBuffers(
                     pw->pSwapchain1,
@@ -1333,11 +1327,18 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     pw->SwapChainDesc1.Format,
                     0);
                 PW_ASSERT(SUCCEEDED(hr));
+            }
 
-                hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
+            // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizetarget
+            if (ShouldResizeTarget)
+            {
+                HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
                 PW_ASSERT(SUCCEEDED(hr));
+            }
 
-                hr = pw_dx11_create_render_target(pw);
+            if (pw->pRenderTarget == NULL)
+            {
+                HRESULT hr = pw_dx11_create_render_target(pw);
                 PW_ASSERT(SUCCEEDED(hr));
                 PW_ASSERT(pw->pRenderTarget);
                 PW_ASSERT(pw->pRenderTargetView);
@@ -1349,14 +1350,17 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         pw_tick(pw->gui);
 
 #ifdef PW_DX11
-        // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-present
-        // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgiswapchain1-present1
-        UINT Flags = 0;
-        if (pw->IsWindows10OrGreater)
-            Flags |= DXGI_PRESENT_DO_NOT_WAIT;
-        // pw->pSwapchain1->lpVtbl->Present(pw->pSwapchain1, 0, Flags);
-        DXGI_PRESENT_PARAMETERS params = {0};
-        pw->pSwapchain1->lpVtbl->Present1(pw->pSwapchain1, 0, Flags, &params);
+        if (pw->pSwapchain1)
+        {
+            // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-present
+            // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgiswapchain1-present1
+            UINT Flags = 0;
+            if (pw->IsWindows10OrGreater)
+                Flags |= DXGI_PRESENT_DO_NOT_WAIT;
+            // pw->pSwapchain1->lpVtbl->Present(pw->pSwapchain1, 0, Flags);
+            DXGI_PRESENT_PARAMETERS params = {0};
+            pw->pSwapchain1->lpVtbl->Present1(pw->pSwapchain1, 0, Flags, &params);
+        }
 #endif
         return 0;
     }
@@ -1965,9 +1969,60 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     PW_ASSERT(SUCCEEDED(hr));
 
 #ifdef PW_DX11
-    IDXGIOutput*  pOutput      = NULL;
-    IDXGIAdapter* pAdapter     = NULL;
-    IDXGIDevice1* pDXGIDevice1 = NULL;
+    pw->NextWidth  = Info.init_size.width;
+    pw->NextHeight = Info.init_size.height;
+
+    pw->LastMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
+    if (pw->LastMonitor == NULL)
+        pw->LastMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTOPRIMARY);
+
+    DWORD DisplayFrequency = pw_get_monitor_display_frequency(pw->LastMonitor);
+
+    // https://stackoverflow.com/questions/29944745/get-osversion-in-windows-using-c
+    // https://stackoverflow.com/questions/71250924/how-to-get-osversioninfo-for-windows-11
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_osversioninfoexw
+    HRESULT(__stdcall * RtlGetVersion)(OSVERSIONINFOEXW*);
+    *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlGetVersion");
+
+    if (RtlGetVersion != NULL)
+    {
+        OSVERSIONINFOEXW osInfo;
+        osInfo.dwOSVersionInfoSize = sizeof(osInfo);
+        RtlGetVersion(&osInfo);
+
+        pw->IsWindows10OrGreater = osInfo.dwMajorVersion >= 10;
+    }
+    DXGI_SWAP_CHAIN_DESC1* pSwapDesc = &pw->SwapChainDesc1;
+    pSwapDesc->Width                 = pw->NextWidth;
+    pSwapDesc->Height                = pw->NextHeight;
+    pSwapDesc->Format                = DXGI_FORMAT_B8G8R8A8_UNORM;
+    // Defaults to stretch, but that looks bad when resizing.
+    // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/ne-dxgi1_2-dxgi_scaling
+    // Flip discard is the recommended setting for optimal performance. IIRC it helps to remove any waiting for the
+    // backbuffer to become available. This was introduced in Windows 10.
+    // NOTE: users of Windows 10 & 11 may run DAWs in 'Compatability mode', which may run your app like you're using
+    // Windows 8, 7, or Vista. Be cautious
+    if (pw->IsWindows10OrGreater)
+    {
+        pSwapDesc->BufferCount = 2;
+        pSwapDesc->SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        pSwapDesc->Scaling     = DXGI_SCALING_NONE;
+    }
+    else
+    {
+        pSwapDesc->BufferCount = 1;
+        pSwapDesc->SwapEffect  = DXGI_SWAP_EFFECT_DISCARD;
+        pSwapDesc->Scaling     = DXGI_SCALING_STRETCH;
+    }
+    pSwapDesc->SampleDesc.Count   = 1;
+    pSwapDesc->SampleDesc.Quality = 0;
+    pSwapDesc->BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+
+    pw->ModeDesc.Width                   = pSwapDesc->Width;
+    pw->ModeDesc.Height                  = pSwapDesc->Height;
+    pw->ModeDesc.RefreshRate.Numerator   = DisplayFrequency;
+    pw->ModeDesc.RefreshRate.Denominator = 1;
+    pw->ModeDesc.Format                  = pSwapDesc->Format;
 
     // https://learn.microsoft.com/en-us/windows/win32/api/d3dcommon/ne-d3dcommon-d3d_driver_type
     static const D3D_DRIVER_TYPE DriverTypes[] = {
@@ -2025,102 +2080,48 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     PW_ASSERT(pw->pDevice);
     PW_ASSERT(pw->pDeviceContext);
 
-    if (pw->pDevice)
+    // Create factory
     {
-        hr = pw->pDevice->lpVtbl->QueryInterface(pw->pDevice, &IID_IDXGIDevice1, (void**)&pDXGIDevice1);
-        PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pDXGIDevice1);
-    }
+        IDXGIAdapter* pAdapter     = NULL;
+        IDXGIDevice1* pDXGIDevice1 = NULL;
 
-    if (pDXGIDevice1)
-    {
-        hr = pDXGIDevice1->lpVtbl->GetAdapter(pDXGIDevice1, &pAdapter);
-        PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pAdapter);
-    }
-
-    if (pAdapter)
-    {
-        hr = pAdapter->lpVtbl->GetParent(pAdapter, &IID_IDXGIFactory2, (void**)&pw->pFactory2);
-        PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pw->pFactory2);
-    }
-
-    if (pw->pFactory2)
-    {
-        pw->LastMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
-        pOutput         = _pw_find_dxgioutput(pw->LastMonitor, pw->pFactory2);
-        // Get default monitor
-        if (pOutput)
+        if (pw->pDevice)
         {
-            // https://stackoverflow.com/questions/15583294/how-to-get-current-display-mode-resolution-refresh-rate-of-a-monitor-output-i
-            DXGI_OUTPUT_DESC OutputDesc;
-            hr = pOutput->lpVtbl->GetDesc(pOutput, &OutputDesc);
+            hr = pw->pDevice->lpVtbl->QueryInterface(pw->pDevice, &IID_IDXGIDevice1, (void**)&pDXGIDevice1);
             PW_ASSERT(SUCCEEDED(hr));
-            pw->LastMonitor = OutputDesc.Monitor;
+            PW_ASSERT(pDXGIDevice1);
         }
 
-        DWORD DisplayFrequency = pw_get_monitor_display_frequency(pw);
-
-        // https://stackoverflow.com/questions/29944745/get-osversion-in-windows-using-c
-        // https://stackoverflow.com/questions/71250924/how-to-get-osversioninfo-for-windows-11
-        // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_osversioninfoexw
-        HRESULT(__stdcall * RtlGetVersion)(OSVERSIONINFOEXW*);
-        *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlGetVersion");
-
-        if (RtlGetVersion != NULL)
+        if (pDXGIDevice1)
         {
-            OSVERSIONINFOEXW osInfo;
-            osInfo.dwOSVersionInfoSize = sizeof(osInfo);
-            RtlGetVersion(&osInfo);
-
-            pw->IsWindows10OrGreater = osInfo.dwMajorVersion >= 10;
+            hr = pDXGIDevice1->lpVtbl->GetAdapter(pDXGIDevice1, &pAdapter);
+            PW_ASSERT(SUCCEEDED(hr));
+            PW_ASSERT(pAdapter);
         }
 
-        pw->NextWidth  = Info.init_size.width;
-        pw->NextHeight = Info.init_size.height;
-
-        DXGI_SWAP_CHAIN_DESC1* pSwapDesc = &pw->SwapChainDesc1;
-        pSwapDesc->Width                 = Info.init_size.width;
-        pSwapDesc->Height                = Info.init_size.height;
-        pSwapDesc->Format                = DXGI_FORMAT_B8G8R8A8_UNORM;
-        // Defaults to stretch, but that looks bad when resizing.
-        // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/ne-dxgi1_2-dxgi_scaling
-        pSwapDesc->Scaling = DXGI_SCALING_NONE;
-        // Flip discard is the recommended setting for optimal performance. IIRC it helps to remove any waiting for the
-        // backbuffer to become available. This was introduced in Windows 10.
-        if (pw->IsWindows10OrGreater)
+        if (pAdapter)
         {
-            pSwapDesc->BufferCount = 2;
-            pSwapDesc->SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            hr = pAdapter->lpVtbl->GetParent(pAdapter, &IID_IDXGIFactory2, (void**)&pw->pFactory2);
+            PW_ASSERT(SUCCEEDED(hr));
+            PW_ASSERT(pFactory2);
         }
-        else
-        {
-            pSwapDesc->BufferCount = 1;
-            pSwapDesc->SwapEffect  = DXGI_SWAP_EFFECT_DISCARD;
-        }
-        pSwapDesc->SampleDesc.Count   = 1;
-        pSwapDesc->SampleDesc.Quality = 0;
-        pSwapDesc->BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        PW_DX11_RELEASE(pAdapter)
+        PW_DX11_RELEASE(pDXGIDevice1)
+    }
 
-        pw->ModeDesc.Width                   = pSwapDesc->Width;
-        pw->ModeDesc.Height                  = pSwapDesc->Height;
-        pw->ModeDesc.RefreshRate.Numerator   = DisplayFrequency;
-        pw->ModeDesc.RefreshRate.Denominator = 1;
-        pw->ModeDesc.Format                  = pSwapDesc->Format;
-
+    if (pw->pDevice && pw->pFactory2)
+    {
         hr = pw->pFactory2->lpVtbl->CreateSwapChainForHwnd(
             pw->pFactory2,
             (IUnknown*)pw->pDevice,
             pw->hwnd,
-            pSwapDesc,
+            &pw->SwapChainDesc1,
             NULL,
             NULL,
             &pw->pSwapchain1);
         PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pw->pSwapchain1);
+        PW_ASSERT(pSwapchain1);
     }
-    PW_ASSERT(pw->pSwapchain1);
 
     if (pw->pSwapchain1)
     {
@@ -2132,9 +2133,10 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_ASSERT(pw->pDepthStencilView);
     }
 
-    PW_DX11_RELEASE(pAdapter)
-    PW_DX11_RELEASE(pOutput)
-    PW_DX11_RELEASE(pDXGIDevice1)
+    PW_ASSERT(pw->LastMonitor);
+    PW_ASSERT(pw->pFactory2);
+    PW_ASSERT(pw->pSwapchain1);
+    PW_ASSERT(pw->pRenderTarget);
 #endif
 
     pw->gui = pw_create_gui(pw->plugin, pw);
@@ -2216,19 +2218,16 @@ void cplug_setParent(void* userGUI, void* newParent)
     if (oldParent)
     {
 #ifdef PW_DX11
-        g_OpenWindowFlags          &= ~pw->OpenWindowBit;
-        g_WindowMovedFlags         &= ~pw->OpenWindowBit;
-        pw->OpenWindowBit           = 0;
-        pw->LastMonitor             = NULL;
-        pw->VBlankThreadShouldExit  = TRUE;
+        // Blocking
+        pw->VBlankThreadShouldExit = TRUE;
         if (pw->hVBlankThread)
         {
             WaitForSingleObject(pw->hVBlankThread, INFINITE);
             CloseHandle(pw->hVBlankThread);
         }
+        pw->VBlankThreadShouldExit = FALSE;
         pw->hVBlankThread          = 0;
         pw->hVBlankThread          = NULL;
-        pw->VBlankThreadShouldExit = FALSE;
 #else
         KillTimer(pw->hwnd, PW_TIMER_ID);
 #endif
@@ -2239,24 +2238,13 @@ void cplug_setParent(void* userGUI, void* newParent)
     {
         SetParent(pw->hwnd, (HWND)newParent);
 
+#ifdef PW_DX11
+        pw->WindowMoved = TRUE;
+        if (pw->hVBlankThread == NULL)
+            pw->hVBlankThread = CreateThread(0, 0, pw_vblank_thread2, pw, 0, 0);
+#endif
         if (pw->hCallWndHook == NULL)
         {
-#ifdef PW_DX11
-            for (UINT64 i = 0; i < 64; i++)
-            {
-                UINT64 bit = 1LLU << i;
-                if (!(g_OpenWindowFlags & bit))
-                {
-                    g_OpenWindowFlags  |= bit;
-                    g_WindowMovedFlags |= bit;
-                    pw->OpenWindowBit   = bit;
-                    break;
-                }
-            }
-            if (pw->hVBlankThread == NULL)
-                pw->hVBlankThread = CreateThread(0, 0, pw_vblank_thread2, pw, 0, 0);
-#endif
-
             // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocessid
             // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid
             DWORD pid = GetCurrentProcessId();
@@ -2527,7 +2515,7 @@ error:
     CoUninitialize();
 
     // Handle callback on main thread
-    PostMessageW(pw->hwnd, WM_COMMAND, PW_WM_COMMAND_ChooseFile, 0);
+    PostMessageW(pw->hwnd, WM_CHOOSE_FILE_CALLBACK, 0, 0);
 
     return hr;
 }
