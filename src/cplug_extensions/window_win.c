@@ -2103,7 +2103,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         {
             hr = pAdapter->lpVtbl->GetParent(pAdapter, &IID_IDXGIFactory2, (void**)&pw->pFactory2);
             PW_ASSERT(SUCCEEDED(hr));
-            PW_ASSERT(pFactory2);
+            PW_ASSERT(pw->pFactory2);
         }
         PW_DX11_RELEASE(pAdapter)
         PW_DX11_RELEASE(pDXGIDevice1)
@@ -2120,7 +2120,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
             NULL,
             &pw->pSwapchain1);
         PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pSwapchain1);
+        PW_ASSERT(pw->pSwapchain1);
     }
 
     if (pw->pSwapchain1)
