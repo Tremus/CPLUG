@@ -1548,8 +1548,17 @@ UINT CPWIN_MIDI_ConnectInput(UINT portNum)
 {
     UINT result;
 
-    // Set up are MIDI reading callback
+    // For some mysterious reason, possibly in a new update of Windows 11, calling midiInOpen(portnum=0) before
+    // midiInOpen() appears to not to work. It's like they recently removed any scanning for
+    // devices that used to occur in midiInOpen or something?
+
+    UINT numMidiIn = midiInGetNumDevs(); // Hopefully this triggeres Windows 11 to scan for & cache MIDI devices
+    if (portNum >= numMidiIn)
+        goto failed;
+
+    // Set up MIDI reading callback
     cplug_assert(g_MIDI.hInput == NULL);
+    // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinopen
     result = midiInOpen(&g_MIDI.hInput, portNum, (DWORD_PTR)&CPWIN_MIDIInProc, 0, CALLBACK_FUNCTION);
 
     if (result != MMSYSERR_NOERROR)
