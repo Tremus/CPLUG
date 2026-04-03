@@ -2552,18 +2552,29 @@ bool pw_choose_file(const PWChooseFileArgs* args)
 
     if (args->num_extensions)
     {
-        pw->ChooseFile.NumTypes = args->num_extensions;
+        BOOL HasMultipleExtensions = args->num_extensions > 1;
 
-        size_t size               = sizeof(*pw->ChooseFile.pFileTypes) * args->num_extensions;
+        pw->ChooseFile.NumTypes = args->num_extensions;
+        if (HasMultipleExtensions)
+            pw->ChooseFile.NumTypes++;
+
+        size_t size               = sizeof(*pw->ChooseFile.pFileTypes) * pw->ChooseFile.NumTypes;
         pw->ChooseFile.pFileTypes = (COMDLG_FILTERSPEC*)PW_MALLOC(size);
         ZeroMemory(pw->ChooseFile.pFileTypes, size);
 
+        int TotalExtensionStringLength = 0;
         for (int i = 0; i < args->num_extensions; i++)
         {
             const char* ext8  = args->extension_types[i];
             const char* name8 = args->extension_names[i];
 
             COMDLG_FILTERSPEC* pFilterSpec = &pw->ChooseFile.pFileTypes[i];
+            if (HasMultipleExtensions)
+                pFilterSpec++; // idx+1
+
+            // Support both ".extension" & "extension"
+            while (*ext8 == '.')
+                ext8++;
 
             // https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-multibytetowidechar
             num = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name8, -1, NULL, 0);
@@ -2587,6 +2598,48 @@ bool pw_choose_file(const PWChooseFileArgs* args)
             ext16[1]             = L'.';
             num                  = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, ext8, -1, ext16 + 2, num);
             ext16[num + 2]       = 0;
+
+            TotalExtensionStringLength += num + 2;
+        }
+
+        if (HasMultipleExtensions)
+        {
+            COMDLG_FILTERSPEC* pFilterSpec = &pw->ChooseFile.pFileTypes[0];
+
+            // Build a string like this "Supported files (*.jpg;*.jpeg;*.bmp;*.png)"
+            // including all the extensions in the array
+
+            SIZE_T NumBytesName = sizeof(L"Supported files") + 2;
+            LPWSTR Name         = PW_MALLOC(NumBytesName);
+            memcpy(Name, L"Supported files", NumBytesName - 2);
+            Name[(NumBytesName / 2) - 1] = '\0';
+
+            int StringCapacity  = TotalExtensionStringLength;
+            StringCapacity     += args->num_extensions; // for the ";" seperators
+            StringCapacity     += 64;                   // for good luck
+            SIZE_T NumBytesExt  = (sizeof(WCHAR) * (StringCapacity + 1));
+            LPWSTR It           = PW_MALLOC(NumBytesExt);
+            memset(It, 0, NumBytesExt);
+
+            pFilterSpec->pszName = Name;
+            pFilterSpec->pszSpec = It;
+
+            for (int i = 1; i < pw->ChooseFile.NumTypes; i++)
+            {
+                COMDLG_FILTERSPEC* pNextFilter = &pw->ChooseFile.pFileTypes[i];
+                LPCWSTR            NextExt     = pNextFilter->pszSpec;
+
+                while (*NextExt != 0)
+                {
+                    *It = *NextExt;
+                    It++;
+                    NextExt++;
+                }
+                *It = L';';
+                It++;
+            }
+            It--;
+            *It = L'\0';
         }
     }
 
