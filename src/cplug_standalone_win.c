@@ -1554,7 +1554,10 @@ UINT CPWIN_MIDI_ConnectInput(UINT portNum)
 
     UINT numMidiIn = midiInGetNumDevs(); // Hopefully this triggeres Windows 11 to scan for & cache MIDI devices
     if (portNum >= numMidiIn)
+    {
+        result = MMSYSERR_BADDEVICEID;
         goto failed;
+    }
 
     // Set up MIDI reading callback
     cplug_assert(g_MIDI.hInput == NULL);
