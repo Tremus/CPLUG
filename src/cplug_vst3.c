@@ -10,6 +10,10 @@
 #include <vst3_c_api.h>
 #include <wchar.h>
 
+#ifndef static_assert
+#define static_assert(cond, arg) _Static_assert(cond, arg)
+#endif
+
 #define tuid_match(a, b) memcmp(a, b, sizeof(Steinberg_TUID)) == 0
 #define CPLUG_ARRLEN(a)  (sizeof(a) / sizeof(a[0]))
 
