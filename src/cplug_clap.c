@@ -6,6 +6,11 @@
 #include <stdio.h>
 #include <string.h>
 
+// fixes something that's probably an issue with glibc-shipped headers
+#ifndef static_assert
+#define static_assert(cond, arg) _Static_assert(cond, arg)
+#endif
+
 typedef struct CLAPPlugin
 {
     clap_plugin_t    clapPlugin;

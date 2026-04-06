@@ -48,6 +48,10 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+if(LINUX)
+	#add_compile_definitions(-msse -mfpmath=sse)
+endif()
+
 # settings used across all formats
 include_directories(src)
 
@@ -165,7 +169,27 @@ elseif(WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "%LOCALAPPDATA%\\Programs\\Common\\CLAP\\${PROJECT_NAME}.clap"
             )
     endif() # MSVC
-endif()
+elseif(LINUX)
+    add_library(${PROJECT_NAME}_plugin MODULE
+        example/example.c
+        src/cplug_clap.c
+        src/cplug_vst3.c
+        )
+    set_target_properties(${PROJECT_NAME}_plugin PROPERTIES
+        OUTPUT_NAME ${PROJECT_NAME}_plugin
+    )
+    add_custom_command(TARGET ${PROJECT_NAME}_plugin POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3"
+
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap" "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3"
+
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap to ~/.clap/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.clap" "~/.clap/${PROJECT_NAME}.clap"
+
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3 to ~/.vst3"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3" "~/.vst3/${PROJECT_NAME}.vst3"
+    )
+endif() #LINUX
 
 
 # ███████╗████████╗ █████╗ ███╗   ██╗██████╗  █████╗ ██╗      ██████╗ ███╗   ██╗███████╗

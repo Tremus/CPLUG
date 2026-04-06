@@ -17,6 +17,17 @@
     unsigned int newMXCSR = oldMXCSR |= 0x8040; /* set DAZ and FZ bits        */                                       \
     _mm_setcsr(newMXCSR);                       /* write the new MXCSR setting to the MXCSR */
 #define RESTORE_DENORMALS _mm_setcsr(oldMXCSR);
+#elif defined(__linux__)
+#ifdef __x86_64__
+#include <xmmintrin.h>
+#include <pmmintrin.h>
+#define DISABLE_DENORMALS                                                                                              \
+    uint32_t oldMXCSR, newMXCSR;                                                                                       \
+    __builtin_ia32_fxsave(&oldMXCSR);                                                                                  \
+    newMXCSR = oldMXCSR |= 0x8040;                                                                                     \
+    __builtin_ia32_fxrstor(&newMXCSR);
+#define RESTORE_DENORMALS __builtin_ia32_fxrstor(&oldMXCSR);
+#endif
 #else
 #include <fenv.h>
 #if defined(__x86_64__)
