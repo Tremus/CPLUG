@@ -188,6 +188,9 @@ typedef struct AUv2Plugin
     AudioUnitPropertyListenerProc parameterInfoListenerProc;
     void*                         parameterInfoListenerData;
 
+    // Required for effect (non-instruments) audio units in FL
+    AURenderCallbackStruct renderCallback;
+
     // Logic in Rosetta mode breaks if you don't have this
     // Rosetta Logic doesn't seem to support the feature...
     UInt32 supportsInPlaceProcessing;
@@ -942,7 +945,15 @@ static OSStatus AUMethodSetProperty(
         break;
 
     case kAudioUnitProperty_SetRenderCallback:
-        // Pretend to set this. auval only test that you set it, not that you use it
+        if (inScope == kAudioUnitScope_Input && inElement == 0)
+        {
+            // Required to get input audio inside FL Studio
+            auv2->renderCallback = *((AURenderCallbackStruct*)inData);
+        }
+        else
+        {
+            // Pretend to set this. auval only test that you set it, not that you use it
+        }
         break;
 
     case kAudioUnitProperty_PresentPreset:
@@ -1311,13 +1322,19 @@ static OSStatus AUMethodProcessAudio(
         translator.auv2 = auv2;
 
         CPLUG_LOG_ASSERT(ioData->mNumberBuffers == 2);
-        for (int i = 0; i < ioData->mNumberBuffers; i++)
+        for (int ch = 0; ch < ioData->mNumberBuffers; ch++)
         {
-            UInt32 numChannels = ioData->mBuffers[i].mNumberChannels;
+            UInt32 numChannels = ioData->mBuffers[ch].mNumberChannels;
             CPLUG_LOG_ASSERT(numChannels == 1);
             // The very smart people at Apple test you on this. Yes you actually have to return noErr.
-            CPLUG_LOG_ASSERT_RETURN(ioData->mBuffers[i].mData != NULL, noErr);
-            translator.channels[i] = (float*)ioData->mBuffers[i].mData;
+            CPLUG_LOG_ASSERT_RETURN(ioData->mBuffers[ch].mData != NULL, noErr);
+            translator.channels[ch] = (float*)ioData->mBuffers[ch].mData;
+        }
+
+        if (auv2->renderCallback.inputProc && auv2->renderCallback.inputProcRefCon)
+        {
+            auv2->renderCallback
+                .inputProc(auv2->renderCallback.inputProcRefCon, &flags, inTimeStamp, 0, inNumFrames, ioData);
         }
 
         cplug_process(auv2->userPlugin, (CplugProcessContext*)&translator);
