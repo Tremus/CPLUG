@@ -810,26 +810,15 @@ void* pw_get_dx11_render_target_view(void* _pw)
 {
     // cplug_log("pw_get_dx11_render_target_view => %p", _pw);
     CplugWindow* pw = _pw;
-    return pw->pRenderTargetView;
-}
-void* pw_get_dx11_depth_stencil_view(void* _pw)
-{
-    // cplug_log("pw_get_dx11_depth_stencil_view => %p", _pw);
-    CplugWindow* pw = _pw;
-    return pw->pDepthStencilView;
-}
+    HRESULT      hr = 0;
 
-HRESULT pw_dx11_create_render_target(CplugWindow* pw)
-{
-    // cplug_log("pw_dx11_create_render_target => %p", pw);
-
-    PW_ASSERT(pw->pSwapchain1);
-
-    HRESULT hr =
-        pw->pSwapchain1->lpVtbl->GetBuffer(pw->pSwapchain1, 0, &IID_ID3D11Texture2D, (void**)&pw->pRenderTarget);
-    PW_ASSERT(SUCCEEDED(hr));
-    PW_ASSERT(pw->pRenderTarget);
-    if (pw->pRenderTarget)
+    if (pw->pSwapchain1 != NULL && pw->pRenderTarget == NULL)
+    {
+        hr = pw->pSwapchain1->lpVtbl->GetBuffer(pw->pSwapchain1, 0, &IID_ID3D11Texture2D, (void**)&pw->pRenderTarget);
+        PW_ASSERT(SUCCEEDED(hr));
+        PW_ASSERT(pw->pRenderTarget);
+    }
+    if (pw->pRenderTarget != NULL && pw->pRenderTargetView == NULL)
     {
         D3D11_RENDER_TARGET_VIEW_DESC ViewDesc;
         memset(&ViewDesc, 0, sizeof(ViewDesc));
@@ -845,22 +834,32 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
         PW_ASSERT(SUCCEEDED(hr));
         PW_ASSERT(pw->pRenderTargetView);
     }
+    return pw->pRenderTargetView;
+}
+void* pw_get_dx11_depth_stencil_view(void* _pw)
+{
+    // cplug_log("pw_get_dx11_depth_stencil_view => %p", _pw);
+    CplugWindow* pw = _pw;
+    HRESULT      hr = 0;
 
-    D3D11_TEXTURE2D_DESC DepthStencilDesc;
-    memset(&DepthStencilDesc, 0, sizeof(DepthStencilDesc));
-    DepthStencilDesc.ArraySize          = 1;
-    DepthStencilDesc.BindFlags          = D3D11_BIND_DEPTH_STENCIL;
-    DepthStencilDesc.Format             = DXGI_FORMAT_D24_UNORM_S8_UINT;
-    DepthStencilDesc.Width              = pw->SwapChainDesc1.Width;
-    DepthStencilDesc.Height             = pw->SwapChainDesc1.Height;
-    DepthStencilDesc.MipLevels          = 1;
-    DepthStencilDesc.SampleDesc.Count   = pw->SwapChainDesc1.SampleDesc.Count;
-    DepthStencilDesc.SampleDesc.Quality = pw->SwapChainDesc1.SampleDesc.Quality;
+    if (pw->pDevice != NULL && pw->pDepthStencil == NULL)
+    {
+        D3D11_TEXTURE2D_DESC DepthStencilDesc;
+        memset(&DepthStencilDesc, 0, sizeof(DepthStencilDesc));
+        DepthStencilDesc.ArraySize          = 1;
+        DepthStencilDesc.BindFlags          = D3D11_BIND_DEPTH_STENCIL;
+        DepthStencilDesc.Format             = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        DepthStencilDesc.Width              = pw->SwapChainDesc1.Width;
+        DepthStencilDesc.Height             = pw->SwapChainDesc1.Height;
+        DepthStencilDesc.MipLevels          = 1;
+        DepthStencilDesc.SampleDesc.Count   = pw->SwapChainDesc1.SampleDesc.Count;
+        DepthStencilDesc.SampleDesc.Quality = pw->SwapChainDesc1.SampleDesc.Quality;
 
-    hr = pw->pDevice->lpVtbl->CreateTexture2D(pw->pDevice, &DepthStencilDesc, NULL, &pw->pDepthStencil);
-    PW_ASSERT(SUCCEEDED(hr));
-    PW_ASSERT(pw->pDepthStencil);
-    if (pw->pDepthStencil)
+        hr = pw->pDevice->lpVtbl->CreateTexture2D(pw->pDevice, &DepthStencilDesc, NULL, &pw->pDepthStencil);
+        PW_ASSERT(SUCCEEDED(hr));
+        PW_ASSERT(pw->pDepthStencil);
+    }
+    if (pw->pDepthStencil != NULL && pw->pDepthStencilView == NULL)
     {
         D3D11_DEPTH_STENCIL_VIEW_DESC DepthViewDesc;
         memset(&DepthViewDesc, 0, sizeof(DepthViewDesc));
@@ -875,7 +874,7 @@ HRESULT pw_dx11_create_render_target(CplugWindow* pw)
         PW_ASSERT(SUCCEEDED(hr));
         PW_ASSERT(pw->pDepthStencilView);
     }
-    return hr;
+    return pw->pDepthStencilView;
 }
 
 // https://stackoverflow.com/questions/15583294/how-to-get-current-display-mode-resolution-refresh-rate-of-a-monitor-output-i
@@ -1334,16 +1333,6 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             {
                 HRESULT hr = pw->pSwapchain1->lpVtbl->ResizeTarget(pw->pSwapchain1, &pw->ModeDesc);
                 PW_ASSERT(SUCCEEDED(hr));
-            }
-
-            if (pw->pRenderTarget == NULL)
-            {
-                HRESULT hr = pw_dx11_create_render_target(pw);
-                PW_ASSERT(SUCCEEDED(hr));
-                PW_ASSERT(pw->pRenderTarget);
-                PW_ASSERT(pw->pRenderTargetView);
-                PW_ASSERT(pw->pDepthStencil);
-                PW_ASSERT(pw->pDepthStencilView);
             }
         }
 #endif
@@ -2074,6 +2063,11 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         if (SUCCEEDED(hr))
         {
             pw->DriverType = DriverTypes[i];
+            cplug_log(
+                "DX11 Driver type: %d, Feature level: %d.%d",
+                pw->DriverType,
+                ((pw->FeatureLevel >> 12) & 0xf),
+                ((pw->FeatureLevel >> 8) & 0xf));
             break;
         }
     }
@@ -2123,20 +2117,9 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         PW_ASSERT(pw->pSwapchain1);
     }
 
-    if (pw->pSwapchain1)
-    {
-        hr = pw_dx11_create_render_target(pw);
-        PW_ASSERT(SUCCEEDED(hr));
-        PW_ASSERT(pw->pRenderTarget);
-        PW_ASSERT(pw->pRenderTargetView);
-        PW_ASSERT(pw->pDepthStencil);
-        PW_ASSERT(pw->pDepthStencilView);
-    }
-
     PW_ASSERT(pw->LastMonitor);
     PW_ASSERT(pw->pFactory2);
     PW_ASSERT(pw->pSwapchain1);
-    PW_ASSERT(pw->pRenderTarget);
 #endif
 
     pw->gui = pw_create_gui(pw->plugin, pw);
