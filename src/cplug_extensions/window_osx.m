@@ -216,13 +216,6 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
 
 @implementation CplugWindow
 
-- (void)dealloc
-{
-    if (trackingArea)
-        [trackingArea release];
-    [super dealloc];
-}
-
 - (BOOL)acceptsFirstMouse:(NSEvent*)event
 {
     return YES;
@@ -342,6 +335,19 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
             [NSEvent removeMonitor:keyEventMonitor];
             self->keyEventMonitor = NULL;
         }
+        if (self->trackingArea)
+        {
+            [self->trackingArea release];
+            self->trackingArea = nil;
+        }
+
+#ifdef PW_METAL
+        [self setPaused:YES];
+        [self setDelegate:nil];
+
+        [self.device release];
+        self.device = nil;
+#endif
 
         void* ptr = gui;
         gui       = NULL;
@@ -897,6 +903,7 @@ void* cplug_createGUI(CplugHostContext* hostCtx, void* userPlugin)
     pw.layer.opaque           = YES;
 
 #ifdef PW_METAL
+    // https://developer.apple.com/documentation/metal/mtlcreatesystemdefaultdevice()?language=objc
     pw.device                  = MTLCreateSystemDefaultDevice();
     pw.colorPixelFormat        = MTLPixelFormatBGRA8Unorm;
     pw.depthStencilPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
@@ -1024,7 +1031,7 @@ void* pw_get_native_window(void* _pw) { return _pw; }
 void* pw_get_metal_device(void* _pw)
 {
     CplugWindow*  pw     = (CplugWindow*)_pw;
-    id<MTLDevice> device = [pw device];
+    id<MTLDevice> device = pw.device;
     PW_ASSERT(device);
     return device;
 }
