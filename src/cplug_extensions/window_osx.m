@@ -321,7 +321,7 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
         timerRef = NULL;
     }
 #endif
-    if (gui)
+    if (self->gui)
     {
         NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
 
@@ -341,17 +341,14 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
             self->trackingArea = nil;
         }
 
+        pw_destroy_gui(self->gui);
+        self->gui = NULL;
+
 #ifdef PW_METAL
         [self setPaused:YES];
         [self setDelegate:nil];
-
-        [self.device release];
-        self.device = nil;
+        self.device = nil; // NOTE: This is a MTKView property. In objc, this calls a 'setter' which decrements the ref
 #endif
-
-        void* ptr = gui;
-        gui       = NULL;
-        pw_destroy_gui(ptr);
     }
 
     [super removeFromSuperview];
@@ -360,7 +357,15 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
 #ifdef PW_METAL
 - (void)drawRect:(NSRect)rect
 {
-    pw_tick(gui);
+    // NOTE: drawRect() could still be scheduled by CVDisplayLink on another thread after the users GUI has been
+    // destroyed
+    // The safest thing to would be to synchronously stop the CVDisplayLink thread, but I don't know how to do that
+    // without rolling my own vsync.
+    // The simplest thing to do is to guard this one line with conditional logic
+    if (self->gui)
+    {
+        pw_tick(gui);
+    }
 }
 #endif
 
