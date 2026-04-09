@@ -1263,12 +1263,9 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         PWFreeChooseFile(pw);
         break;
     }
-#ifdef PW_DX11
-    case WM_VBLANK:
-#else
     // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-timer
     case WM_TIMER:
-#endif
+    case WM_VBLANK:
     {
         PW_ASSERT(pw->gui != NULL);
 #ifdef PW_DX11
@@ -1343,12 +1340,13 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-present
             // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgiswapchain1-present1
-            UINT Flags = 0;
-            if (pw->IsWindows10OrGreater)
-                Flags |= DXGI_PRESENT_DO_NOT_WAIT;
-            // pw->pSwapchain1->lpVtbl->Present(pw->pSwapchain1, 0, Flags);
-            DXGI_PRESENT_PARAMETERS params = {0};
-            pw->pSwapchain1->lpVtbl->Present1(pw->pSwapchain1, 0, Flags, &params);
+            UINT    Flags = DXGI_PRESENT_DO_NOT_WAIT; // Never block the UI/main thread!
+            HRESULT hr    = pw->pSwapchain1->lpVtbl->Present(pw->pSwapchain1, 0, Flags);
+            // TODO: support dirty rectangles
+            // DXGI_PRESENT_PARAMETERS params = {0};
+            // HRESULT                 hr     = pw->pSwapchain1->lpVtbl->Present1(pw->pSwapchain1, 0, Flags, &params);
+            // PW_ASSERT(SUCCEEDED(hr) || hr )
+            PW_ASSERT(hr == S_OK || hr == DXGI_STATUS_OCCLUDED || hr == DXGI_ERROR_WAS_STILL_DRAWING);
         }
 #endif
         return 0;
@@ -1981,6 +1979,8 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
         pw->IsWindows10OrGreater = osInfo.dwMajorVersion >= 10;
     }
+    // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/ns-dxgi1_2-dxgi_swap_chain_desc1
+    // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/ne-dxgi-dxgi_swap_chain_flag
     DXGI_SWAP_CHAIN_DESC1* pSwapDesc = &pw->SwapChainDesc1;
     pSwapDesc->Width                 = pw->NextWidth;
     pSwapDesc->Height                = pw->NextHeight;
@@ -2006,6 +2006,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     pSwapDesc->SampleDesc.Count   = 1;
     pSwapDesc->SampleDesc.Quality = 0;
     pSwapDesc->BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    // pSwapDesc->Flags              = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT; // requires IDXGISwapChain2
 
     pw->ModeDesc.Width                   = pSwapDesc->Width;
     pw->ModeDesc.Height                  = pSwapDesc->Height;
@@ -2088,6 +2089,10 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
         if (pDXGIDevice1)
         {
+            // Prevent frame buffer queues
+            hr = pDXGIDevice1->lpVtbl->SetMaximumFrameLatency(pDXGIDevice1, 1);
+            PW_ASSERT(SUCCEEDED(hr));
+
             hr = pDXGIDevice1->lpVtbl->GetAdapter(pDXGIDevice1, &pAdapter);
             PW_ASSERT(SUCCEEDED(hr));
             PW_ASSERT(pAdapter);
@@ -2225,6 +2230,8 @@ void cplug_setParent(void* userGUI, void* newParent)
         pw->WindowMoved = TRUE;
         if (pw->hVBlankThread == NULL)
             pw->hVBlankThread = CreateThread(0, 0, pw_vblank_thread2, pw, 0, 0);
+#else
+        SetTimer(pw->hwnd, PW_TIMER_ID, 10, NULL);
 #endif
         if (pw->hCallWndHook == NULL)
         {
