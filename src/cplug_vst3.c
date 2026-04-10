@@ -234,7 +234,6 @@ static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint3
     }
 }
 
-#ifndef NDEBUG
 static inline const char* _cplug_getMediaTypeStr(int32_t type)
 {
     if (type == Steinberg_Vst_MediaTypes_kAudio)
@@ -251,8 +250,6 @@ static inline const char* _cplug_getBusDirectionStr(int32_t type)
         return "BusDirections_kOutput";
     return "[unknown]";
 }
-#endif
-
 // clang-format off
 // Taken from Richard Mitton & Randy Gaul (public domain)
 // https://github.com/RandyGaul/cute_headers_deprecated/blob/master/cute_utf.h

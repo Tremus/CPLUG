@@ -5,11 +5,40 @@
 #include <cplug.h>
 #include <cplug_extensions/window.h>
 
+#if !defined(PW_PREFIX)
+#warning "You must set a unique PW_PREFIX macro for your plugin and compile to avoid Objective-C class name collisions"
+
+// "Just let me build a plugin"
+#define PW_PREFIX PW
+#endif // !PW_PREFIX
+
+#if defined(CPLUG_BUILD_AUV2)
+#define PW_SUFFIX AUV2
+#elif defined(CPLUG_BUILD_CLAP)
+#define PW_SUFFIX CLAP
+#elif defined(CPLUG_BUILD_VST3)
+#define PW_SUFFIX VST3
+#elif defined(CPLUG_BUILD_STANDALONE)
+#define PW_SUFFIX STANDALONE
+#else
+#warning                                                                                                               \
+    "You must compile this source file sperately and define either CPLUG_BUILD_AUV2/CPLUG_BUILD_CLAP/CPLUG_BUILD_VST3/CPLUG_BUILD_STANDALONE within each plugin type to avoid Objective-C class name collisions"
+
+// "Just let me build a plugin"
+#define PW_SUFFIX FALLBACK
+#endif // !CPLUG_BUILD_XXXX
+
+#define _PW_JOIN3(a, b, c)  a##b##c
+#define PW_JOIN3(a, b, c)   _PW_JOIN3(a, b, c)
+#define PW_MAKE_CLASS(base) PW_JOIN3(PW_PREFIX, base, PW_SUFFIX)
+
+#define PW_CLASS PW_MAKE_CLASS(Window)
+
 #ifdef PW_METAL
 #import <MetalKit/MetalKit.h>
-@interface CplugWindow : MTKView <NSWindowDelegate, NSDraggingDestination, NSDraggingSource>
+@interface PW_CLASS : MTKView <NSWindowDelegate, NSDraggingDestination, NSDraggingSource>
 #else
-@interface CplugWindow : NSView <NSWindowDelegate, NSDraggingDestination, NSDraggingSource>
+@interface PW_CLASS : NSView <NSWindowDelegate, NSDraggingDestination, NSDraggingSource>
 #endif // PW_METAL
 {
 @public
@@ -67,7 +96,7 @@
 #ifndef PW_METAL
 void pw_timer_cb(CFRunLoopTimerRef timer, void* info)
 {
-    CplugWindow* pw = (CplugWindow*)info;
+    PW_CLASS* pw = (PW_CLASS*)info;
     pw_tick(pw->gui);
 }
 #endif
@@ -103,7 +132,7 @@ enum PWResizeDirection pwTranslateResizeFlags(uint32_t flags)
     return flags;
 }
 
-uint64_t pwTranslateModifierFlags(CplugWindow* pw, NSEvent* event)
+uint64_t pwTranslateModifierFlags(PW_CLASS* pw, NSEvent* event)
 {
     uint32_t mods = 0;
 
@@ -135,7 +164,7 @@ uint64_t pwTranslateModifierFlags(CplugWindow* pw, NSEvent* event)
     return mods;
 }
 
-bool pwHandleKeyDown(CplugWindow* pw, NSEvent* event)
+bool pwHandleKeyDown(PW_CLASS* pw, NSEvent* event)
 {
     bool    eventConsumed = false;
     PWEvent e             = {.gui = pw->gui};
@@ -182,7 +211,7 @@ bool pwHandleKeyDown(CplugWindow* pw, NSEvent* event)
     return eventConsumed;
 }
 
-bool pwHandleKeyUp(CplugWindow* pw, NSEvent* event)
+bool pwHandleKeyUp(PW_CLASS* pw, NSEvent* event)
 {
     bool eventConsumed = false;
 
@@ -197,7 +226,7 @@ bool pwHandleKeyUp(CplugWindow* pw, NSEvent* event)
     return eventConsumed;
 }
 
-PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
+PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
 {
     NSPoint point = [event locationInWindow];
     point         = [pw convertPoint:point fromView:nil];
@@ -214,7 +243,7 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
     return e;
 }
 
-@implementation CplugWindow
+@implementation PW_CLASS
 
 - (BOOL)acceptsFirstMouse:(NSEvent*)event
 {
@@ -361,11 +390,10 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
     // destroyed
     // The safest thing to would be to synchronously stop the CVDisplayLink thread, but I don't know how to do that
     // without rolling my own vsync.
-    // The simplest thing to do is to guard this one line with conditional logic
-    if (self->gui)
-    {
-        pw_tick(gui);
-    }
+    // The simplest thing to do is use conditional logic
+    if (self.paused || self.device == nil || self->gui == nil)
+        return;
+    pw_tick(gui);
 }
 #endif
 
@@ -743,7 +771,7 @@ PWEvent pwTranslateMouseEvent(CplugWindow* pw, NSEvent* event)
     return NSDragOperationCopy;
 }
 
-@end // CplugWindow
+@end // PW_CLASS
 
 void pw_set_clipboard_text(void* gui, const char* text)
 {
@@ -838,7 +866,7 @@ void pw_set_mouse_cursor(void* gui, enum PWCursorType type)
 // https://developer.apple.com/documentation/appkit/nswindow/firstresponder?language=objc
 void pw_get_keyboard_focus(void* _pw)
 {
-    CplugWindow* pw = (CplugWindow*)_pw;
+    PW_CLASS* pw = (PW_CLASS*)_pw;
     if (pw.window && pw.window.keyWindow == false)
         [pw.window makeKeyWindow];
 
@@ -847,8 +875,8 @@ void pw_get_keyboard_focus(void* _pw)
 
 bool pw_check_keyboard_focus(const void* _pw)
 {
-    CplugWindow* pw       = (CplugWindow*)_pw;
-    bool         hasFocus = false;
+    PW_CLASS* pw       = (PW_CLASS*)_pw;
+    bool      hasFocus = false;
     // https://developer.apple.com/documentation/appkit/nswindow/iskeywindow?language=objc
     if (pw.window)
         hasFocus = pw.window.keyWindow;
@@ -857,7 +885,7 @@ bool pw_check_keyboard_focus(const void* _pw)
 
 void pw_release_keyboard_focus(void* _pw)
 {
-    CplugWindow* pw = (CplugWindow*)_pw;
+    PW_CLASS* pw = (PW_CLASS*)_pw;
 
     if (pw.window)
         [pw.window resignFirstResponder];
@@ -884,7 +912,7 @@ void* cplug_createGUI(CplugHostContext* hostCtx, void* userPlugin)
     frame.size.width  = info.init_size.width;
     frame.size.height = info.init_size.height;
 
-    CplugWindow* pw = [[CplugWindow alloc] initWithFrame:frame];
+    PW_CLASS* pw = [[PW_CLASS alloc] initWithFrame:frame];
 
     pw->gui              = NULL;
     pw->plugin           = userPlugin;
@@ -923,7 +951,7 @@ void* cplug_createGUI(CplugHostContext* hostCtx, void* userPlugin)
 // NOTE: VST3 & CLAP only. When building with AUv2, do deinit in removeFromSuperview.
 void cplug_destroyGUI(void* userGUI)
 {
-    CplugWindow* pw = (CplugWindow*)userGUI;
+    PW_CLASS* pw = (PW_CLASS*)userGUI;
     if (pw.superview)
         [pw removeFromSuperview];
     [pw release];
@@ -931,7 +959,7 @@ void cplug_destroyGUI(void* userGUI)
 
 void cplug_setParent(void* userGUI, void* view)
 {
-    CplugWindow* pw = (CplugWindow*)userGUI;
+    PW_CLASS* pw = (PW_CLASS*)userGUI;
     if (pw.superview)
         [pw removeFromSuperview];
     if (view)
@@ -940,20 +968,20 @@ void cplug_setParent(void* userGUI, void* view)
 
 void cplug_setVisible(void* userGUI, bool visible)
 {
-    CplugWindow* pw = (CplugWindow*)userGUI;
+    PW_CLASS* pw = (PW_CLASS*)userGUI;
     [pw setHidden:(visible ? NO : YES)];
 }
 
 void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
 {
-    CplugWindow* pw = (CplugWindow*)userGUI;
-    *width          = (uint32_t)pw.frame.size.width;
-    *height         = (uint32_t)pw.frame.size.height;
+    PW_CLASS* pw = (PW_CLASS*)userGUI;
+    *width       = (uint32_t)pw.frame.size.width;
+    *height      = (uint32_t)pw.frame.size.height;
 }
 
 void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
 {
-    CplugWindow* pw = (CplugWindow*)userGUI;
+    PW_CLASS* pw = (PW_CLASS*)userGUI;
 
     // Reaper may try resizing your VST3 window before attaching your window to the parent, which is where we create the
     // GUI and register necessary delegates & observers
@@ -998,7 +1026,7 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
 
 bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 {
-    CplugWindow* pw = (CplugWindow*)userGUI;
+    PW_CLASS* pw = (PW_CLASS*)userGUI;
 
     NSSize size;
     size.width  = width;
@@ -1024,7 +1052,7 @@ float pw_get_content_scale_factor(void* _pw) { return 1; }
 float pw_get_backing_scale_factor(void* _pw)
 {
     PW_ASSERT(_pw);
-    CplugWindow* pw = (CplugWindow*)_pw;
+    PW_CLASS* pw = (PW_CLASS*)_pw;
     PW_ASSERT(pw.window);
     return [pw.window screen].backingScaleFactor;
 }
@@ -1035,7 +1063,7 @@ void* pw_get_native_window(void* _pw) { return _pw; }
 #ifdef PW_METAL
 void* pw_get_metal_device(void* _pw)
 {
-    CplugWindow*  pw     = (CplugWindow*)_pw;
+    PW_CLASS*     pw     = (PW_CLASS*)_pw;
     id<MTLDevice> device = pw.device;
     PW_ASSERT(device);
     return device;
@@ -1043,7 +1071,7 @@ void* pw_get_metal_device(void* _pw)
 
 void* pw_get_metal_drawable(void* _pw)
 {
-    CplugWindow*        pw       = (CplugWindow*)_pw;
+    PW_CLASS*           pw       = (PW_CLASS*)_pw;
     id<CAMetalDrawable> drawable = [pw currentDrawable];
     PW_ASSERT(drawable);
     return drawable;
@@ -1051,14 +1079,14 @@ void* pw_get_metal_drawable(void* _pw)
 
 void* pw_get_metal_depth_stencil_texture(void* _pw)
 {
-    CplugWindow*   pw           = (CplugWindow*)_pw;
+    PW_CLASS*      pw           = (PW_CLASS*)_pw;
     id<MTLTexture> depthStencil = [pw depthStencilTexture];
     PW_ASSERT(depthStencil);
     return depthStencil;
 }
 void* pw_get_metal_msaa_tex(void* _pw)
 {
-    CplugWindow*   pw   = (CplugWindow*)_pw;
+    PW_CLASS*      pw   = (PW_CLASS*)_pw;
     id<MTLTexture> msaa = [pw multisampleColorTexture];
     PW_ASSERT(msaa);
     return msaa;
@@ -1071,7 +1099,7 @@ void pw_drag_files(void* _pw, const char* const* paths, uint32_t num_paths)
     // https://developer.apple.com/documentation/appkit/nsdraggingitem?language=objc
     // https://developer.apple.com/documentation/appkit/nsdraggingitem/setdraggingframe(_:contents:)?language=objc
 
-    CplugWindow* pw = _pw;
+    PW_CLASS* pw = _pw;
 
     NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
 
@@ -1102,7 +1130,9 @@ void pw_drag_files(void* _pw, const char* const* paths, uint32_t num_paths)
     [pool release];
 }
 
-@interface PWSavePanelDelegate : NSObject <NSComboBoxDelegate>
+#define PW_SAVEPANELDELEGATE PW_MAKE_CLASS(SavePanelDelegate)
+
+@interface PW_SAVEPANELDELEGATE : NSObject <NSComboBoxDelegate>
 {
 @public
     NSSavePanel* savePanel;
@@ -1112,9 +1142,9 @@ void pw_drag_files(void* _pw, const char* const* paths, uint32_t num_paths)
 }
 @end
 
-@implementation PWSavePanelDelegate
+@implementation PW_SAVEPANELDELEGATE
 
-- (PWSavePanelDelegate*)init
+- (PW_SAVEPANELDELEGATE*)init
 {
     savePanel     = NULL;
     comboBox      = NULL;
@@ -1174,8 +1204,8 @@ bool pw_choose_file(const PWChooseFileArgs* args)
 
     NSWindow* keyWindow = [[NSApplication sharedApplication] keyWindow];
 
-    NSSavePanel*         panel    = NULL;
-    PWSavePanelDelegate* delegate = NULL;
+    NSSavePanel*          panel    = NULL;
+    PW_SAVEPANELDELEGATE* delegate = NULL;
 
     if (args->is_save)
     {
@@ -1220,7 +1250,7 @@ bool pw_choose_file(const PWChooseFileArgs* args)
         NSComboBox*  combo         = [[NSComboBox alloc] initWithFrame:CGRectMake(width - 80, 10, 80, 20)];
         NSTextField* label         = [[NSTextField alloc] init];
 
-        delegate = [[PWSavePanelDelegate alloc] init];
+        delegate = [[PW_SAVEPANELDELEGATE alloc] init];
 
         delegate->savePanel     = panel;
         delegate->comboBox      = combo;
@@ -1400,7 +1430,8 @@ static bool AUv2HostContext_requestResize(CplugHostContext* ctx, uint32_t width,
     CplugHostContext* ctx        = (CplugHostContext*)(((char*)auv2) + CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT);
     void**            userPlugin = (void**)(((char*)auv2) + CPLUG_AUV2_OFFSET_PLUGIN);
     CPLUG_LOG_ASSERT_RETURN(*userPlugin != NULL, NULL);
-    NSView* view = (NSView*)cplug_createGUI(ctx, *userPlugin);
+    void*   userPluginPtr = *userPlugin;
+    NSView* view          = (NSView*)cplug_createGUI(ctx, userPluginPtr);
     CPLUG_LOG_ASSERT_RETURN(view != NULL, NULL);
 
     // Set up vtable

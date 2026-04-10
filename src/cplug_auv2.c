@@ -781,6 +781,9 @@ static OSStatus AUMethodGetProperty(
     case kAudioUnitProperty_CocoaUI:
     {
 #ifdef CPLUG_WANT_GUI
+#define CPLUG_AUV2_MAKE_STRING_(str) #str
+#define CPLUG_AUV2_MAKE_STRING(str)  CPLUG_AUV2_MAKE_STRING_(str)
+
         AudioUnitCocoaViewInfo* info = (AudioUnitCocoaViewInfo*)outData;
         // AUv2 docs tell you to bundle your Cocoa GUI as a separate App bundle nested inside your .component bundle.
         // For most wrapper libraries, including CPLUG, this is s̶t̶u̶p̶i̶d̶ ̶a̶n̶d̶ ̶a̶n̶n̶o̶y̶i̶n̶g̶ intrusive to our build system.
@@ -788,7 +791,8 @@ static OSStatus AUMethodGetProperty(
         CFStringRef bundleID             = CFStringCreateWithCString(0, CPLUG_AUV2_BUNDLE_ID, kCFStringEncodingUTF8);
         CFBundleRef bundle               = CFBundleGetBundleWithIdentifier(bundleID);
         info->mCocoaAUViewBundleLocation = CFBundleCopyBundleURL(bundle);
-        info->mCocoaAUViewClass[0] = CFStringCreateWithCString(0, CPLUG_AUV2_VIEW_CLASS_STR, kCFStringEncodingUTF8);
+        info->mCocoaAUViewClass[0] =
+            CFStringCreateWithCString(0, CPLUG_AUV2_MAKE_STRING(CPLUG_AUV2_VIEW_CLASS), kCFStringEncodingUTF8);
         CFRelease(bundleID);
         break;
 #endif
