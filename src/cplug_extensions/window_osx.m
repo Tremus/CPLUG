@@ -1032,6 +1032,31 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     size.width  = width;
     size.height = height;
     [pw setFrameSize:size];
+
+#ifdef PW_METAL
+    if (pw.layer)
+    {
+        CAMetalLayer* layer = (CAMetalLayer*)pw.layer;
+        double screen_scale = (double)pw_get_backing_scale_factor(pw);
+        double layer_scale  = [layer contentsScale];
+
+        // NOTE: Old intel macs and/or older versions of macOS do not always keep the layers contentScale factor in
+        // sync with the screens backingScale factor, so we have to...
+        // This appears to have been fixed in newer versions of macOS, or since the M1 series
+        if (layer_scale != screen_scale)
+        {
+            [layer setContentsScale:screen_scale];
+        }
+
+        CGSize currentSize  = [layer drawableSize];
+        CGSize nextSize     = {width * screen_scale, height * screen_scale};
+        if (currentSize.width != nextSize.width || currentSize.height != nextSize.height)
+        {
+            [layer setDrawableSize:nextSize];
+        }
+    }
+#endif
+
     return true;
 }
 
@@ -1073,7 +1098,7 @@ void* pw_get_metal_drawable(void* _pw)
 {
     PW_CLASS*           pw       = (PW_CLASS*)_pw;
     id<CAMetalDrawable> drawable = [pw currentDrawable];
-    PW_ASSERT(drawable);
+    PW_ASSERT(drawable);    
     return drawable;
 }
 
