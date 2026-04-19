@@ -308,6 +308,10 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
         self->keyEventMonitor =
             [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskKeyUp)
                                                   handler:^NSEvent* _Nullable(NSEvent* _Nonnull event) {
+                                                    // NOTE: key events may still be in the queue after the GUI is
+                                                    // destroyed
+                                                    if (self->gui == NULL)
+                                                        return event;
                                                     bool eventConsumed = false;
                                                     if (event.type == NSEventTypeKeyDown)
                                                         eventConsumed = pwHandleKeyDown(self, event);
@@ -350,35 +354,34 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
         timerRef = NULL;
     }
 #endif
+    NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+
+    [center removeObserver:self name:NSWindowDidResizeNotification object:nil];
+    [center removeObserver:self name:NSWindowWillStartLiveResizeNotification object:nil];
+    [center removeObserver:self name:NSWindowDidEndLiveResizeNotification object:nil];
+    [center removeObserver:self name:NSWindowDidResignKeyNotification object:nil];
+
+    if (self->keyEventMonitor)
+    {
+        [NSEvent removeMonitor:keyEventMonitor];
+        self->keyEventMonitor = nil;
+    }
+    if (self->trackingArea)
+    {
+        [self->trackingArea release];
+        self->trackingArea = nil;
+    }
+
     if (self->gui)
     {
-        NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
-
-        [center removeObserver:self name:NSWindowDidResizeNotification object:nil];
-        [center removeObserver:self name:NSWindowWillStartLiveResizeNotification object:nil];
-        [center removeObserver:self name:NSWindowDidEndLiveResizeNotification object:nil];
-        [center removeObserver:self name:NSWindowDidResignKeyNotification object:nil];
-
-        if (self->keyEventMonitor)
-        {
-            [NSEvent removeMonitor:keyEventMonitor];
-            self->keyEventMonitor = NULL;
-        }
-        if (self->trackingArea)
-        {
-            [self->trackingArea release];
-            self->trackingArea = nil;
-        }
-
         pw_destroy_gui(self->gui);
         self->gui = NULL;
-
-#ifdef PW_METAL
-        [self setPaused:YES];
-        [self setDelegate:nil];
-        self.device = nil; // NOTE: This is a MTKView property. In objc, this calls a 'setter' which decrements the ref
-#endif
     }
+#ifdef PW_METAL
+    [self setPaused:YES];
+    [self setDelegate:nil];
+    self.device = nil; // NOTE: This is a MTKView property. In objc, this calls a 'setter' which decrements the ref
+#endif
 
     [super removeFromSuperview];
 }
@@ -457,18 +460,24 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
 
 - (void)parentWindowStartResize
 {
-    NSRect rect                = self.window.frame;
-    self->resizeStartFrame     = rect;
-    self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
-    const struct PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN, .gui = self};
-    pw_event(&event);
+    if (self->gui)
+    {
+        NSRect rect                = self.window.frame;
+        self->resizeStartFrame     = rect;
+        self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
+        const struct PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN, .gui = self->gui};
+        pw_event(&event);
+    }
 }
 
 - (void)parentWindowEndResize
 {
-    self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
-    const struct PWEvent event = {.type = PW_EVENT_RESIZE_END, .gui = self};
-    pw_event(&event);
+    if (self->gui)
+    {
+        self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
+        const struct PWEvent event = {.type = PW_EVENT_RESIZE_END, .gui = self->gui};
+        pw_event(&event);
+    }
 }
 
 - (void)parentWindowLostKeyboardFocus
@@ -1036,9 +1045,9 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 #ifdef PW_METAL
     if (pw.layer)
     {
-        CAMetalLayer* layer = (CAMetalLayer*)pw.layer;
-        double screen_scale = (double)pw_get_backing_scale_factor(pw);
-        double layer_scale  = [layer contentsScale];
+        CAMetalLayer* layer        = (CAMetalLayer*)pw.layer;
+        double        screen_scale = (double)pw_get_backing_scale_factor(pw);
+        double        layer_scale  = [layer contentsScale];
 
         // NOTE: Old intel macs and/or older versions of macOS do not always keep the layers contentScale factor in
         // sync with the screens backingScale factor, so we have to...
@@ -1048,8 +1057,8 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
             [layer setContentsScale:screen_scale];
         }
 
-        CGSize currentSize  = [layer drawableSize];
-        CGSize nextSize     = {width * screen_scale, height * screen_scale};
+        CGSize currentSize = [layer drawableSize];
+        CGSize nextSize    = {width * screen_scale, height * screen_scale};
         if (currentSize.width != nextSize.width || currentSize.height != nextSize.height)
         {
             [layer setDrawableSize:nextSize];
@@ -1076,10 +1085,16 @@ float pw_get_content_scale_factor(void* _pw) { return 1; }
 
 float pw_get_backing_scale_factor(void* _pw)
 {
-    PW_ASSERT(_pw);
     PW_CLASS* pw = (PW_CLASS*)_pw;
-    PW_ASSERT(pw.window);
-    return [pw.window screen].backingScaleFactor;
+    PW_ASSERT(pw);
+    float scale = 1;
+    if (pw.window)
+    {
+        NSScreen* screen = [pw.window screen];
+        if (screen)
+            scale = screen.backingScaleFactor;
+    }
+    return scale;
 }
 
 // It's the same ptr!
@@ -1098,7 +1113,7 @@ void* pw_get_metal_drawable(void* _pw)
 {
     PW_CLASS*           pw       = (PW_CLASS*)_pw;
     id<CAMetalDrawable> drawable = [pw currentDrawable];
-    PW_ASSERT(drawable);    
+    PW_ASSERT(drawable);
     return drawable;
 }
 
