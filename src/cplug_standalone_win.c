@@ -31,10 +31,16 @@
 #include <cplug.h>
 #include <stdio.h>
 
+#include <VSStyle.h>
+#include <Vssym32.h>
+#include <dwmapi.h>
+
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "cfgmgr32.lib")
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Avrt.lib")
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "uxtheme.lib")
 
 #define cplug_assert(cond) (cond) ? (void)0 : __debugbreak()
 
@@ -57,6 +63,9 @@
 #else
 #define CPLUG_WTF_IS_A_REFERENCE(obj) &obj
 #endif
+
+HWND  g_hwnd = NULL;
+float g_dpi  = 1;
 
 #if defined(HOTRELOAD_WATCH_DIR) || defined(HOTRELOAD_LIB_PATH) || defined(HOTRELOAD_BUILD_COMMAND)
 #if !defined(HOTRELOAD_WATCH_DIR) || !defined(HOTRELOAD_LIB_PATH) || !defined(HOTRELOAD_BUILD_COMMAND)
@@ -261,6 +270,108 @@ void CPWIN_Audio_SetDevice(int deviceIdx);
 // MENUS //
 ///////////
 
+typedef enum
+{
+    APPMODE_DEFAULT    = 0,
+    APPMODE_ALLOWDARK  = 1,
+    APPMODE_FORCEDARK  = 2,
+    APPMODE_FORCELIGHT = 3,
+} PreferredAppMode;
+
+typedef bool(WINAPI* ShouldAppsUseDarkModeProc)(void);                       // ordinal 132
+typedef PreferredAppMode(WINAPI* SetPreferredAppModeProc)(PreferredAppMode); // ordinal 135
+typedef void(WINAPI* FlushMenuThemesProc)(void);                             // ordinal 136
+
+// https://github.com/adzm/win32-custom-menubar-aero-theme
+#define WM_UAHDRAWMENU        0x0091 // lParam is UAHMENU
+#define WM_UAHDRAWMENUITEM    0x0092 // lParam is UAHDRAWMENUITEM
+#define WM_UAHMEASUREMENUITEM 0x0094 // lParam is UAHMEASUREMENUITEM
+
+// describes the sizes of the menu bar or menu item
+typedef union tagUAHMENUITEMMETRICS
+{
+    struct
+    {
+        DWORD cx;
+        DWORD cy;
+    } rgsizeBar[2];
+    struct
+    {
+        DWORD cx;
+        DWORD cy;
+    } rgsizePopup[4];
+} UAHMENUITEMMETRICS;
+
+// not really used in our case but part of the other structures
+typedef struct tagUAHMENUPOPUPMETRICS
+{
+    DWORD rgcx[4];
+    DWORD fUpdateMaxWidths : 2; // from kernel symbols, padded to full dword
+} UAHMENUPOPUPMETRICS;
+
+// hmenu is the main window menu; hdc is the context to draw in
+typedef struct tagUAHMENU
+{
+    HMENU hmenu;
+    HDC   hdc;
+    DWORD dwFlags; // no idea what these mean, in my testing it's either 0x00000a00 or sometimes 0x00000a10
+} UAHMENU;
+
+// menu items are always referred to by iPosition here
+typedef struct tagUAHMENUITEM
+{
+    int                 iPosition; // 0-based position of menu item in menubar
+    UAHMENUITEMMETRICS  umim;
+    UAHMENUPOPUPMETRICS umpm;
+} UAHMENUITEM;
+
+// the DRAWITEMSTRUCT contains the states of the menu items, as well as
+// the position index of the item in the menu, which is duplicated in
+// the UAHMENUITEM's iPosition as well
+typedef struct UAHDRAWMENUITEM
+{
+    DRAWITEMSTRUCT dis; // itemID looks uninitialized
+    UAHMENU        um;
+    UAHMENUITEM    umi;
+} UAHDRAWMENUITEM;
+
+// the MEASUREITEMSTRUCT is intended to be filled with the size of the item
+// height appears to be ignored, but width can be modified
+typedef struct tagUAHMEASUREMENUITEM
+{
+    MEASUREITEMSTRUCT mis;
+    UAHMENU           um;
+    UAHMENUITEM       umi;
+} UAHMEASUREMENUITEM;
+
+struct
+{
+    BOOL   IsDarkMode;
+    HTHEME hThemeMenu;
+
+    ShouldAppsUseDarkModeProc ShouldAppsUseDarkMode;
+    SetPreferredAppModeProc   SetPreferredAppMode;
+    FlushMenuThemesProc       FlushMenuThemes;
+} g_DarkMode;
+
+void OpenMenuTheme()
+{
+    // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-openthemedata
+    if (g_hwnd && !g_DarkMode.hThemeMenu)
+    {
+        // g_DarkMode.hThemeMenu = OpenThemeData(g_hwnd, L"Menu"); // Light mode
+        g_DarkMode.hThemeMenu = OpenThemeData(g_hwnd, L"DarkMode::Menu");
+    }
+}
+void CloseMenuTheme()
+{
+    if (g_DarkMode.hThemeMenu)
+    {
+        CloseThemeData(g_DarkMode.hThemeMenu);
+        g_DarkMode.hThemeMenu = NULL;
+    }
+}
+
 enum
 {
     IDM_SampleRate_44100,
@@ -316,8 +427,6 @@ HCMNOTIFICATION g_hCMNotification;
 
 // Main Thread
 LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-HWND             g_hwnd = NULL;
-float            g_dpi  = 1;
 
 static inline UINT64 CPWIN_RoundUp(UINT64 v, UINT64 align)
 {
@@ -355,6 +464,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     memset(&g_plugin, 0, sizeof(g_plugin));
     memset(&g_MIDI, 0, sizeof(g_MIDI));
     memset(&g_Audio, 0, sizeof(g_Audio));
+    memset(&g_DarkMode, 0, sizeof(g_DarkMode));
     memset(&g_Menus, 0, sizeof(g_Menus));
 
     // Warning: Windows 10+
@@ -418,19 +528,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     uint32_t guiWidth, guiHeight;
     g_plugin.getSize(g_plugin.UserGUI, &guiWidth, &guiHeight);
 
-    MSG msg;
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadiconw
+    // Load icon from RC file, if you used one...
+    HICON hResIcon = LoadIconW(GetModuleHandleW(0), MAKEINTRESOURCE(1));
 
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-wndclassexw
     WNDCLASSEXW wc;
     memset(&wc, 0, sizeof(wc));
-    wc.cbSize        = sizeof(wc);
-    wc.lpfnWndProc   = CPWIN_WindowProc;
-    wc.hInstance     = hInst;
-    wc.hIcon         = LoadIconW(NULL, IDI_APPLICATION);
-    wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    wc.cbSize      = sizeof(wc);
+    wc.lpfnWndProc = CPWIN_WindowProc;
+    wc.hInstance   = hInst;
+    wc.hIcon       = hResIcon != NULL ? hResIcon : LoadIconW(NULL, IDI_APPLICATION); // fallback icon
+    wc.hCursor     = LoadCursorW(NULL, IDC_ARROW);
+    // wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.lpszClassName = L"CPLUG - " TEXT(CPLUG_PLUGIN_NAME);
-    wc.hIconSm       = LoadIconW(NULL, IDI_APPLICATION);
+    wc.hIconSm       = wc.hIcon;
 
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclassexw
     if (!RegisterClassExW(&wc))
     {
         fprintf(stderr, "Could not register window class\n");
@@ -457,6 +572,50 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     {
         fprintf(stderr, "Could not create window\n");
         return 1;
+    }
+
+    // May not be required if we set the icons in WndClass?
+    // if (hResIcon)
+    // {
+    //     SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)hResIcon);   // set taskbar icon
+    //     SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hResIcon); // set window icon
+    // }
+
+    ///////////////
+    // DARK MODE //
+    ///////////////
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmsetwindowattribute
+    // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+    // https://discourse.glfw.org/t/dark-theme-titlebar/2537/2
+    // https://github.com/mintty/mintty/issues/983
+    // https://gist.github.com/rounk-ctrl/b04e5622e30e0d62956870d5c22b7017
+
+    HMODULE hUXTheme                 = LoadLibraryW(L"uxtheme.dll");
+    g_DarkMode.ShouldAppsUseDarkMode = (ShouldAppsUseDarkModeProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(132));
+    g_DarkMode.SetPreferredAppMode   = (SetPreferredAppModeProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(135));
+    g_DarkMode.FlushMenuThemes       = (FlushMenuThemesProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(136));
+
+    if (g_DarkMode.ShouldAppsUseDarkMode && g_DarkMode.SetPreferredAppMode && g_DarkMode.FlushMenuThemes)
+    {
+        g_DarkMode.IsDarkMode = g_DarkMode.ShouldAppsUseDarkMode();
+        if (g_DarkMode.IsDarkMode)
+        {
+            DWORD dwDarkModeWindows11 = 20;   // DWMWA_USE_IMMERSIVE_DARK_MODE
+            DWORD dwDarkModeWindows10 = 19;   // DWMWA_USE_IMMERSIVE_DARK_MODE (old?)
+            BOOL  Dark                = TRUE; // NOTE: requires 4 byte BOOL
+
+            hr = DwmSetWindowAttribute(g_hwnd, dwDarkModeWindows11, &Dark, sizeof(Dark));
+            if (hr != S_OK)
+                hr = DwmSetWindowAttribute(g_hwnd, dwDarkModeWindows10, &Dark, sizeof(Dark));
+
+            cplug_assert(hr == S_OK);
+
+            g_DarkMode.SetPreferredAppMode(APPMODE_FORCEDARK);
+            g_DarkMode.FlushMenuThemes();
+
+            OpenMenuTheme();
+        }
     }
 
     ///////////////
@@ -508,6 +667,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     g_plugin.setVisible(g_plugin.UserGUI, true);
     SetForegroundWindow(g_hwnd);
 
+    MSG msg;
 #ifndef HOTRELOAD_WATCH_DIR
     // Default event loop
     while (GetMessageW(&msg, NULL, 0, 0))
@@ -783,6 +943,8 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         // Shutdown MIDI
         CPWIN_MIDI_DisconnectInput();
 
+        CloseMenuTheme();
+
         // Destroy plugin
 #ifdef HOTRELOAD_WATCH_DIR
         if (g_Hotreload.hPluginDLL)
@@ -1018,6 +1180,168 @@ LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         DrawMenuBar(hWnd);
         break;
     }
+    // Not sure if we need this...
+    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd
+    // case WM_ERASEBKGND:
+    // {
+    //     if (g_DarkMode.colBG)
+    //     {
+    //         HDC  hdc = (HDC)wParam;
+    //         RECT rc;
+    //         GetClientRect(hWnd, &rc);
+    //         FillRect(hdc, &rc, g_DarkMode.hBrushBG);
+    //         return 1;
+    //     }
+    //     break;
+    // }
+    // https://learn.microsoft.com/en-us/windows/win32/gdi/wm-ncpaint
+    case WM_NCPAINT:
+    case WM_NCACTIVATE:
+    {
+        LRESULT ret = DefWindowProcW(hWnd, uMsg, wParam, lParam);
+        if (g_DarkMode.IsDarkMode && !!g_Menus.hMain)
+        {
+            RECT rcClient = {0};
+            BOOL ok       = GetClientRect(hWnd, &rcClient);
+            cplug_assert(ok);
+            MapWindowPoints(hWnd, NULL, (POINT*)&rcClient, 2);
+
+            RECT rcWindow = {0};
+            ok            = GetWindowRect(hWnd, &rcWindow);
+            cplug_assert(ok);
+            ok = OffsetRect(&rcClient, -rcWindow.left, -rcWindow.top);
+            cplug_assert(ok);
+
+            // the rcBar is offset by the window rect
+            RECT rc   = rcClient;
+            rc.bottom = rcClient.top;
+            rc.top    = rcClient.top - 1;
+
+            HDC hdc = GetWindowDC(hWnd);
+            DrawThemeBackground(g_DarkMode.hThemeMenu, hdc, MENU_POPUPITEM, MPI_NORMAL, &rc, NULL);
+            ReleaseDC(hWnd, hdc);
+        }
+
+        return ret;
+    }
+    case WM_UAHDRAWMENU:
+    {
+        if (g_DarkMode.IsDarkMode)
+        {
+            OpenMenuTheme();
+
+            UAHMENU*    pUDM = (UAHMENU*)lParam;
+            RECT        rc   = {0};
+            MENUBARINFO mbi  = {sizeof(mbi)};
+            RECT        rcWindow;
+
+            GetMenuBarInfo(hWnd, OBJID_MENU, 0, &mbi);
+            GetWindowRect(hWnd, &rcWindow);
+            rc = mbi.rcBar;
+            OffsetRect(&rc, -rcWindow.left, -rcWindow.top);
+            rc.top -= 1;
+
+            DrawThemeBackground(g_DarkMode.hThemeMenu, pUDM->hdc, MENU_POPUPITEM, MPI_NORMAL, &rc, NULL);
+
+            return 0;
+        }
+        break;
+    }
+    case WM_UAHDRAWMENUITEM:
+    {
+        if (g_DarkMode.IsDarkMode)
+        {
+            OpenMenuTheme();
+
+            UAHDRAWMENUITEM* pUDMI = (UAHDRAWMENUITEM*)lParam;
+
+            // Get menu title
+            WCHAR        StringBuffer[256] = {0};
+            MENUITEMINFO mii               = {sizeof(mii), MIIM_STRING};
+            mii.dwTypeData                 = StringBuffer;
+            mii.cch                        = (sizeof(StringBuffer) / 2) - 1;
+            GetMenuItemInfoW(pUDMI->um.hmenu, pUDMI->umi.iPosition, TRUE, &mii);
+
+            // get the item state for drawing
+            DWORD dwFlags = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
+
+            int iTextStateID       = 0;
+            int iBackgroundStateID = 0;
+            if ((pUDMI->dis.itemState & ODS_INACTIVE) | (pUDMI->dis.itemState & ODS_DEFAULT))
+            {
+                // iTextStateID       = MBI_NORMAL; // normal display
+                // iBackgroundStateID = MBI_NORMAL;
+                iTextStateID       = MPI_NORMAL; // normal display
+                iBackgroundStateID = MPI_NORMAL;
+            }
+
+            if ((pUDMI->dis.itemState & ODS_HOTLIGHT) && !(pUDMI->dis.itemState & ODS_INACTIVE))
+            {
+                // iTextStateID       = MBI_HOT; // hot tracking / hover
+                // iBackgroundStateID = MBI_HOT;
+                iTextStateID       = MPI_HOT; // hot tracking
+                iBackgroundStateID = MPI_HOT;
+            }
+            if (pUDMI->dis.itemState & ODS_SELECTED)
+            {
+                // iTextStateID       = MBI_PUSHED; // clicked
+                // iBackgroundStateID = MBI_PUSHED;
+                iTextStateID       = MPI_HOT; // hot tracking
+                iBackgroundStateID = MPI_HOT;
+            }
+            if ((pUDMI->dis.itemState & ODS_GRAYED) || (pUDMI->dis.itemState & ODS_DISABLED) ||
+                (pUDMI->dis.itemState & ODS_INACTIVE))
+            {
+                // iTextStateID       = MBI_DISABLED; // disabled / grey text/ inactive
+                // iBackgroundStateID = MBI_DISABLED;
+                iTextStateID       = MPI_DISABLED; // disabled / grey text/ inactive
+                iBackgroundStateID = MPI_DISABLED;
+            }
+            if (pUDMI->dis.itemState & ODS_NOACCEL)
+            {
+                dwFlags |= DT_HIDEPREFIX;
+            }
+
+            // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-drawthemebackground
+            // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-drawthemetext
+
+            // NOTE: I think 'MENU_BARITEM' is the _correct_ ID to use here, however my Windows 11 machine will
+            // _incorrectly_ draw the light mode theme instead! Using 'MENU_POPUPITEM' is a good fallback and has an
+            // identical look and feel
+            DrawThemeBackground(
+                g_DarkMode.hThemeMenu,
+                pUDMI->um.hdc,
+                MENU_POPUPITEM,
+                iBackgroundStateID,
+                &pUDMI->dis.rcItem,
+                NULL);
+            DrawThemeText(
+                g_DarkMode.hThemeMenu,
+                pUDMI->um.hdc,
+                MENU_POPUPITEM,
+                // MENU_BARITEM,
+                iTextStateID,
+                StringBuffer,
+                mii.cch,
+                dwFlags,
+                0,
+                &pUDMI->dis.rcItem);
+            return 0;
+        }
+        break;
+    }
+    case WM_THEMECHANGED:
+    {
+        CloseMenuTheme();
+        InvalidateRect(hWnd, NULL, TRUE);
+        UpdateWindow(hWnd);
+        break;
+    }
+        // Noisy
+        // case WM_SETCURSOR:
+        // case WM_NCMOUSEMOVE:
+        // case WM_NCHITTEST:
+        //     break;
     }
     return DefWindowProcW(hWnd, uMsg, wParam, lParam);
 }
