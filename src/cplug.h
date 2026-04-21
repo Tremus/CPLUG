@@ -203,6 +203,7 @@ CPLUG_API void cplug_getParameterRange(void*, uint32_t paramId, double* min, dou
 // NOTE: AUv2 supports a max length of 52 bytes, VST3 128, CLAP 256
 CPLUG_API void cplug_getParameterName(void*, uint32_t paramId, char* buf, size_t buflen);
 
+// NOTE: some hosts will test you with garbage IDs
 CPLUG_API double cplug_getParameterValue(void*, uint32_t paramId);
 CPLUG_API double cplug_getDefaultParameterValue(void*, uint32_t paramId);
 // [hopefully audio thread] VST3 & AU only
