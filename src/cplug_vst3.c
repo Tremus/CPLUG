@@ -457,6 +457,80 @@ static inline VST3Plugin* _cplug_pointerShiftProcessor(void* const ptr)
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, processor));
 }
 
+void _cplug_IPtr_set(Steinberg_FUnknown** a, Steinberg_FUnknown* b)
+{
+    if (b)
+        b->lpVtbl->addRef(b);
+    if (*a)
+        (*a)->lpVtbl->release(*a);
+    *a = b;
+}
+
+Steinberg_tresult _cplug_pluginQueryInterface(VST3Plugin* vst3, const Steinberg_TUID iid, void** const iface)
+{
+    if (tuid_match(iid, Steinberg_Vst_IComponent_iid))
+    {
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+        cplug_atomic_fetch_add_i32(&vst3->component.refcounter, 1);
+        *iface = &vst3->component;
+        return Steinberg_kResultOk;
+    }
+
+    if (tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
+    {
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+
+        cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, 1);
+        *iface = &vst3->processor;
+        return Steinberg_kResultOk;
+    }
+
+    if (tuid_match(iid, Steinberg_Vst_IEditController_iid))
+    {
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+
+        cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, 1);
+        *iface = &vst3->controller;
+        return Steinberg_kResultOk;
+    }
+
+    if (tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
+    {
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+        cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, 1);
+        *iface = &vst3->processor;
+        return Steinberg_kResultOk;
+    }
+
+    if (tuid_match(iid, Steinberg_Vst_IProcessContextRequirements_iid))
+    {
+        cplug_log("%s => %p %s %p | OK convert static", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+        *iface = &g_vst3ProcessContext;
+        return Steinberg_kResultOk;
+    }
+
+#if CPLUG_WANT_MIDI_INPUT
+    if (tuid_match(iid, Steinberg_Vst_IMidiMapping_iid))
+    {
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+        cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, 1);
+        *iface = &vst3->midiMapping;
+        return Steinberg_kResultOk;
+    }
+    if (tuid_match(iid, Steinberg_Vst_INoteExpressionController_iid))
+    {
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+        cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, 1);
+        *iface = &vst3->noteExpression;
+        return Steinberg_kResultOk;
+    }
+#endif
+
+    cplug_log("%s => %p %s %p | WARNING UNSUPPORTED", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
+    *iface = NULL;
+    return Steinberg_kNoInterface;
+}
+
 // General notes on syncing parameters with a host:
 // If your plugin has hundreds of parameters, Ableton 10 likely won't show them in their interface.
 // Instead they suggest you use their 'Configure' mode and start changing parameters within your plugins interface. The
@@ -860,22 +934,11 @@ Source: "pluginterfaces/vst/ivsteditcontroller.h", line 557 */
 
 // Steinberg_FUnknown
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
-VST3MidiMapping_queryInterface(void* thisInterface, const Steinberg_TUID iid, void** obj)
+VST3MidiMapping_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
 {
-    if (tuid_match(iid, Steinberg_Vst_IMidiMapping_iid))
-    {
-        cplug_log("VST3MidiMapping_queryInterface => %p %s %p | OK", thisInterface, _cplug_tuid2str(iid), obj);
-        *obj = thisInterface;
-        return Steinberg_kResultOk;
-    }
-
-    cplug_log(
-        "VST3MidiMapping_queryInterface => %p %s %p | WARNING UNSUPPORTED",
-        thisInterface,
-        _cplug_tuid2str(iid),
-        obj);
-    *obj = NULL;
-    return Steinberg_kNoInterface;
+    cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
+    VST3Plugin* const vst3 = _cplug_pointerShiftMidiMapping(self);
+    return _cplug_pluginQueryInterface(vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_addRef(void* const thisInterface)
@@ -924,22 +987,11 @@ Source: "pluginterfaces/vst/ivstnoteexpression.h", line 165 */
 
 // Steinberg_FUnknown
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
-VST3NoteExpression_queryInterface(void* thisInterface, const Steinberg_TUID iid, void** obj)
+VST3NoteExpression_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
 {
-    if (tuid_match(iid, Steinberg_Vst_INoteExpressionController_iid))
-    {
-        cplug_log("VST3NoteExpression_queryInterface => %p %s %p | OK", thisInterface, _cplug_tuid2str(iid), obj);
-        *obj = thisInterface;
-        return Steinberg_kResultOk;
-    }
-
-    cplug_log(
-        "VST3NoteExpression_queryInterface => %p %s %p | WARNING UNSUPPORTED",
-        thisInterface,
-        _cplug_tuid2str(iid),
-        obj);
-    *obj = NULL;
-    return Steinberg_kNoInterface;
+    cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
+    VST3Plugin* const vst3 = _cplug_pointerShiftNoteExpression(self);
+    return _cplug_pluginQueryInterface(vst3, iid, iface);
 }
 
 Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_addRef(void* thisInterface)
@@ -1085,36 +1137,9 @@ Source: "pluginterfaces/vst/ivsteditcontroller.h", line 398 */
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_queryInterface(void* const self, const Steinberg_TUID iid, void** const iface)
 {
+    cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* vst3 = _cplug_pointerShiftController(self);
-
-    if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPluginBase_iid) ||
-        tuid_match(iid, Steinberg_Vst_IEditController_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-        cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, 1);
-        *iface = self;
-        return Steinberg_kResultOk;
-    }
-#if CPLUG_WANT_MIDI_INPUT
-    if (tuid_match(iid, Steinberg_Vst_IMidiMapping_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-        cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, 1);
-        *iface = &vst3->midiMapping;
-        return Steinberg_kResultOk;
-    }
-    if (tuid_match(iid, Steinberg_Vst_INoteExpressionController_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-        cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, 1);
-        *iface = &vst3->noteExpression;
-        return Steinberg_kResultOk;
-    }
-#endif
-
-    cplug_log("%s => %p %s %p | WARNING UNSUPPORTED", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-    *iface = NULL;
-    return Steinberg_kNoInterface;
+    return _cplug_pluginQueryInterface(vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_addRef(void* const self)
@@ -1399,9 +1424,7 @@ VST3Controller_setComponentHandler(void* self, Steinberg_Vst_IComponentHandler* 
     cplug_log("%s => %p %p", __FUNCTION__, self, handler);
     // NOTE: Ableton 10, FL Studio & Cubase have been spotted trying to pass NULL here.
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
-
-    vst3->controller.componentHandler = handler;
-
+    _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->controller.componentHandler, (Steinberg_FUnknown*)handler);
     return Steinberg_kResultOk;
 }
 
@@ -1507,27 +1530,9 @@ Source: "pluginterfaces/vst/ivstaudioprocessor.h", line 258 */
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Processor_queryInterface(void* const self, const Steinberg_TUID iid, void** const iface)
 {
+    cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* const vst3 = _cplug_pointerShiftProcessor(self);
-
-    if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-        cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, 1);
-        *iface = self;
-        return Steinberg_kResultOk;
-    }
-
-    if (tuid_match(iid, Steinberg_Vst_IProcessContextRequirements_iid))
-    {
-        cplug_log("%s => %p %s %p | OK convert static", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-        *iface = &g_vst3ProcessContext;
-        return Steinberg_kResultOk;
-    }
-
-    cplug_log("%s => %p %s %p | WARNING UNSUPPORTED", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-
-    *iface = NULL;
-    return Steinberg_kNoInterface;
+    return _cplug_pluginQueryInterface(vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_addRef(void* const self)
@@ -2084,38 +2089,9 @@ Source: "pluginterfaces/vst/ivstcomponent.h", line 157 */
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Component_queryInterface(void* const self, const Steinberg_TUID iid, void** const iface)
 {
+    cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* vst3 = _cplug_pointerShiftComponent(self);
-
-    if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPluginBase_iid) ||
-        tuid_match(iid, Steinberg_Vst_IComponent_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-        cplug_atomic_fetch_add_i32(&vst3->component.refcounter, 1);
-        *iface = self;
-        return Steinberg_kResultOk;
-    }
-
-    if (tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-
-        cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, 1);
-        *iface = &vst3->processor;
-        return Steinberg_kResultOk;
-    }
-
-    if (tuid_match(iid, Steinberg_Vst_IEditController_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-
-        cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, 1);
-        *iface = &vst3->controller;
-        return Steinberg_kResultOk;
-    }
-
-    cplug_log("%s => %p %s %p | WARNING UNSUPPORTED", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
-    *iface = NULL;
-    return Steinberg_kNoInterface;
+    return _cplug_pluginQueryInterface(vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Component_addRef(void* const self)
@@ -2141,17 +2117,9 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Component_release(void* const self)
 
         // Because we aggregate all the VST3 objects, we must check that all references are 0 before deleting this
 
-        int ec_refcount = vst3->controller.lpVtbl->release(&vst3->controller);
-        if (ec_refcount)
-        {
-            cplug_log("[WARNING] %s: IEditController is still active (refcount %d)", __FUNCTION__, ec_refcount);
-        }
-
-        int ap_refcount = vst3->processor.lpVtbl->release(&vst3->processor);
-        if (ap_refcount)
-        {
-            cplug_log("[WARNING] %s: IAudioProcessor is still active (refcount %d)", __FUNCTION__, ap_refcount);
-        }
+        // These interfaces (or their dependencies) will call _cplug_tryDeleteVST3Plugin()
+        vst3->controller.lpVtbl->release(&vst3->controller);
+        vst3->processor.lpVtbl->release(&vst3->processor);
     }
 
     return refcount;
@@ -2160,14 +2128,13 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Component_release(void* const self)
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Component_initialize(void* const self, Steinberg_FUnknown* const context)
 {
+    cplug_log("%s => %p %p", __FUNCTION__, self, context);
     VST3Plugin* vst3 = _cplug_pointerShiftComponent(self);
 
     // check if already initialized
     CPLUG_LOG_ASSERT_RETURN(vst3->host == NULL, Steinberg_kInvalidArgument);
 
-    vst3->host = (Steinberg_Vst_IHostApplication*)context;
-
-    cplug_log("%s => %p %p | hostApplication %p", __FUNCTION__, self, context, vst3->host);
+    _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->host, context);
 
     vst3->userPlugin = cplug_createPlugin(&vst3->hostContext);
 
@@ -2181,10 +2148,8 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_terminate(void* co
 
     cplug_destroyPlugin(vst3->userPlugin);
     vst3->userPlugin = NULL;
-    vst3->host       = NULL;
-
-    if (vst3->controller.componentHandler)
-        vst3->controller.componentHandler->lpVtbl->release(vst3->controller.componentHandler);
+    _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->host, NULL);
+    _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->controller.componentHandler, NULL);
 
     return Steinberg_kResultOk;
 }
