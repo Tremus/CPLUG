@@ -226,7 +226,7 @@ static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint3
             Steinberg_Vst_kSpeakerSl | Steinberg_Vst_kSpeakerSr | Steinberg_Vst_kSpeakerLc | Steinberg_Vst_kSpeakerRc |
             Steinberg_Vst_kSpeakerC | Steinberg_Vst_kSpeakerCs | Steinberg_Vst_kSpeakerLfe);
     default:
-        cplug_log("[WARNING]: _cplug_channelCountToVST3Speaker: Unsupported number of channels %u", channelCount);
+        cplug_log("[WARNING]: %s: Unsupported number of channels %u", __FUNCTION__, channelCount);
         return 0;
     }
 }
@@ -557,7 +557,7 @@ static void _cplug_vst3_sendParamEvent(CplugHostContext* ctx, const CplugEvent* 
 
 static void _cplug_vst3_rescan(CplugHostContext* ctx, uint32_t flags)
 {
-    cplug_log("_cplug_vst3_rescan => %p %u", ctx, flags);
+    cplug_log("%s => %p %u", __FUNCTION__, ctx, flags);
     VST3Plugin* vst3 = (VST3Plugin*)ctx;
 
     Steinberg_int32 vst_flags = 0;
@@ -615,8 +615,9 @@ static void _cplug_tryDeleteVST3Plugin(VST3Plugin* vst3)
     int ref_noteexp    = cplug_atomic_load_i32(&vst3->noteExpression.refcounter);
     int ref_processor  = cplug_atomic_load_i32(&vst3->processor.refcounter);
     cplug_log(
-        "_cplug_tryDeleteVST3Plugin %p | component: %d, controller: %d, midimapping: %d, noteExpression: %d, "
+        "%s %p | component: %d, controller: %d, midimapping: %d, noteExpression: %d, "
         "processor: %d",
+        __FUNCTION__,
         vst3,
         ref_component,
         ref_controller,
@@ -627,7 +628,7 @@ static void _cplug_tryDeleteVST3Plugin(VST3Plugin* vst3)
     int total = ref_component + ref_controller + ref_midimap + ref_noteexp + ref_processor;
     if (total == 0)
     {
-        cplug_log("_cplug_tryDeleteVST3Plugin %p | all refcounts are zero, deleting everything!", vst3);
+        cplug_log("%s %p | all refcounts are zero, deleting everything!", __FUNCTION__, vst3);
         free(vst3);
     }
 }
@@ -661,7 +662,7 @@ static void _cplug_tryDeleteVST3View(VST3View* view)
     int total = ref_view + ref_contentscake;
     if (total == 0)
     {
-        cplug_log("_cplug_tryDeleteVST3View %p | all refcounts are zero, deleting everything!", view);
+        cplug_log("%s %p | all refcounts are zero, deleting everything!", __FUNCTION__, view);
         CPLUG_LOG_ASSERT(view->vst3 != NULL);
         VST3Plugin* vst3 = view->vst3;
         cplug_setVisible(view->userGUI, false);
@@ -695,17 +696,13 @@ VST3ViewContentScale_queryInterface(void* const self, const Steinberg_TUID iid, 
     if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) ||
         cplug_tuid_match(iid, Steinberg_IPlugViewContentScaleSupport_iid))
     {
-        cplug_log("VST3ViewContentScale_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->contentScaleSupport.refcounter, 1);
         *iface = self;
         return Steinberg_kResultOk;
     }
 
-    cplug_log(
-        "VST3ViewContentScale_queryInterface => %p %s %p | WARNING UNSUPPORTED",
-        self,
-        _cplug_tuid2str(iid),
-        iface);
+    cplug_log("%s => %p %s %p | WARNING UNSUPPORTED", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
 
     *iface = NULL;
     return Steinberg_kNoInterface;
@@ -721,7 +718,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_release(void* const 
 {
     VST3View* const view     = _cplug_pointerShiftContentScaleSupport(self);
     int             refcount = cplug_atomic_fetch_add_i32(&view->contentScaleSupport.refcounter, -1) - 1;
-    cplug_log("VST3ViewContentScale_release => %p | refcount %d", self, refcount);
+    cplug_log("%s => %p | refcount %d", __FUNCTION__, self, refcount);
 
     if (refcount == 0)
         _cplug_tryDeleteVST3View(view);
@@ -731,7 +728,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_release(void* const 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3ViewContentScale_setContentScaleFactor(void* const self, const float factor)
 {
-    cplug_log("VST3ViewContentScale_setContentScaleFactor => %p %f", self, factor);
+    cplug_log("%s => %p %f", __FUNCTION__, self, factor);
     VST3View* const view = _cplug_pointerShiftContentScaleSupport(self);
 
     cplug_setScaleFactor(view->userGUI, factor);
@@ -749,7 +746,7 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
 
     if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) || cplug_tuid_match(iid, Steinberg_IPlugView_iid))
     {
-        cplug_log("VST3View_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->refcounter, 1);
         *iface = self;
         return Steinberg_kResultOk;
@@ -757,13 +754,13 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
 
     if (cplug_tuid_match(Steinberg_IPlugViewContentScaleSupport_iid, iid))
     {
-        cplug_log("VST3View_queryInterface => %p %s %p | OK convert", self, _cplug_tuid2str(iid), iface);
+        cplug_log("%s => %p %s %p | OK convert", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->contentScaleSupport.refcounter, 1);
         *iface = &view->contentScaleSupport;
         return Steinberg_kResultOk;
     }
 
-    cplug_log("VST3View_queryInterface => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
+    cplug_log("%s => %p %s %p | WARNING UNSUPPORTED", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
 
     *iface = NULL;
     return Steinberg_kNoInterface;
@@ -773,7 +770,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3View_addRef(void* self)
 {
     VST3View* const view     = (VST3View*)self;
     int             refcount = cplug_atomic_fetch_add_i32(&view->refcounter, 1) + 1;
-    cplug_log("VST3View_addRef => %p | refcount %i", self, refcount);
+    cplug_log("%s => %p | refcount %i", __FUNCTION__, self, refcount);
     return refcount;
 }
 
@@ -782,7 +779,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3View_release(void* self)
     VST3View* const view = (VST3View*)self;
 
     const int refcount = cplug_atomic_fetch_add_i32(&view->refcounter, -1) - 1;
-    cplug_log("VST3View_release => %p | refcount %d", self, refcount);
+    cplug_log("%s => %p | refcount %d", __FUNCTION__, self, refcount);
     if (refcount == 0)
         view->contentScaleSupport.lpVtbl->release(&view->contentScaleSupport);
     return refcount;
@@ -801,7 +798,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3View_release(void* self)
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_isPlatformTypeSupported(void* const self, const char* const platform_type)
 {
-    cplug_log("VST3View_isPlatformTypeSupported => %p %s", self, platform_type);
+    cplug_log("%s => %p %s", __FUNCTION__, self, platform_type);
 
     if (strcmp(platform_type, CPLUG_VST3_GUI_API) == 0)
         return Steinberg_kResultOk;
@@ -812,7 +809,7 @@ VST3View_isPlatformTypeSupported(void* const self, const char* const platform_ty
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_attached(void* const self, void* const parent, const char* const platform_type)
 {
-    cplug_log("VST3View_attached => %p %p %s", self, parent, platform_type);
+    cplug_log("%s => %p %p %s", __FUNCTION__, self, parent, platform_type);
     VST3View* const view = (VST3View*)self;
     cplug_setParent(view->userGUI, parent);
     cplug_setVisible(view->userGUI, parent != NULL);
@@ -821,7 +818,7 @@ VST3View_attached(void* const self, void* const parent, const char* const platfo
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_removed(void* const self)
 {
-    cplug_log("VST3View_removed => %p", self);
+    cplug_log("%s => %p", __FUNCTION__, self);
     VST3View* const view = (VST3View*)self;
     cplug_setVisible(view->userGUI, false);
     cplug_setParent(view->userGUI, NULL);
@@ -836,21 +833,21 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onWheel(void* const sel
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_onKeyDown(void* const self, const char16_t key_char, const int16_t key_code, const int16_t modifiers)
 {
-    cplug_log("VST3View_onKeyDown => %p %hu %hu %hu", self, key_char, key_code, modifiers);
+    cplug_log("%s => %p %hu %hu %hu", __FUNCTION__, self, key_char, key_code, modifiers);
     return Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_onKeyUp(void* const self, const char16_t key_char, const int16_t key_code, const int16_t modifiers)
 {
-    cplug_log("VST3View_onKeyUp => %p %hu %hu %hu", self, key_char, key_code, modifiers);
+    cplug_log("%s => %p %hu %hu %hu", __FUNCTION__, self, key_char, key_code, modifiers);
     return Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
-    cplug_log("VST3View_getSize %p", rect);
+    cplug_log("%s => %p %s", __FUNCTION__, self, rect);
 
     uint32_t width, height;
     cplug_getSize(((VST3View*)self)->userGUI, &width, &height);
@@ -863,7 +860,7 @@ VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
-    cplug_log("VST3View_onSize => %p {%d,%d,%d,%d}", self, rect->top, rect->left, rect->right, rect->bottom);
+    cplug_log("%s => %p {%d,%d,%d,%d}", __FUNCTION__, self, rect->top, rect->left, rect->right, rect->bottom);
     int width  = rect->right - rect->left;
     int height = rect->bottom - rect->top;
     CPLUG_LOG_ASSERT_RETURN(width >= 0, Steinberg_kInvalidArgument);
@@ -873,14 +870,14 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onSize(void* const self
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onFocus(void* const self, const Steinberg_TBool state)
 {
-    cplug_log("VST3View_onFocus => %p %hhu", state);
+    cplug_log("%s => %p %hhu", __FUNCTION__, self, state);
     // TODO: Ableton seems to lose track of who has focus. Not sure if this is an Ableton bug or our fault.
     return Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_setFrame(void* const self, Steinberg_IPlugFrame* const frame)
 {
-    cplug_log("VST3View_setFrame => %p %p", self, frame);
+    cplug_log("%s => %p %p", __FUNCTION__, self, frame);
     VST3View* const view = (VST3View*)self;
     view->frame          = frame;
     return Steinberg_kResultTrue;
@@ -891,7 +888,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_canResize(void* const s
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_checkSizeConstraint(void* const self, struct Steinberg_ViewRect* const rect)
 {
-    cplug_log("VST3View_checkSizeConstraint => %p %d %d %d %d", self, rect->left, rect->top, rect->right, rect->bottom);
+    cplug_log("%s => %p %d %d %d %d", __FUNCTION__, self, rect->left, rect->top, rect->right, rect->bottom);
     uint32_t width  = rect->right - rect->left;
     uint32_t height = rect->bottom - rect->top;
     cplug_checkSize(((VST3View*)self)->userGUI, &width, &height);
@@ -933,19 +930,19 @@ VST3MidiMapping_queryInterface(void* self, const Steinberg_TUID iid, void** ifac
     return _cplug_pluginQueryInterface(self, vst3, iid, iface);
 }
 
-static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_addRef(void* const thisInterface)
+static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_addRef(void* const self)
 {
-    VST3Plugin* const vst3     = _cplug_pointerShiftMidiMapping(thisInterface);
+    VST3Plugin* const vst3     = _cplug_pointerShiftMidiMapping(self);
     const int         refcount = cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, 1) + 1;
-    cplug_log("VST3MidiMapping_addRef => %p | refcount %i", thisInterface, refcount);
+    cplug_log("%s => %p | refcount %i", __FUNCTION__, self, refcount);
     return refcount;
 }
 
-static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_release(void* const thisInterface)
+static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_release(void* const self)
 {
-    VST3Plugin* vst3     = _cplug_pointerShiftMidiMapping(thisInterface);
+    VST3Plugin* vst3     = _cplug_pointerShiftMidiMapping(self);
     const int   refcount = cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, -1) - 1;
-    cplug_log("VST3MidiMapping_release => %p | refcount %d", thisInterface, refcount);
+    cplug_log("%s => %p | refcount %d", __FUNCTION__, self, refcount);
 
     if (refcount == 0)
         _cplug_tryDeleteVST3Plugin(vst3);
@@ -962,7 +959,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3MidiMapping_getMidiControllerAssign
     Steinberg_Vst_ParamID*   id)
 {
     // This gets hammered at startup
-    // cplug_log("VST3MidiMapping_getMidiControllerAssignment => %p %d %hd %u %p", self, busIdx, channel, ctrlNum, id);
+    // cplug_log("%s => %p %d %hd %u %p", __FUNCTION__, self, busIdx, channel, ctrlNum, id);
     CPLUG_LOG_ASSERT_RETURN(busIdx == 0, Steinberg_kResultFalse);
     CPLUG_LOG_ASSERT_RETURN(
         ctrlNum >= 0 && ctrlNum < Steinberg_Vst_ControllerNumbers_kCountCtrlNumber,
@@ -986,19 +983,19 @@ VST3NoteExpression_queryInterface(void* self, const Steinberg_TUID iid, void** i
     return _cplug_pluginQueryInterface(self, vst3, iid, iface);
 }
 
-Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_addRef(void* thisInterface)
+Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_addRef(void* self)
 {
-    VST3Plugin* const vst3     = _cplug_pointerShiftNoteExpression(thisInterface);
+    VST3Plugin* const vst3     = _cplug_pointerShiftNoteExpression(self);
     const int         refcount = cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, 1) + 1;
-    cplug_log("VST3NoteExpression_addRef => %p | refcount %i", thisInterface, refcount);
+    cplug_log("%s => %p | refcount %i", __FUNCTION__, self, refcount);
     return refcount;
 }
 
-Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_release(void* thisInterface)
+Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_release(void* self)
 {
-    VST3Plugin* vst3     = _cplug_pointerShiftNoteExpression(thisInterface);
+    VST3Plugin* vst3     = _cplug_pointerShiftNoteExpression(self);
     const int   refcount = cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, -1) - 1;
-    cplug_log("VST3NoteExpression_release => %p | refcount %d", thisInterface, refcount);
+    cplug_log("%s => %p | refcount %d", __FUNCTION__, self, refcount);
 
     if (refcount == 0)
         _cplug_tryDeleteVST3Plugin(vst3);
@@ -1007,28 +1004,22 @@ Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_release(void* thisInt
 }
 // Steinberg_Vst_INoteExpressionController
 Steinberg_int32 SMTG_STDMETHODCALLTYPE
-VST3NoteExpression_getNoteExpressionCount(void* thisInterface, Steinberg_int32 busIndex, Steinberg_int16 channel)
+VST3NoteExpression_getNoteExpressionCount(void* self, Steinberg_int32 busIndex, Steinberg_int16 channel)
 {
-    cplug_log("VST3NoteExpression_getNoteExpressionCount => %p %d %hd", thisInterface, busIndex, channel);
+    cplug_log("%s => %p %d %hd", __FUNCTION__, self, busIndex, channel);
     // we accept only the first bus and 1 channel
     if (busIndex == 0 && channel == 0)
         return 1;
     return 0;
 }
 Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionInfo(
-    void*                                        thisInterface,
+    void*                                        self,
     Steinberg_int32                              busIndex,
     Steinberg_int16                              channel,
     Steinberg_int32                              noteExpressionIndex,
     struct Steinberg_Vst_NoteExpressionTypeInfo* info)
 {
-    cplug_log(
-        "VST3NoteExpression_getNoteExpressionInfo => %p %d %hd %d %p",
-        thisInterface,
-        busIndex,
-        channel,
-        noteExpressionIndex,
-        info);
+    cplug_log("%s => %p %d %hd %d %p", __FUNCTION__, self, busIndex, channel, noteExpressionIndex, info);
     // we accept only the first bus and 1 channel and only 1 Note Expression (tuning)
     if (busIndex == 0 && channel == 0 && noteExpressionIndex == 0)
     {
@@ -1061,7 +1052,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionInf
 }
 
 Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionStringByValue(
-    void*                              thisInterface,
+    void*                              self,
     Steinberg_int32                    busIndex,
     Steinberg_int16                    channel,
     Steinberg_Vst_NoteExpressionTypeID id,
@@ -1069,14 +1060,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionStr
     Steinberg_Vst_String128            string)
 {
     // This gets called a lot
-    // cplug_log(
-    //     "VST3NoteExpression_getNoteExpressionStringByValue => %p %d %hd %u %f %p",
-    //     thisInterface,
-    //     busIndex,
-    //     channel,
-    //     id,
-    //     valueNormalized,
-    //     string);
+    // cplug_log("%s => %p %d %hd %u %f %p", __FUNCTION__, self, busIndex, channel, id, valueNormalized, string);
     // here we use the id (not the index)
     if (busIndex == 0 && channel == 0 && id == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
     {
@@ -1091,7 +1075,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionStr
 }
 
 Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionValueByString(
-    void*                              thisInterface,
+    void*                              self,
     Steinberg_int32                    busIndex,
     Steinberg_int16                    channel,
     Steinberg_Vst_NoteExpressionTypeID id,
@@ -1099,14 +1083,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3NoteExpression_getNoteExpressionVal
     Steinberg_Vst_NoteExpressionValue* valueNormalized)
 {
     // This gets called a lot
-    // cplug_log(
-    //     "VST3NoteExpression_getNoteExpressionValueByString => %p %d %hd %u %p %p",
-    //     thisInterface,
-    //     busIndex,
-    //     channel,
-    //     id,
-    //     string,
-    //     valueNormalized);
+    // cplug_log("%s => %p %d %hd %u %p %p", __FUNCTION__, self, busIndex, channel, id, string, valueNormalized);
     // here we use the id (not the index)
     if (busIndex == 0 && channel == 0 && id == Steinberg_Vst_NoteExpressionTypeIDs_kTuningTypeID)
     {
@@ -1138,7 +1115,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_addRef(void* const self)
 {
     VST3Plugin* const vst3     = _cplug_pointerShiftController(self);
     const int         refcount = cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, 1) + 1;
-    cplug_log("VST3Controller_addRef => %p | refcount %i", self, refcount);
+    cplug_log("%s => %p | refcount %i", __FUNCTION__, self, refcount);
     return refcount;
 }
 
@@ -1146,7 +1123,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_release(void* const self)
 {
     VST3Plugin* vst3     = _cplug_pointerShiftController(self);
     const int   refcount = cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, -1) - 1;
-    cplug_log("VST3Controller_release => %p | refcount %i", self, refcount);
+    cplug_log("%s => %p | refcount %i", __FUNCTION__, self, refcount);
 
     if (refcount == 0)
     {
@@ -1161,34 +1138,34 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_release(void* const self)
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_initialize(void* const self, Steinberg_FUnknown* const context)
 {
-    cplug_log("VST3Controller_initialize => %p %p", self, context);
+    cplug_log("%s => %p %p", __FUNCTION__, self, context);
     return Steinberg_kResultOk;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_terminate(void* self)
 {
-    cplug_log("VST3Controller_terminate => %p", self);
+    cplug_log("%s => %p", __FUNCTION__, self);
     return Steinberg_kResultOk;
 }
 // Steinberg_Vst_IEditController
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_setComponentState(void* const self, Steinberg_IBStream* const stream)
 {
-    cplug_log("VST3Controller_setComponentState => %p %p", self, stream);
+    cplug_log("%s => %p %p", __FUNCTION__, self, stream);
     return Steinberg_kNotImplemented;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_setState(void* const self, Steinberg_IBStream* const stream)
 {
-    cplug_log("VST3Controller_setState => %p %p", self, stream);
+    cplug_log("%s => %p %p", __FUNCTION__, self, stream);
     return Steinberg_kNotImplemented;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Controller_getState(void* const self, Steinberg_IBStream* const stream)
 {
-    cplug_log("VST3Controller_getState => %p %p", self, stream);
+    cplug_log("%s => %p %p", __FUNCTION__, self, stream);
     return Steinberg_kNotImplemented;
 }
 
@@ -2165,11 +2142,12 @@ static int32_t SMTG_STDMETHODCALLTYPE
 VST3Component_getBusCount(void* const self, const int32_t media_type, const int32_t bus_direction)
 {
     // NOTE runs on audio thread
-    cplug_log(
-        "VST3Component_getBusCount => %p %s %s",
-        self,
-        _cplug_getMediaTypeStr(media_type),
-        _cplug_getBusDirectionStr(bus_direction));
+    // cplug_log(
+    //     "%s => %p %s %s",
+    //     __FUNCTION__,
+    //     self,
+    //     _cplug_getMediaTypeStr(media_type),
+    //     _cplug_getBusDirectionStr(bus_direction));
     VST3Plugin* vst3 = _cplug_pointerShiftComponent(self);
 
     const bool isAudio  = media_type == Steinberg_Vst_MediaTypes_kAudio;
@@ -2287,7 +2265,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_getRoutingInfo(
     struct Steinberg_Vst_RoutingInfo* const input,
     struct Steinberg_Vst_RoutingInfo* const output)
 {
-    cplug_log("VST3Component_getRoutingInfo => %p %p %p", self, input, output);
+    cplug_log("%s => %p %p %p", __FUNCTION__, self, input, output);
     return Steinberg_kNotImplemented;
 }
 
@@ -2300,7 +2278,8 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_activateBus(
 {
     // NOTE this is called a bunch of times
     cplug_log(
-        "VST3Component_activateBus => %p %s %s %i %u",
+        "%s => %p %s %s %i %u",
+        __FUNCTION__,
         self,
         _cplug_getMediaTypeStr(media_type),
         _cplug_getBusDirectionStr(bus_direction),
@@ -2316,7 +2295,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_activateBus(
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_setActive(void* const self, const Steinberg_TBool active)
 {
-    cplug_log("VST3Component_setActive => %p %u", self, active);
+    cplug_log("%s => %p %u", __FUNCTION__, self, active);
     // Do we care about this?
     return Steinberg_kResultOk;
 }
@@ -2334,7 +2313,7 @@ int64_t cplug_VST3ReadProcTranslator(const void* stateCtx, void* readPos, size_t
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Component_setState(void* const self, Steinberg_IBStream* const stream)
 {
-    cplug_log("VST3Component_setState => %p", self);
+    cplug_log("%s => %p", __FUNCTION__, self);
     VST3Plugin* vst3 = _cplug_pointerShiftComponent(self);
 
     cplug_loadState(vst3->userPlugin, stream, cplug_VST3ReadProcTranslator);
@@ -2355,7 +2334,7 @@ int64_t cplug_VST3WriteProcTranslator(const void* stateCtx, void* writePos, size
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Component_getState(void* const self, Steinberg_IBStream* const stream)
 {
-    cplug_log("VST3Component_getState => %p %p", self, stream);
+    cplug_log("%s => %p %p", __FUNCTION__, self, stream);
     VST3Plugin* vst3 = _cplug_pointerShiftComponent(self);
 
     cplug_saveState(vst3->userPlugin, stream, cplug_VST3WriteProcTranslator);
@@ -2373,13 +2352,13 @@ VST3Factory_queryInterface(void* const self, const Steinberg_TUID iid, void** co
     if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) || cplug_tuid_match(iid, Steinberg_IPluginFactory_iid) ||
         cplug_tuid_match(iid, Steinberg_IPluginFactory2_iid) || cplug_tuid_match(iid, Steinberg_IPluginFactory3_iid))
     {
-        cplug_log("VST3Factory_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
+        cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&factory->refcounter, 1);
         *iface = self;
         return Steinberg_kResultOk;
     }
 
-    cplug_log("VST3Factory_queryInterface => %p %s %p | WARNING UNSUPPORTED", self, _cplug_tuid2str(iid), iface);
+    cplug_log("%s => %p %s %p | WARNING UNSUPPORTED", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
 
     *iface = NULL;
     return Steinberg_kNoInterface;
@@ -2389,7 +2368,7 @@ uint32_t SMTG_STDMETHODCALLTYPE VST3Factory_addRef(void* const self)
 {
     VST3Factory* const factory  = (VST3Factory*)(self);
     const int          refcount = cplug_atomic_fetch_add_i32(&factory->refcounter, 1) + 1;
-    cplug_log("VST3Factory_addRef => %p | refcount %i", self, refcount);
+    cplug_log("%s => %p | refcount %i", __FUNCTION__, self, refcount);
     return refcount;
 }
 
@@ -2397,11 +2376,11 @@ uint32_t SMTG_STDMETHODCALLTYPE VST3Factory_release(void* const self)
 {
     VST3Factory* const factory  = (VST3Factory*)(self);
     const int          refcount = cplug_atomic_fetch_add_i32(&factory->refcounter, -1) - 1;
-    cplug_log("VST3Factory_release => %p | refcount %i", self, refcount);
+    cplug_log("%s => %p | refcount %i", __FUNCTION__, self, refcount);
 
     if (refcount == 0)
     {
-        cplug_log("VST3Factory_release => %p | refcount is zero, deleting factory", self);
+        cplug_log("%s => %p | refcount is zero, deleting factory", __FUNCTION__, self);
 
         free(factory);
     }
@@ -2412,7 +2391,7 @@ uint32_t SMTG_STDMETHODCALLTYPE VST3Factory_release(void* const self)
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Factory_getFactoryInfo(void* self, struct Steinberg_PFactoryInfo* const info)
 {
-    cplug_log("VST3Factory_getFactoryInfo => %p", info);
+    cplug_log("%s => %p", __FUNCTION__, info);
     memset(info, 0, sizeof(*info));
 
     info->flags = 0x10; // unicode
@@ -2424,14 +2403,14 @@ VST3Factory_getFactoryInfo(void* self, struct Steinberg_PFactoryInfo* const info
 
 int32_t SMTG_STDMETHODCALLTYPE VST3Factory_countClasses(void* self)
 {
-    cplug_log("VST3Factory_countClasses");
+    cplug_log("%s", __FUNCTION__);
     return 1; // factory can only create component, edit-controller must be casted
 }
 
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Factory_getClassInfo(void* self, const int32_t idx, struct Steinberg_PClassInfo* const info)
 {
-    cplug_log("VST3Factory_getClassInfo => %i %p", idx, info);
+    cplug_log("%s => %p %d %p", __FUNCTION__, self, idx, info);
     memset(info, 0, sizeof(*info));
     CPLUG_LOG_ASSERT_RETURN(idx == 0, Steinberg_kInvalidArgument);
 
@@ -2447,12 +2426,7 @@ VST3Factory_getClassInfo(void* self, const int32_t idx, struct Steinberg_PClassI
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Steinberg_TUID iid, void** const instance)
 {
-    cplug_log(
-        "VST3Factory_createInstance => %p %s %s %p",
-        self,
-        _cplug_tuid2str(class_id),
-        _cplug_tuid2str(iid),
-        instance);
+    cplug_log("%s => %p %s %s %p", __FUNCTION__, self, _cplug_tuid2str(class_id), _cplug_tuid2str(iid), instance);
     if (cplug_tuid_match(class_id, cplug_tuid_component) &&
         (cplug_tuid_match(iid, Steinberg_Vst_IComponent_iid) || cplug_tuid_match(iid, Steinberg_FUnknown_iid)))
     {
@@ -2553,7 +2527,7 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Factory_getClassInfo2(void* self, const int32_t idx, struct Steinberg_PClassInfo2* const info)
 {
-    cplug_log("VST3Factory_getClassInfo2 => %i %p", idx, info);
+    cplug_log("%s => %p %i %p", __FUNCTION__, self, idx, info);
     memset(info, 0, sizeof(*info));
     CPLUG_LOG_ASSERT_RETURN(idx == 0, Steinberg_kInvalidArgument);
 
@@ -2573,7 +2547,7 @@ VST3Factory_getClassInfo2(void* self, const int32_t idx, struct Steinberg_PClass
 Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3Factory_getClassInfoUnicode(void* self, const int32_t idx, struct Steinberg_PClassInfoW* const info)
 {
-    cplug_log("VST3Factory_getClassInfoUnicode => %i %p", idx, info);
+    cplug_log("%s => %p %i %p", __FUNCTION__, self, idx, info);
     memset(info, 0, sizeof(*info));
     CPLUG_LOG_ASSERT_RETURN(idx == 0, Steinberg_kInvalidArgument);
 
@@ -2592,7 +2566,7 @@ VST3Factory_getClassInfoUnicode(void* self, const int32_t idx, struct Steinberg_
 
 Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Factory_setHostContext(void* const self, Steinberg_FUnknown* const context)
 {
-    cplug_log("VST3Factory_setHostContext => %p %p", self, context);
+    cplug_log("%s => %p %p", __FUNCTION__, self, context);
     return Steinberg_kNotImplemented;
 }
 
