@@ -1269,6 +1269,7 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Controller_getParamStringByV
     // NOTE very noisy, called many times
     // cplug_log("%s => %p %u %f %p", __FUNCTION__, self, paramId, normalised, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
+    CPLUG_LOG_ASSERT_RETURN(paramId != Steinberg_Vst_kNoParamId, Steinberg_kInvalidArgument);
     // Bitwig 5 has been spotted failing this assertion
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
 
@@ -1292,6 +1293,7 @@ VST3Controller_getParamValueByString(void* self, Steinberg_Vst_ParamID paramId, 
 {
     // cplug_log("%s => %p %u %p %p", __FUNCTION__, self, paramId, input, output);
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
+    CPLUG_LOG_ASSERT_RETURN(paramId != Steinberg_Vst_kNoParamId, Steinberg_kInvalidArgument);
     CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
 
     char as_utf8[128];
@@ -1310,6 +1312,7 @@ VST3Controller_normalizedParamToPlain(void* self, Steinberg_Vst_ParamID paramId,
     // cplug_log("%s => %p %u %f", __FUNCTION__, self, paramId, normalised);
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, 0.0);
+    CPLUG_LOG_ASSERT_RETURN(paramId != Steinberg_Vst_kNoParamId, 0.0);
     CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
     return cplug_denormaliseParameterValue(vst3->userPlugin, paramId, normalised);
 }
@@ -1321,6 +1324,7 @@ VST3Controller_plainParamToNormalised(void* self, Steinberg_Vst_ParamID paramId,
     // cplug_log("%s => %p %u %f", __FUNCTION__, self, paramId, plain);
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
     CPLUG_LOG_ASSERT(!cplug_is_midi_param(paramId));
+    CPLUG_LOG_ASSERT_RETURN(paramId != Steinberg_Vst_kNoParamId, 0.0);
     return cplug_normaliseParameterValue(vst3->userPlugin, paramId, plain);
 }
 
@@ -1328,6 +1332,8 @@ static double SMTG_STDMETHODCALLTYPE VST3Controller_getParamNormalized(void* sel
 {
     // cplug_log("%s => %p %u", __FUNCTION__, self, paramId);
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
+    // The VST3 SDK test suite will test you on this. It's used by DAWs such as Akai MPC 3 Desktop Beta
+    CPLUG_LOG_ASSERT_RETURN(paramId != Steinberg_Vst_kNoParamId, 0.0);
 
     // Reaper & Ableton will ask you for MIDI control values. So far, returning 0 here hasn't caused any problems...
     if (cplug_is_midi_param(paramId))
@@ -1343,6 +1349,7 @@ VST3Controller_setParamNormalized(void* const self, const Steinberg_Vst_ParamID 
     // Gets called a lot in ableton, even when you aren't touching parameters
     // cplug_log("%s => %p %u %f", __FUNCTION__, self, paramId, normalised);
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
+    CPLUG_LOG_ASSERT_RETURN(paramId != Steinberg_Vst_kNoParamId, Steinberg_kInvalidArgument);
     CPLUG_LOG_ASSERT_RETURN(normalised >= 0.0 && normalised <= 1.0, Steinberg_kInvalidArgument);
 
     if (cplug_is_midi_param(paramId))
