@@ -10,15 +10,7 @@
 #include <vst3_c_api.h>
 #include <wchar.h>
 
-#define tuid_match(a, b) memcmp(a, b, sizeof(Steinberg_TUID)) == 0
-#define CPLUG_ARRLEN(a)  (sizeof(a) / sizeof(a[0]))
-
-// Parameter automtion in some hosts can be too highly frequent. eg. Ableton sends a new automation points every 8
-// samples. In order to effeciently process parameter & audio events in order, parameter events are coalesced and
-// quantized using the value below.
-#ifndef CPLUG_EVENT_FRAME_QUANTISE
-#define CPLUG_EVENT_FRAME_QUANTISE 64
-#endif
+#define CPLUG_ARRLEN(a) (sizeof(a) / sizeof(a[0]))
 
 // VST3 Param IDs are 32bit unsigned integers, but some DAWs such as FL Studio are suspect of misinterpreting them as
 // signed integers and reject any negative integer.
@@ -32,6 +24,11 @@ enum
 static inline bool cplug_is_midi_param(Steinberg_Vst_ParamID id)
 {
     return id >= CPLUG_MIDI_PARAMID_START && id < CPLUG_MIDI_PARAMID_END;
+}
+
+static inline bool cplug_tuid_match(const Steinberg_TUID a, const Steinberg_TUID b)
+{
+    return memcmp(a, b, sizeof(Steinberg_TUID)) == 0;
 }
 
 #define CALL_SMTG_INLINE_UID(args) SMTG_INLINE_UID args
@@ -162,7 +159,7 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
 
     for (size_t i = 0; i < CPLUG_ARRLEN(_known_iids); ++i)
     {
-        if (tuid_match(iid, _known_iids[i].iid))
+        if (cplug_tuid_match(iid, *_known_iids[i].iid))
             return _known_iids[i].name;
     }
 
@@ -466,9 +463,11 @@ void _cplug_IPtr_set(Steinberg_FUnknown** a, Steinberg_FUnknown* b)
     *a = b;
 }
 
-Steinberg_tresult _cplug_pluginQueryInterface(VST3Plugin* vst3, const Steinberg_TUID iid, void** const iface)
+Steinberg_tresult
+_cplug_pluginQueryInterface(void* self, VST3Plugin* vst3, const Steinberg_TUID iid, void** const iface)
 {
-    if (tuid_match(iid, Steinberg_Vst_IComponent_iid))
+    if (cplug_tuid_match(iid, Steinberg_Vst_IComponent_iid) ||
+        (self == &vst3->component && cplug_tuid_match(iid, Steinberg_IPluginBase_iid)))
     {
         cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&vst3->component.refcounter, 1);
@@ -476,25 +475,17 @@ Steinberg_tresult _cplug_pluginQueryInterface(VST3Plugin* vst3, const Steinberg_
         return Steinberg_kResultOk;
     }
 
-    if (tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
+    // Most DAWs don't ask for IPluginBase, but Cubase will expect it, and crash if you don't have it
+    if (cplug_tuid_match(iid, Steinberg_Vst_IEditController_iid) ||
+        (self == &vst3->controller && cplug_tuid_match(iid, Steinberg_IPluginBase_iid)))
     {
         cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
-
-        cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, 1);
-        *iface = &vst3->processor;
-        return Steinberg_kResultOk;
-    }
-
-    if (tuid_match(iid, Steinberg_Vst_IEditController_iid))
-    {
-        cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
-
         cplug_atomic_fetch_add_i32(&vst3->controller.refcounter, 1);
         *iface = &vst3->controller;
         return Steinberg_kResultOk;
     }
 
-    if (tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
+    if (cplug_tuid_match(iid, Steinberg_Vst_IAudioProcessor_iid))
     {
         cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&vst3->processor.refcounter, 1);
@@ -502,7 +493,7 @@ Steinberg_tresult _cplug_pluginQueryInterface(VST3Plugin* vst3, const Steinberg_
         return Steinberg_kResultOk;
     }
 
-    if (tuid_match(iid, Steinberg_Vst_IProcessContextRequirements_iid))
+    if (cplug_tuid_match(iid, Steinberg_Vst_IProcessContextRequirements_iid))
     {
         cplug_log("%s => %p %s %p | OK convert static", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
         *iface = &g_vst3ProcessContext;
@@ -510,14 +501,14 @@ Steinberg_tresult _cplug_pluginQueryInterface(VST3Plugin* vst3, const Steinberg_
     }
 
 #if CPLUG_WANT_MIDI_INPUT
-    if (tuid_match(iid, Steinberg_Vst_IMidiMapping_iid))
+    if (cplug_tuid_match(iid, Steinberg_Vst_IMidiMapping_iid))
     {
         cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&vst3->midiMapping.refcounter, 1);
         *iface = &vst3->midiMapping;
         return Steinberg_kResultOk;
     }
-    if (tuid_match(iid, Steinberg_Vst_INoteExpressionController_iid))
+    if (cplug_tuid_match(iid, Steinberg_Vst_INoteExpressionController_iid))
     {
         cplug_log("%s => %p %s %p | OK", __FUNCTION__, vst3, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&vst3->noteExpression.refcounter, 1);
@@ -701,7 +692,8 @@ VST3ViewContentScale_queryInterface(void* const self, const Steinberg_TUID iid, 
 {
     VST3View* const view = _cplug_pointerShiftContentScaleSupport(self);
 
-    if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPlugViewContentScaleSupport_iid))
+    if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) ||
+        cplug_tuid_match(iid, Steinberg_IPlugViewContentScaleSupport_iid))
     {
         cplug_log("VST3ViewContentScale_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->contentScaleSupport.refcounter, 1);
@@ -755,7 +747,7 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
 {
     VST3View* const view = (VST3View*)self;
 
-    if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPlugView_iid))
+    if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) || cplug_tuid_match(iid, Steinberg_IPlugView_iid))
     {
         cplug_log("VST3View_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->refcounter, 1);
@@ -763,7 +755,7 @@ VST3View_queryInterface(void* self, const Steinberg_TUID iid, void** iface)
         return Steinberg_kResultOk;
     }
 
-    if (tuid_match(Steinberg_IPlugViewContentScaleSupport_iid, iid))
+    if (cplug_tuid_match(Steinberg_IPlugViewContentScaleSupport_iid, iid))
     {
         cplug_log("VST3View_queryInterface => %p %s %p | OK convert", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&view->contentScaleSupport.refcounter, 1);
@@ -938,7 +930,7 @@ VST3MidiMapping_queryInterface(void* self, const Steinberg_TUID iid, void** ifac
 {
     cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* const vst3 = _cplug_pointerShiftMidiMapping(self);
-    return _cplug_pluginQueryInterface(vst3, iid, iface);
+    return _cplug_pluginQueryInterface(self, vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3MidiMapping_addRef(void* const thisInterface)
@@ -991,7 +983,7 @@ VST3NoteExpression_queryInterface(void* self, const Steinberg_TUID iid, void** i
 {
     cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* const vst3 = _cplug_pointerShiftNoteExpression(self);
-    return _cplug_pluginQueryInterface(vst3, iid, iface);
+    return _cplug_pluginQueryInterface(self, vst3, iid, iface);
 }
 
 Steinberg_uint32 SMTG_STDMETHODCALLTYPE VST3NoteExpression_addRef(void* thisInterface)
@@ -1139,7 +1131,7 @@ VST3Controller_queryInterface(void* const self, const Steinberg_TUID iid, void**
 {
     cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* vst3 = _cplug_pointerShiftController(self);
-    return _cplug_pluginQueryInterface(vst3, iid, iface);
+    return _cplug_pluginQueryInterface(self, vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Controller_addRef(void* const self)
@@ -1491,7 +1483,8 @@ Source: "pluginterfaces/vst/ivstaudioprocessor.h", line 399 */
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3ProcessContextRequirements_queryInterface(void* const self, const Steinberg_TUID iid, void** const iface)
 {
-    if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_Vst_IProcessContextRequirements_iid))
+    if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) ||
+        cplug_tuid_match(iid, Steinberg_Vst_IProcessContextRequirements_iid))
     {
         cplug_log("%s => %p %s %p | OK", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
         *iface = self;
@@ -1532,7 +1525,7 @@ VST3Processor_queryInterface(void* const self, const Steinberg_TUID iid, void** 
 {
     cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* const vst3 = _cplug_pointerShiftProcessor(self);
-    return _cplug_pluginQueryInterface(vst3, iid, iface);
+    return _cplug_pluginQueryInterface(self, vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_addRef(void* const self)
@@ -2091,7 +2084,7 @@ VST3Component_queryInterface(void* const self, const Steinberg_TUID iid, void** 
 {
     cplug_log("%s => %p %s %p", __FUNCTION__, self, _cplug_tuid2str(iid), iface);
     VST3Plugin* vst3 = _cplug_pointerShiftComponent(self);
-    return _cplug_pluginQueryInterface(vst3, iid, iface);
+    return _cplug_pluginQueryInterface(self, vst3, iid, iface);
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Component_addRef(void* const self)
@@ -2377,8 +2370,8 @@ VST3Factory_queryInterface(void* const self, const Steinberg_TUID iid, void** co
 {
     VST3Factory* const factory = (VST3Factory*)(self);
 
-    if (tuid_match(iid, Steinberg_FUnknown_iid) || tuid_match(iid, Steinberg_IPluginFactory_iid) ||
-        tuid_match(iid, Steinberg_IPluginFactory2_iid) || tuid_match(iid, Steinberg_IPluginFactory3_iid))
+    if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) || cplug_tuid_match(iid, Steinberg_IPluginFactory_iid) ||
+        cplug_tuid_match(iid, Steinberg_IPluginFactory2_iid) || cplug_tuid_match(iid, Steinberg_IPluginFactory3_iid))
     {
         cplug_log("VST3Factory_queryInterface => %p %s %p | OK", self, _cplug_tuid2str(iid), iface);
         cplug_atomic_fetch_add_i32(&factory->refcounter, 1);
@@ -2460,8 +2453,8 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         _cplug_tuid2str(class_id),
         _cplug_tuid2str(iid),
         instance);
-    if (tuid_match(class_id, cplug_tuid_component) &&
-        (tuid_match(iid, Steinberg_Vst_IComponent_iid) || tuid_match(iid, Steinberg_FUnknown_iid)))
+    if (cplug_tuid_match(class_id, cplug_tuid_component) &&
+        (cplug_tuid_match(iid, Steinberg_Vst_IComponent_iid) || cplug_tuid_match(iid, Steinberg_FUnknown_iid)))
     {
         VST3Plugin* vst3                 = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
         vst3->hostContext.type           = CPLUG_PLUGIN_IS_VST3;
