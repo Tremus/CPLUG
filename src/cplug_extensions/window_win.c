@@ -1078,6 +1078,54 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
 
 #endif
 
+void pw_uninit(CplugWindow* pw, HWND hwnd)
+{
+    cplug_log("%s => %p %p", __FUNCTION__, pw, hwnd);
+    if (hwnd == NULL)
+        return;
+
+    PW_ASSERT(IsWindow(hwnd));
+    cplug_setParent(pw, NULL); // If still attached to a parent, stop any vsync threads & Timers
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-unhookwindowshookex
+    if (pw->hGetMessageHook)
+    {
+        BOOL ok = UnhookWindowsHookEx(pw->hGetMessageHook);
+        PW_ASSERT(ok);
+        pw->hGetMessageHook = NULL;
+    }
+    if (pw->hCallWndHook)
+    {
+        BOOL ok = UnhookWindowsHookEx(pw->hCallWndHook);
+        PW_ASSERT(ok);
+        pw->hCallWndHook = NULL;
+    }
+
+    HWND PrevValue = pw->hwnd;
+    pw->hwnd       = hwnd; // just in case this is needed within pw_destroy_gui()
+    pw_destroy_gui(pw->gui);
+    pw->hwnd = PrevValue;
+    pw->gui  = NULL;
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-revokedragdrop
+    // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-oleuninitialize
+    // NOTE: if the host has rudely called DestroyWindow on your child window before calling clap_plugin_gui_t::destroy
+    // or IPlugView::release, Windows appears to unregister drag & drop
+    HRESULT result = RevokeDragDrop(hwnd);
+    PW_ASSERT(result == S_OK || result == DRAGDROP_E_NOTREGISTERED);
+
+#ifdef PW_DX11
+    PW_DX11_RELEASE(pw->pRenderTarget)
+    PW_DX11_RELEASE(pw->pRenderTargetView)
+    PW_DX11_RELEASE(pw->pDepthStencil)
+    PW_DX11_RELEASE(pw->pDepthStencilView)
+    PW_DX11_RELEASE(pw->pSwapchain1)
+    PW_DX11_RELEASE(pw->pDeviceContext)
+    PW_DX11_RELEASE(pw->pDevice)
+    PW_DX11_RELEASE(pw->pFactory2)
+#endif
+}
+
 // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nc-winuser-wndproc
 LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -1090,8 +1138,14 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
     case WM_PAINT:
         break;
+    // NOTE: some DAWs will rudely call DestroyWindow on your hwnd before calling cplug_destroyGUI
+    // (inside clap_plugin_gui_t::destroy and IPlugView::release)
     case WM_DESTROY:
+    {
+        pw->hwnd = NULL;
+        pw_uninit(pw, hwnd);
         break;
+    }
     // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-move
     case WM_MOVE:
 #if PW_DX11
@@ -1268,6 +1322,8 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_VBLANK:
     {
         PW_ASSERT(pw->gui != NULL);
+        if (pw->gui == NULL)
+            return 0;
 #ifdef PW_DX11
         BOOL ShouldResizeBuffers = FALSE;
         BOOL ShouldResizeTarget  = FALSE;
@@ -1333,6 +1389,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
         }
 #endif
+
         pw_tick(pw->gui);
 
 #ifdef PW_DX11
@@ -2135,45 +2192,19 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
 void cplug_destroyGUI(void* userGUI)
 {
-    // cplug_log("cplug_destroyGUI => %p", userGUI);
+    cplug_log("cplug_destroyGUI => %p", userGUI);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindow
     CplugWindow* pw = userGUI;
-    PW_ASSERT(IsWindow(pw->hwnd));
-    pw_destroy_gui(pw->gui);
-
-    // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-revokedragdrop
-    // https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-oleuninitialize
-    HRESULT result = RevokeDragDrop(pw->hwnd);
-    PW_ASSERT(result == S_OK);
-    OleUninitialize();
-
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-unhookwindowshookex
-    if (pw->hGetMessageHook)
-    {
-        BOOL ok = UnhookWindowsHookEx(pw->hGetMessageHook);
-        PW_ASSERT(ok);
-    }
-    if (pw->hCallWndHook)
-    {
-        BOOL ok = UnhookWindowsHookEx(pw->hCallWndHook);
-        PW_ASSERT(ok);
-    }
-
-#ifdef PW_DX11
-    PW_DX11_RELEASE(pw->pRenderTarget)
-    PW_DX11_RELEASE(pw->pRenderTargetView)
-    PW_DX11_RELEASE(pw->pDepthStencil)
-    PW_DX11_RELEASE(pw->pDepthStencilView)
-    PW_DX11_RELEASE(pw->pSwapchain1)
-    PW_DX11_RELEASE(pw->pDeviceContext)
-    PW_DX11_RELEASE(pw->pDevice)
-    PW_DX11_RELEASE(pw->pFactory2)
-#endif
 
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroywindow
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-unregisterclassw
-    BOOL ok = DestroyWindow(pw->hwnd);
-    PW_ASSERT(ok);
+    BOOL ok = FALSE;
+    if (pw->hwnd)
+    {
+        ok = DestroyWindow(pw->hwnd); // should call pw_uninit()
+        PW_ASSERT(ok);
+        PW_ASSERT(pw->hwnd == NULL);
+    }
     ok = UnregisterClassW(pw->ClassName, NULL);
     PW_ASSERT(ok);
 
@@ -2202,7 +2233,9 @@ void cplug_setParent(void* userGUI, void* newParent)
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-settimer
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-killtimer
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-defwindowprocw
-    HWND oldParent = GetParent(pw->hwnd);
+    HWND oldParent = NULL;
+    if (pw->hwnd)
+        oldParent = GetParent(pw->hwnd);
     if (oldParent)
     {
 #ifdef PW_DX11
@@ -2252,7 +2285,8 @@ void cplug_setVisible(void* userGUI, bool visible)
     // cplug_log("cplug_setVisible => %p %llu", userGUI, visible);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow
     CplugWindow* pw = userGUI;
-    ShowWindow(pw->hwnd, visible ? SW_SHOW : SW_HIDE);
+    if (pw->hwnd)
+        ShowWindow(pw->hwnd, visible ? SW_SHOW : SW_HIDE);
 }
 
 void cplug_setScaleFactor(void* userGUI, float scale)
@@ -2274,10 +2308,13 @@ void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
     // cplug_log("cplug_getSize => %p %p %p", userGUI, width, height);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect
     CplugWindow* pw = userGUI;
-    RECT         rect;
-    GetWindowRect(pw->hwnd, &rect);
-    *width  = rect.right - rect.left;
-    *height = rect.bottom - rect.top;
+    if (pw->hwnd)
+    {
+        RECT rect;
+        GetWindowRect(pw->hwnd, &rect);
+        *width  = rect.right - rect.left;
+        *height = rect.bottom - rect.top;
+    }
 }
 
 void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
@@ -2302,6 +2339,8 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     CplugWindow* pw = userGUI;
     PW_ASSERT(width > 0);
     PW_ASSERT(height > 0);
+    if (!pw->hwnd)
+        return false;
 
 #ifdef PW_DX11
     pw->NextWidth  = width;
