@@ -1080,7 +1080,7 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
 
 void pw_uninit(CplugWindow* pw, HWND hwnd)
 {
-    cplug_log("%s => %p %p", __FUNCTION__, pw, hwnd);
+    // cplug_log("%s => %p %p", __FUNCTION__, pw, hwnd);
     if (hwnd == NULL)
         return;
 
@@ -2121,11 +2121,11 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
         if (SUCCEEDED(hr))
         {
             pw->DriverType = DriverTypes[i];
-            cplug_log(
-                "DX11 Driver type: %d, Feature level: %d.%d",
-                pw->DriverType,
-                ((pw->FeatureLevel >> 12) & 0xf),
-                ((pw->FeatureLevel >> 8) & 0xf));
+            // cplug_log(
+            //     "DX11 Driver type: %d, Feature level: %d.%d",
+            //     pw->DriverType,
+            //     ((pw->FeatureLevel >> 12) & 0xf),
+            //     ((pw->FeatureLevel >> 8) & 0xf));
             break;
         }
     }
@@ -2192,7 +2192,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
 void cplug_destroyGUI(void* userGUI)
 {
-    cplug_log("cplug_destroyGUI => %p", userGUI);
+    // cplug_log("cplug_destroyGUI => %p", userGUI);
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindow
     CplugWindow* pw = userGUI;
 
