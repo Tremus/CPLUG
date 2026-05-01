@@ -21,12 +21,12 @@ enum
     CPLUG_MIDI_PARAMID_START = CPLUG_MIDI_PARAMID_END - CPLUG_MIDI_PARAMID_COUNT,
 };
 
-static inline bool cplug_is_midi_param(Steinberg_Vst_ParamID id)
+bool cplug_is_midi_param(Steinberg_Vst_ParamID id)
 {
     return id >= CPLUG_MIDI_PARAMID_START && id < CPLUG_MIDI_PARAMID_END;
 }
 
-static inline bool cplug_tuid_match(const Steinberg_TUID a, const Steinberg_TUID b)
+bool cplug_tuid_match(const Steinberg_TUID a, const Steinberg_TUID b)
 {
     return memcmp(a, b, sizeof(Steinberg_TUID)) == 0;
 }
@@ -176,7 +176,7 @@ const char* _cplug_tuid2str(const Steinberg_TUID iid)
 }
 
 // someone please tell me what is up with these..
-static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint32_t channelCount)
+Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint32_t channelCount)
 {
     switch (channelCount)
     {
@@ -231,7 +231,7 @@ static inline Steinberg_Vst_Speaker _cplug_channelCountToVST3Speaker(const uint3
     }
 }
 
-static inline const char* _cplug_getMediaTypeStr(int32_t type)
+const char* _cplug_getMediaTypeStr(int32_t type)
 {
     if (type == Steinberg_Vst_MediaTypes_kAudio)
         return "MediaTypes_kAudio";
@@ -239,7 +239,7 @@ static inline const char* _cplug_getMediaTypeStr(int32_t type)
         return "MediaTypes_kEvent";
     return "[unknown]";
 }
-static inline const char* _cplug_getBusDirectionStr(int32_t type)
+const char* _cplug_getBusDirectionStr(int32_t type)
 {
     if (type == Steinberg_Vst_BusDirections_kInput)
         return "BusDirections_kInput";
@@ -433,23 +433,23 @@ void _cplug_vst3_push_event(VST3Plugin* vst3, CplugEvent event, uint32_t frameId
 }
 
 // Naughty pointer shifting for VST3 classes
-static inline VST3Plugin* _cplug_pointerShiftComponent(void* const ptr)
+VST3Plugin* _cplug_pointerShiftComponent(void* const ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, component));
 }
-static inline VST3Plugin* _cplug_pointerShiftController(void* const ptr)
+VST3Plugin* _cplug_pointerShiftController(void* const ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, controller));
 }
-static inline VST3Plugin* _cplug_pointerShiftMidiMapping(void* const ptr)
+VST3Plugin* _cplug_pointerShiftMidiMapping(void* const ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, midiMapping));
 }
-static inline VST3Plugin* _cplug_pointerShiftNoteExpression(void* const ptr)
+VST3Plugin* _cplug_pointerShiftNoteExpression(void* const ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, noteExpression));
 }
-static inline VST3Plugin* _cplug_pointerShiftProcessor(void* const ptr)
+VST3Plugin* _cplug_pointerShiftProcessor(void* const ptr)
 {
     return (VST3Plugin*)((char*)(ptr)-offsetof(VST3Plugin, processor));
 }
@@ -683,7 +683,7 @@ static void _cplug_tryDeleteVST3View(VST3View* view)
 /*----------------------------------------------------------------------------------------------------------------------
 Source: "pluginterfaces/gui/iplugviewcontentscalesupport.h", line 57 */
 // Steinberg_FUnknown
-static inline VST3View* _cplug_pointerShiftContentScaleSupport(void* const ptr)
+VST3View* _cplug_pointerShiftContentScaleSupport(void* const ptr)
 {
     return (VST3View*)((char*)(ptr)-offsetof(VST3View, contentScaleSupport));
 }
@@ -1531,7 +1531,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_release(void* const self)
     return refcount;
 }
 // Steinberg_Vst_IAudioProcessor
-static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements(
+Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Processor_setBusArrangements(
     void* const                  self,
     Steinberg_Vst_Speaker* const inputs,
     const int32_t                num_inputs,
