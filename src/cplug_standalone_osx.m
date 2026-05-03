@@ -30,7 +30,8 @@ enum
 #ifdef NDEBUG
 #define cplug_assert(...)
 #else
-#define cplug_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
+int g_cplug_debugtrap_helper = 0;
+#define cplug_assert(cond) (cond) ? (void)0 : (__builtin_debugtrap(), g_cplug_debugtrap_helper+=0)
 #endif // NDEBUG
 
 #pragma mark -Structs
