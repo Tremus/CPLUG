@@ -847,7 +847,7 @@ VST3View_onKeyUp(void* const self, const char16_t key_char, const int16_t key_co
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
-    cplug_log("%s => %p %s", __FUNCTION__, self, rect);
+    cplug_log("%s => %p %p", __FUNCTION__, self, rect);
 
     uint32_t width, height;
     cplug_getSize(((VST3View*)self)->userGUI, &width, &height);
@@ -883,7 +883,10 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_setFrame(void* const se
     return Steinberg_kResultTrue;
 }
 
-static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_canResize(void* const self) { return !CPLUG_GUI_RESIZABLE; }
+static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_canResize(void* const self)
+{
+    return CPLUG_GUI_RESIZABLE ? Steinberg_kResultTrue : Steinberg_kResultFalse;
+}
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_checkSizeConstraint(void* const self, struct Steinberg_ViewRect* const rect)
@@ -891,6 +894,13 @@ VST3View_checkSizeConstraint(void* const self, struct Steinberg_ViewRect* const 
     cplug_log("%s => %p %d %d %d %d", __FUNCTION__, self, rect->left, rect->top, rect->right, rect->bottom);
     uint32_t width  = rect->right - rect->left;
     uint32_t height = rect->bottom - rect->top;
+
+    // Cubase 14.0.41 has been spotted regularly sending rects equal to 0,0,234,0. Note height is zero
+    // This periodically happens multiple times during a drag, and consistently when releasing your mouse.
+    // It looks like a bug, and the staff have been notified but don't appear to have any problems with it...?
+    if (height == 0)
+        return Steinberg_kInvalidArgument;
+
     cplug_checkSize(((VST3View*)self)->userGUI, &width, &height);
     rect->right  = rect->left + width;
     rect->bottom = rect->top + height;
