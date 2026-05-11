@@ -73,11 +73,15 @@ float g_dpi  = 1;
 #endif
 #endif
 
-////////////
-// Plugin //
-////////////
+static inline UINT64 Cplug_RoundUp(UINT64 v, UINT64 align)
+{
+    UINT64 inc = (align - (v % align)) % align;
+    return v + inc;
+}
 
-struct CPWIN_Plugin
+// ----==== Plugin ====----
+
+struct Cplug_Plugin
 {
     CplugHostContext HostContext;
 
@@ -103,37 +107,51 @@ struct CPWIN_Plugin
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
 } g_plugin;
-// Loads the DLL + loads symbols for library functions
-void CPWIN_LoadPlugin();
-void CPWIN_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent* e) {}
-void CPWIN_HostContext_Rescan(CplugHostContext* ctx, uint32_t flags) {}
-bool CPWIN_HostContext_GetHostName(CplugHostContext* ctx, char* buf, size_t buflen)
+static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+
+void Cplug_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent* e) {}
+void Cplug_HostContext_Rescan(CplugHostContext* ctx, uint32_t flags) {}
+bool Cplug_HostContext_GetHostName(CplugHostContext* ctx, char* buf, size_t buflen)
 {
     snprintf(buf, buflen, "CPLUG Standalone Windows");
     return true;
 }
-bool CPWIN_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint32_t height);
-#ifdef __clang__
-_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
-#endif
 
-#ifdef HOTRELOAD_WATCH_DIR
-struct CPWIN_PluginStateContext
+bool Cplug_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
 {
-    BYTE*  Data;
-    SIZE_T BytesReserved;
-    SIZE_T BytesCommited;
+    if (g_plugin.UserGUI)
+    {
+        RECT parent;
+        BOOL ok = 0;
+        ok      = GetWindowRect(g_hwnd, &parent);
+        cplug_assert(ok == 1);
+        if (ok)
+        {
+            LONG parent_width  = parent.right - parent.left;
+            LONG parent_height = parent.bottom - parent.top;
+            RECT child         = parent;
+            ok                 = AdjustWindowRect(&child, WS_OVERLAPPEDWINDOW, TRUE);
+            cplug_assert(ok == 1);
+            if (ok)
+            {
+                LONG diff_x = (child.right - child.left) - parent_width;
+                LONG diff_y = (child.bottom - child.top) - parent_height;
 
-    SIZE_T BytesWritten;
-    SIZE_T BytesRead;
-} g_PluginState;
-int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite);
-int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead);
+                LONG next_parent_width  = width + diff_x;
+                LONG next_parent_height = height + diff_y;
 
-// File watch thread
-DWORD WINAPI CPWIN_WatchFileChangesProc(LPVOID hwnd);
+                // This should trigger WM_SIZE - SIZE_RESTORED
+                // https://learn.microsoft.com/en-gb/windows/win32/api/winuser/nf-winuser-setwindowpos
+                ok = SetWindowPos(g_hwnd, NULL, parent.left, parent.top, next_parent_width, next_parent_height, 0);
+                cplug_assert(ok == 1);
+            }
+        }
+    }
+    return false;
+}
 
-struct CPWIN_Hotreload
+#ifdef HOTRELOAD_LIB_PATH
+struct Cplug_Hotreload
 {
     HMODULE hPluginDLL;
     UINT    Version;
@@ -145,1256 +163,17 @@ struct CPWIN_Hotreload
     INT64 ReloadStartNs;
 } g_Hotreload;
 
-const WCHAR* CPWIN_GetFileNameW(const WCHAR* path)
+struct Cplug_PluginStateContext
 {
-    const WCHAR* filename = NULL;
-    for (const WCHAR* c = path; *c != 0; c++)
-    {
-        if (*c == L'\\')
-            filename = c + 1;
-    }
-    return filename;
-}
-
-const WCHAR* CPWIN_GetFileExtensionW(const WCHAR* path)
-{
-    const WCHAR* ext = NULL;
-    const WCHAR* c   = path;
-    for (c = path; *c != 0; c++)
-    {
-        if (*c == L'.')
-            ext = c;
-    }
-    if (!ext)
-        ext = c;
-    return ext;
-}
-
-// Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
-struct
-{
-    LARGE_INTEGER freq, start;
-} g_Timer;
-static inline INT64 CPWIN_GetNowNS()
-{
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    now.QuadPart -= g_Timer.start.QuadPart;
-    INT64 q       = now.QuadPart / g_Timer.freq.QuadPart;
-    INT64 r       = now.QuadPart % g_Timer.freq.QuadPart;
-    return q * 1000000000 + r * 1000000000 / g_Timer.freq.QuadPart;
-}
-#endif // HOTRELOAD_WATCH_DIR
-
-//////////
-// MIDI //
-//////////
-
-typedef struct MIDIMessage
-{
-    union
-    {
-        struct
-        {
-            BYTE status;
-            BYTE data1;
-            BYTE data2;
-        };
-        BYTE bytes[4];
-        UINT bytesAsInt;
-    };
-    /* Milliseconds since first connected to MIDI port */
-    UINT timestampMs;
-} MIDIMessage;
-
-struct
-{
-    HMIDIIN hInput;
-    int     IsConnected;
-
-    // https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/extended-capabilities-from-a-wdm-audio-driver
-    UINT         NumDevices;
-    MIDIINCAPS2W Devices[16];
-    MIDIINCAPS2W ConnectedDevice;
-    MIDIINCAPS2W HotplugDevice;
-
-    struct
-    {
-        volatile LONG writePos;
-        volatile LONG readPos;
-
-        MIDIMessage buffer[CPLUG_MIDI_RINGBUFFER_SIZE];
-    } RingBuffer;
-
-    struct CplugMidiBuffer
-    {
-        MIDIHDR Header;
-        char    Buffer[CPLUG_MIDI_BUFFER_SIZE];
-    } Buffers[CPLUG_MIDI_BUFFER_COUNT];
-} g_MIDI = {0};
-// Main Thread
-UINT CPWIN_MIDI_ConnectInput(UINT portNum);
-void CPWIN_MIDI_DisconnectInput();
-
-BOOL CPWIN_MIDI_MatchDevice(MIDIINCAPS2W* a, MIDIINCAPS2W* b)
-{
-    BOOL Val = FALSE;
-
-    const GUID NullGUID = {0};
-
-    BOOL MatchName = 0 == memcmp(a->szPname, b->szPname, sizeof(a->szPname));
-
-    BOOL IsNameGuidNull = 0 == memcmp(&b->NameGuid, &NullGUID, sizeof(GUID));
-    BOOL MatchNameGuid  = 0 == memcmp(&b->NameGuid, &a->NameGuid, sizeof(GUID));
-
-    BOOL IsProductGuidNull = 0 == memcmp(&b->ProductGuid, &NullGUID, sizeof(GUID));
-    BOOL MatchProductGuid  = 0 == memcmp(&b->ProductGuid, &a->ProductGuid, sizeof(GUID));
-
-    Val |= !IsNameGuidNull && !IsProductGuidNull && MatchNameGuid && MatchProductGuid;
-    // Fallback if we are unable to obtain the GUIDs through midiInGetDevCapsW. This API function appears to
-    // have started failing in early 2026 on Windows 11.
-    Val |= IsNameGuidNull && IsProductGuidNull && MatchName;
-
-    return Val;
-}
-
-///////////
-// AUDIO //
-///////////
-
-struct
-{
-    // Devices
-    IMMDeviceEnumerator* pIMMDeviceEnumerator;
-    IMMDevice*           pIMMDevice;
-    WCHAR                DeviceIDBuffer[64];
-    // Process
-    IAudioClient*       pIAudioClient;
-    IAudioRenderClient* pIAudioRenderClient;
-    HANDLE              hAudioEvent;
-    HANDLE              hAudioProcessThread;
-    UINT32              FlagExitAudioThread;
-
-    SIZE_T ProcessBufferCap;
-    BYTE*  ProcessBuffer;
-    UINT32 ProcessBufferMaxFrames;
-    UINT32 ProcessBufferNumOverprocessedFrames;
-    // Config
-    UINT32 NumChannels;
-    UINT32 SampleRate;
-    UINT32 BlockSize;
-} g_Audio;
-// Audio Thread
-DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data);
-// Main Thread
-void CPWIN_Audio_Stop();
-void CPWIN_Audio_Start();
-// Pass a deviceIdx < 0 for default device
-void CPWIN_Audio_SetDevice(int deviceIdx);
-
-///////////
-// MENUS //
-///////////
-
-typedef enum
-{
-    APPMODE_DEFAULT    = 0,
-    APPMODE_ALLOWDARK  = 1,
-    APPMODE_FORCEDARK  = 2,
-    APPMODE_FORCELIGHT = 3,
-} PreferredAppMode;
-
-typedef bool(WINAPI* ShouldAppsUseDarkModeProc)(void);                       // ordinal 132
-typedef PreferredAppMode(WINAPI* SetPreferredAppModeProc)(PreferredAppMode); // ordinal 135
-typedef void(WINAPI* FlushMenuThemesProc)(void);                             // ordinal 136
-
-// https://github.com/adzm/win32-custom-menubar-aero-theme
-#define WM_UAHDRAWMENU        0x0091 // lParam is UAHMENU
-#define WM_UAHDRAWMENUITEM    0x0092 // lParam is UAHDRAWMENUITEM
-#define WM_UAHMEASUREMENUITEM 0x0094 // lParam is UAHMEASUREMENUITEM
-
-// describes the sizes of the menu bar or menu item
-typedef union tagUAHMENUITEMMETRICS
-{
-    struct
-    {
-        DWORD cx;
-        DWORD cy;
-    } rgsizeBar[2];
-    struct
-    {
-        DWORD cx;
-        DWORD cy;
-    } rgsizePopup[4];
-} UAHMENUITEMMETRICS;
-
-// not really used in our case but part of the other structures
-typedef struct tagUAHMENUPOPUPMETRICS
-{
-    DWORD rgcx[4];
-    DWORD fUpdateMaxWidths : 2; // from kernel symbols, padded to full dword
-} UAHMENUPOPUPMETRICS;
-
-// hmenu is the main window menu; hdc is the context to draw in
-typedef struct tagUAHMENU
-{
-    HMENU hmenu;
-    HDC   hdc;
-    DWORD dwFlags; // no idea what these mean, in my testing it's either 0x00000a00 or sometimes 0x00000a10
-} UAHMENU;
-
-// menu items are always referred to by iPosition here
-typedef struct tagUAHMENUITEM
-{
-    int                 iPosition; // 0-based position of menu item in menubar
-    UAHMENUITEMMETRICS  umim;
-    UAHMENUPOPUPMETRICS umpm;
-} UAHMENUITEM;
-
-// the DRAWITEMSTRUCT contains the states of the menu items, as well as
-// the position index of the item in the menu, which is duplicated in
-// the UAHMENUITEM's iPosition as well
-typedef struct UAHDRAWMENUITEM
-{
-    DRAWITEMSTRUCT dis; // itemID looks uninitialized
-    UAHMENU        um;
-    UAHMENUITEM    umi;
-} UAHDRAWMENUITEM;
-
-// the MEASUREITEMSTRUCT is intended to be filled with the size of the item
-// height appears to be ignored, but width can be modified
-typedef struct tagUAHMEASUREMENUITEM
-{
-    MEASUREITEMSTRUCT mis;
-    UAHMENU           um;
-    UAHMENUITEM       umi;
-} UAHMEASUREMENUITEM;
-
-struct
-{
-    BOOL   IsDarkMode;
-    HTHEME hThemeMenu;
-
-    ShouldAppsUseDarkModeProc ShouldAppsUseDarkMode;
-    SetPreferredAppModeProc   SetPreferredAppMode;
-    FlushMenuThemesProc       FlushMenuThemes;
-} g_DarkMode;
-
-void OpenMenuTheme()
-{
-    // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-openthemedata
-    if (g_hwnd && !g_DarkMode.hThemeMenu)
-    {
-        // g_DarkMode.hThemeMenu = OpenThemeData(g_hwnd, L"Menu"); // Light mode
-        g_DarkMode.hThemeMenu = OpenThemeData(g_hwnd, L"DarkMode::Menu");
-    }
-}
-void CloseMenuTheme()
-{
-    if (g_DarkMode.hThemeMenu)
-    {
-        CloseThemeData(g_DarkMode.hThemeMenu);
-        g_DarkMode.hThemeMenu = NULL;
-    }
-}
-
-enum
-{
-    IDM_SampleRate_44100,
-    IDM_SampleRate_48000,
-    IDM_SampleRate_88200,
-    IDM_SampleRate_96000,
-    IDM_BlockSize_128,
-    IDM_BlockSize_192,
-    IDM_BlockSize_256,
-    IDM_BlockSize_384,
-    IDM_BlockSize_448,
-    IDM_BlockSize_512,
-    IDM_BlockSize_768,
-    IDM_BlockSize_1024,
-    IDM_BlockSize_2048,
-
-    IDM_HandleRemovedMIDIDevice,
-    IDM_HandleAddedMIDIDevice,
-
-    IDM_OFFSET_AUDIO_DEVICES   = 50,
-    IDM_RefreshAudioDeviceList = 99,
-
-    IDM_OFFSET_MIDI_DEVICES   = 100,
-    IDM_RefreshMIDIDeviceList = 149,
-};
-
-struct
-{
-    HMENU hMain;
-
-    HMENU hAudioMenu;
-    HMENU hSampleRateSubmenu;
-    HMENU hBlockSizeSubmenu;
-    HMENU hAudioOutputSubmenu;
-    UINT  numAudioOutputs;
-
-    HMENU hMIDIMenu;
-    HMENU hMIDIInputsSubMenu;
-} g_Menus;
-void CPWIN_Menu_RefreshSampleRates();
-void CPWIN_Menu_RefreshBlockSizes();
-void CPWIN_Menu_RefreshAudioOutputs();
-void CPWIN_Menu_RefreshMIDIInputs();
-
-// Unknown system thread. Notify Connected/disconnected devices. We only check Audio/MIDI
-DWORD CALLBACK CPWIN_HandleDeviceChange(
-    HCMNOTIFICATION       hNotify,
-    PVOID                 Context,
-    CM_NOTIFY_ACTION      Action,
-    PCM_NOTIFY_EVENT_DATA EventData,
-    DWORD                 EventDataSize);
-HCMNOTIFICATION g_hCMNotification;
-
-// Main Thread
-LRESULT CALLBACK CPWIN_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-
-static inline UINT64 CPWIN_RoundUp(UINT64 v, UINT64 align)
-{
-    UINT64 inc = (align - (v % align)) % align;
-    return v + inc;
-}
-
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmdshow)
-{
-    // https://stackoverflow.com/questions/171213/how-to-block-running-two-instances-of-the-same-program
-    HANDLE hMutexOneInstance = CreateMutexW(NULL, TRUE, L"Single instance - " TEXT(CPLUG_PLUGIN_NAME));
-    if (hMutexOneInstance == NULL || GetLastError() == ERROR_ALREADY_EXISTS)
-    {
-        if (hMutexOneInstance)
-        {
-            ReleaseMutex(hMutexOneInstance);
-            CloseHandle(hMutexOneInstance);
-        }
-        return 1;
-    }
-
-    if (FAILED(OleInitialize(NULL)))
-    {
-        fprintf(stderr, "Failed initialising COM\n");
-        return 1;
-    }
-
-#ifdef HOTRELOAD_WATCH_DIR
-    QueryPerformanceFrequency(&g_Timer.freq);
-    QueryPerformanceCounter(&g_Timer.start);
-    memset(&g_PluginState, 0, sizeof(g_PluginState));
-    memset(&g_Hotreload, 0, sizeof(g_Hotreload));
-#endif
-
-    memset(&g_plugin, 0, sizeof(g_plugin));
-    memset(&g_MIDI, 0, sizeof(g_MIDI));
-    memset(&g_Audio, 0, sizeof(g_Audio));
-    memset(&g_DarkMode, 0, sizeof(g_DarkMode));
-    memset(&g_Menus, 0, sizeof(g_Menus));
-
-    // Warning: Windows 10+
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setprocessdpiawarenesscontext
-    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
-
-    CPWIN_LoadPlugin();
-
-    /////////////////
-    // INIT WINDOW //
-    /////////////////
-
-    g_dpi = (float)GetDpiForSystem() / (float)USER_DEFAULT_SCREEN_DPI;
-
-    g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
-    cplug_assert(g_plugin.UserGUI != NULL);
-
-    g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
-
-    uint32_t guiWidth, guiHeight;
-    g_plugin.getSize(g_plugin.UserGUI, &guiWidth, &guiHeight);
-
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadiconw
-    // Load icon from RC file, if you used one...
-    HICON hResIcon = LoadIconW(GetModuleHandleW(0), MAKEINTRESOURCE(1));
-
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-wndclassexw
-    WNDCLASSEXW wc;
-    memset(&wc, 0, sizeof(wc));
-    wc.cbSize      = sizeof(wc);
-    wc.lpfnWndProc = CPWIN_WindowProc;
-    wc.hInstance   = hInst;
-    wc.hIcon       = hResIcon != NULL ? hResIcon : LoadIconW(NULL, IDI_APPLICATION); // fallback icon
-    wc.hCursor     = LoadCursorW(NULL, IDC_ARROW);
-    // wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = L"CPLUG - " TEXT(CPLUG_PLUGIN_NAME);
-    wc.hIconSm       = wc.hIcon;
-
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclassexw
-    if (!RegisterClassExW(&wc))
-    {
-        fprintf(stderr, "Could not register window class\n");
-        return 1;
-    }
-
-    RECT rect = {0, 0, (LONG)guiWidth, (LONG)guiHeight};
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
-
-    g_hwnd = CreateWindowExW(
-        0L,
-        wc.lpszClassName,
-        TEXT(CPLUG_PLUGIN_NAME),
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
-        NULL,
-        NULL,
-        hInst,
-        NULL);
-    if (g_hwnd == NULL)
-    {
-        fprintf(stderr, "Could not create window\n");
-        return 1;
-    }
-
-    // May not be required if we set the icons in WndClass?
-    // if (hResIcon)
-    // {
-    //     SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)hResIcon);   // set taskbar icon
-    //     SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hResIcon); // set window icon
-    // }
-
-    ///////////////
-    // DARK MODE //
-    ///////////////
-
-    // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmsetwindowattribute
-    // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
-    // https://discourse.glfw.org/t/dark-theme-titlebar/2537/2
-    // https://github.com/mintty/mintty/issues/983
-    // https://gist.github.com/rounk-ctrl/b04e5622e30e0d62956870d5c22b7017
-
-    HMODULE hUXTheme                 = LoadLibraryW(L"uxtheme.dll");
-    g_DarkMode.ShouldAppsUseDarkMode = (ShouldAppsUseDarkModeProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(132));
-    g_DarkMode.SetPreferredAppMode   = (SetPreferredAppModeProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(135));
-    g_DarkMode.FlushMenuThemes       = (FlushMenuThemesProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(136));
-
-    if (g_DarkMode.ShouldAppsUseDarkMode && g_DarkMode.SetPreferredAppMode && g_DarkMode.FlushMenuThemes)
-    {
-        g_DarkMode.IsDarkMode = g_DarkMode.ShouldAppsUseDarkMode();
-        if (g_DarkMode.IsDarkMode)
-        {
-            DWORD dwDarkModeWindows11 = 20;   // DWMWA_USE_IMMERSIVE_DARK_MODE
-            DWORD dwDarkModeWindows10 = 19;   // DWMWA_USE_IMMERSIVE_DARK_MODE (old?)
-            BOOL  Dark                = TRUE; // NOTE: requires 4 byte BOOL
-
-            HRESULT hr = DwmSetWindowAttribute(g_hwnd, dwDarkModeWindows11, &Dark, sizeof(Dark));
-            if (hr != S_OK)
-                hr = DwmSetWindowAttribute(g_hwnd, dwDarkModeWindows10, &Dark, sizeof(Dark));
-
-            cplug_assert(hr == S_OK);
-
-            g_DarkMode.SetPreferredAppMode(APPMODE_FORCEDARK);
-            g_DarkMode.FlushMenuThemes();
-
-            OpenMenuTheme();
-        }
-    }
-
-    ////////////////
-    // INIT AUDIO //
-    ////////////////
-
-    g_Audio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
-    g_Audio.BlockSize   = CPLUG_DEFAULT_BLOCK_SIZE;
-    g_Audio.NumChannels = g_plugin.getOutputBusChannelCount(g_plugin.UserPlugin, 0);
-    cplug_assert(g_Audio.NumChannels == 1 || g_Audio.NumChannels == 2); // TODO: supported other configurations
-
-    // Scan for device
-    static const GUID _CLSID_MMDeviceEnumerator =
-        {0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e}};
-    static const GUID _IID_IMMDeviceEnumerator =
-        {0xa95664d2, 0x9614, 0x4f35, {0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6}};
-    HRESULT hr = CoCreateInstance(
-        (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_CLSID_MMDeviceEnumerator),
-        0,
-        CLSCTX_ALL,
-        (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_IID_IMMDeviceEnumerator),
-        (void**)&g_Audio.pIMMDeviceEnumerator);
-    cplug_assert(!FAILED(hr));
-
-    CPWIN_Audio_SetDevice(-1); // -1 == default device
-    CPWIN_Audio_Start();
-    cplug_assert(g_Audio.ProcessBuffer);
-
-    ///////////////
-    // INIT MIDI //
-    ///////////////
-
-    for (int i = 0; i < ARRAYSIZE(g_MIDI.Buffers); i++)
-    {
-        MIDIHDR* head        = &g_MIDI.Buffers[i].Header;
-        head->lpData         = &g_MIDI.Buffers[i].Buffer[0];
-        head->dwBufferLength = ARRAYSIZE(g_MIDI.Buffers[i].Buffer);
-        head->dwUser         = i;
-    }
-    CPWIN_MIDI_ConnectInput(0);
-    g_MIDI.HotplugDevice = g_MIDI.ConnectedDevice;
-
-    ///////////////
-    // INIT MENU //
-    ///////////////
-
-    g_Menus.hMain = CreateMenu();
-
-    g_Menus.hAudioMenu          = CreatePopupMenu();
-    g_Menus.hSampleRateSubmenu  = CreatePopupMenu();
-    g_Menus.hBlockSizeSubmenu   = CreatePopupMenu();
-    g_Menus.hAudioOutputSubmenu = CreatePopupMenu();
-    g_Menus.hMIDIMenu           = CreatePopupMenu();
-    g_Menus.hMIDIInputsSubMenu  = CreatePopupMenu();
-
-    AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioMenu, L"Audio");
-    AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hSampleRateSubmenu, L"Sample Rate");
-    AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hBlockSizeSubmenu, L"Block Size");
-    AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioOutputSubmenu, L"Outputs");
-
-    AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIMenu, L"MIDI");
-    AppendMenuW(g_Menus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIInputsSubMenu, L"Inputs");
-
-    CPWIN_Menu_RefreshSampleRates();
-    CPWIN_Menu_RefreshBlockSizes();
-    CPWIN_Menu_RefreshAudioOutputs();
-    CPWIN_Menu_RefreshMIDIInputs();
-
-    SetMenu(g_hwnd, g_Menus.hMain);
-
-    // Callback to detect connected/disconnected MIDI/Audio devices
-    // Must be initialised afer the menu because the callback changes menu items based on new/removed devices
-    CM_NOTIFY_FILTER notifyFilter;
-    memset(&notifyFilter, 0, sizeof(notifyFilter));
-    notifyFilter.cbSize     = sizeof(notifyFilter);
-    notifyFilter.Flags      = CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES;
-    notifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
-
-    // Warning: CM_Register_Notification is Windows 8+
-    // https://learn.microsoft.com/en-us/windows/win32/api/cfgmgr32/nf-cfgmgr32-cm_register_notification
-    HRESULT result = CM_Register_Notification(&notifyFilter, g_hwnd, CPWIN_HandleDeviceChange, &g_hCMNotification);
-    cplug_assert(result == CR_SUCCESS);
-    cplug_assert(g_hCMNotification != NULL);
-
-    // Window ready
-    g_plugin.setParent(g_plugin.UserGUI, g_hwnd);
-
-    ShowWindow(g_hwnd, cmdshow);
-    g_plugin.setVisible(g_plugin.UserGUI, true);
-    SetForegroundWindow(g_hwnd);
-
-    MSG msg;
-#ifndef HOTRELOAD_WATCH_DIR
-    // Default event loop
-    while (GetMessageW(&msg, NULL, 0, 0))
-    {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-#else  // Hotreloading uses different event loop
-    // Setup file watcher
-    // Most this code was taken from here: https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8
-    g_Hotreload.hWatchDirectory = CreateFileW(
-        TEXT(HOTRELOAD_WATCH_DIR),
-        FILE_LIST_DIRECTORY,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
-        NULL);
-    if (g_Hotreload.hWatchDirectory == INVALID_HANDLE_VALUE)
-    {
-        fprintf(stderr, "Failed to get directory handle\n");
-        return 1;
-    }
-    g_Hotreload.Overlapped.hEvent = CreateEventW(NULL, FALSE, 0, NULL);
-    cplug_assert(g_Hotreload.Overlapped.hEvent);
-
-    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
-    BOOL ok = ReadDirectoryChangesW(
-        g_Hotreload.hWatchDirectory,
-        g_Hotreload.ReadDirectoryBuffer,
-        sizeof(g_Hotreload.ReadDirectoryBuffer),
-        TRUE,
-        FILE_NOTIFY_CHANGE_LAST_WRITE,
-        NULL,
-        &g_Hotreload.Overlapped,
-        NULL);
-    cplug_assert(ok);
-    if (!ok)
-    {
-        fprintf(stderr, "Failed to queue info buffer\n");
-        return 1;
-    }
-    fprintf(stderr, "Watching folder %s\n", HOTRELOAD_WATCH_DIR);
-    BOOL  running          = TRUE;
-    INT64 LastFileChangeNs = 0;
-    while (running)
-    {
-        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
-        {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-            if (msg.message == WM_QUIT)
-                running = false;
-        }
-
-        // Check file change
-        DWORD code = WaitForSingleObject(g_Hotreload.Overlapped.hEvent, 0);
-        if (code == WAIT_OBJECT_0)
-        {
-            DWORD NumberOfBytesTransferred;
-            GetOverlappedResult(g_Hotreload.hWatchDirectory, &g_Hotreload.Overlapped, &NumberOfBytesTransferred, TRUE);
-            FILE_NOTIFY_INFORMATION* Info = (FILE_NOTIFY_INFORMATION*)g_Hotreload.ReadDirectoryBuffer;
-
-            INT64 NowNs = CPWIN_GetNowNS();
-            while (TRUE)
-            {
-                DWORD name_len = Info->FileNameLength / sizeof(wchar_t);
-
-                if (Info->Action == FILE_ACTION_MODIFIED)
-                {
-                    if (g_Hotreload.ReloadStartNs == 0)
-                        g_Hotreload.ReloadStartNs = NowNs;
-                    LastFileChangeNs = NowNs;
-                    fwprintf(stderr, L"File changed at %lld: %.*s\n", NowNs, name_len, Info->FileName);
-                }
-
-                // Iterate events
-                if (Info->NextEntryOffset)
-                    *((BYTE**)&Info) += Info->NextEntryOffset;
-                else
-                    break;
-            }
-
-            // Queue next event
-            ok = ReadDirectoryChangesW(
-                g_Hotreload.hWatchDirectory,
-                g_Hotreload.ReadDirectoryBuffer,
-                sizeof(g_Hotreload.ReadDirectoryBuffer),
-                TRUE,
-                FILE_NOTIFY_CHANGE_LAST_WRITE,
-                NULL,
-                &g_Hotreload.Overlapped,
-                NULL);
-
-            if (!ok)
-            {
-                fprintf(stderr, "Failed to queue info buffer\n");
-                return 1;
-            }
-        }
-
-        // Throttle hotreload
-        INT64 Now  = CPWIN_GetNowNS();
-        INT64 diff = Now - LastFileChangeNs;
-        // Add 50ms latency to account for multiple files being changed in quick succession
-        // This accounts for things like mass renaming of variables by an IDE, clang-format, etc.
-        if (LastFileChangeNs && diff > 50000000)
-        {
-            LastFileChangeNs = 0;
-
-            if (g_Hotreload.hPluginDLL)
-            {
-                // Deinit
-                g_plugin.setVisible(g_plugin.UserGUI, false);
-                g_plugin.setParent(g_plugin.UserGUI, NULL);
-                g_plugin.destroyGUI(g_plugin.UserGUI);
-
-                DefWindowProcA(
-                    g_hwnd,
-                    WM_CHANGEUISTATE,
-                    UIS_INITIALIZE | UISF_ACTIVE | UISF_HIDEACCEL | UISF_HIDEFOCUS,
-                    0);
-
-                CPWIN_Audio_Stop();
-
-                g_PluginState.BytesWritten = 0;
-                g_PluginState.BytesRead    = 0;
-                g_plugin.saveState(g_plugin.UserPlugin, &g_PluginState, CPWIN_WriteStateProc);
-
-                g_plugin.destroyPlugin(g_plugin.UserPlugin);
-                g_plugin.libraryUnload();
-                ok = FreeLibrary(g_Hotreload.hPluginDLL);
-                cplug_assert(ok);
-                g_Hotreload.hPluginDLL = NULL;
-                memset(&g_plugin, 0, sizeof(g_plugin));
-            }
-
-            // Using 'system()' to call our build command is way simpler, but creates some stdout buffering problems...
-            // Windows prefer that you use CreateProcessW.
-            // https://learn.microsoft.com/en-us/windows/win32/procthread/creating-processes
-            // https://learn.microsoft.com/en-au/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output?redirectedfrom=MSDN
-            STARTUPINFO         si;
-            PROCESS_INFORMATION pi;
-            SECURITY_ATTRIBUTES sa;
-            memset(&si, 0, sizeof(si));
-            memset(&pi, 0, sizeof(pi));
-            memset(&sa, 0, sizeof(sa));
-
-            sa.nLength              = sizeof(sa);
-            sa.bInheritHandle       = TRUE;
-            sa.lpSecurityDescriptor = NULL;
-
-            HANDLE hChildStdoutRd, hChildStdoutWr;
-            if (!CreatePipe(&hChildStdoutRd, &hChildStdoutWr, &sa, 0) ||
-                !SetHandleInformation(hChildStdoutRd, HANDLE_FLAG_INHERIT, 0))
-            {
-                fprintf(stderr, "Failed to create pipes.");
-                cplug_assert(false);
-                return -1;
-            }
-
-            si.cb          = sizeof(si);
-            si.dwFlags    |= STARTF_USESHOWWINDOW; // Stops a terminal window popping up as it runs the command
-            si.hStdOutput  = hChildStdoutWr;
-            si.dwFlags    |= STARTF_USESTDHANDLES; // Lets us use the stdout pipe
-
-            const UINT64 buildStart = CPWIN_GetNowNS();
-            // Run build command in child process.
-            WCHAR cmdbuf[512];
-            _snwprintf(cmdbuf, ARRAYSIZE(cmdbuf), L"%s", TEXT(HOTRELOAD_BUILD_COMMAND));
-            if (!CreateProcessW(0, cmdbuf, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
-            {
-                fprintf(stderr, "CreateProcess failed (%lu).\n", GetLastError());
-                return 1;
-            }
-
-            // Wait until child process exits
-            WaitForSingleObject(pi.hProcess, INFINITE);
-
-            char  buffer[4096] = {0};
-            DWORD bytesRead    = 0;
-
-            do
-            {
-                ok = ReadFile(hChildStdoutRd, buffer, sizeof(buffer) - 1, &bytesRead, NULL);
-                if (ok)
-                    fwrite(buffer, 1, bytesRead, stderr);
-            }
-            while (bytesRead == sizeof(buffer) - 1);
-            // TODO: get stderr also working. Currently it hangs forever when you call ReadFile
-
-            DWORD exitCode = 0;
-            GetExitCodeProcess(pi.hProcess, &exitCode);
-            // Cleanup build process
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-            CloseHandle(hChildStdoutWr);
-
-            const UINT64 buildEnd = CPWIN_GetNowNS();
-
-            if (exitCode != 0)
-            {
-                fprintf(stderr, "[WARNING] Rebuild failed. Exited with code: %lu\n", exitCode);
-            }
-            else
-            {
-                CPWIN_LoadPlugin();
-                g_plugin.loadState(g_plugin.UserPlugin, &g_PluginState, CPWIN_ReadStateProc);
-
-                CPWIN_Audio_Start();
-
-                // Note: GetClientRect() will set RECT to all zeros if the window is minimised
-                RECT size;
-                GetClientRect(g_hwnd, &size);
-                uint32_t width  = size.right - size.left;
-                uint32_t height = size.bottom - size.top;
-
-                g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
-                cplug_assert(g_plugin.UserGUI != NULL);
-                g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
-                if (width && height)
-                    g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
-
-                g_plugin.setParent(g_plugin.UserGUI, g_hwnd);
-                if (width && height)
-                    g_plugin.setVisible(g_plugin.UserGUI, true);
-            }
-
-            const UINT64 reloadEnd = CPWIN_GetNowNS();
-
-            double rebuild_ms = (double)(buildEnd - buildStart) / 1.e6;
-            double reload_ms  = (double)(reloadEnd - g_Hotreload.ReloadStartNs) / 1.e6;
-            fprintf(stderr, "Rebuild time %.2fms\n", rebuild_ms);
-            fprintf(stderr, "Reload time %.2fms\n", reload_ms);
-            g_Hotreload.ReloadStartNs = 0;
-        }
-
-        Sleep(5);
-    }
-    CloseHandle(g_Hotreload.Overlapped.hEvent);
-    CloseHandle(g_Hotreload.hWatchDirectory);
-#endif // Main loop
-
-    OleUninitialize();
-    ReleaseMutex(hMutexOneInstance);
-    CloseHandle(hMutexOneInstance);
-    return (int)msg.wParam;
-}
-
-LRESULT CALLBACK CPWIN_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-{
-    switch (uMsg)
-    {
-    case WM_CREATE:
-        break;
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
-    case WM_CLOSE: // User pressed the window X/Close button
-        // Shutdown device notifications
-        CM_Unregister_Notification(g_hCMNotification);
-
-        // Shutdown audio
-        if (g_Audio.hAudioEvent)
-            CPWIN_Audio_Stop();
-        cplug_assert(g_Audio.ProcessBuffer != NULL);
-        VirtualFree(g_Audio.ProcessBuffer, g_Audio.ProcessBufferCap, 0);
-        cplug_assert(g_Audio.pIMMDevice != NULL);
-        g_Audio.pIMMDevice->lpVtbl->Release(g_Audio.pIMMDevice);
-        cplug_assert(g_Audio.pIMMDeviceEnumerator != NULL);
-        g_Audio.pIMMDeviceEnumerator->lpVtbl->Release(g_Audio.pIMMDeviceEnumerator);
-
-        // Shutdown MIDI
-        CPWIN_MIDI_DisconnectInput();
-
-        CloseMenuTheme();
-
-        // Destroy plugin
-#ifdef HOTRELOAD_WATCH_DIR
-        if (g_Hotreload.hPluginDLL)
-        {
-#endif
-            g_plugin.setVisible(g_plugin.UserGUI, false);
-            g_plugin.setParent(g_plugin.UserGUI, NULL);
-            g_plugin.destroyGUI(g_plugin.UserGUI);
-            g_plugin.destroyPlugin(g_plugin.UserPlugin);
-            g_plugin.libraryUnload();
-#ifdef HOTRELOAD_WATCH_DIR
-            FreeLibrary(g_Hotreload.hPluginDLL);
-        }
-        if (g_PluginState.Data)
-            VirtualFree(g_PluginState.Data, g_PluginState.BytesReserved, 0);
-
-        // Cleanup old versions
-        // Debuggers appear to release their lock on previously loaded DLLs after the WM_CLOSE message is sent
-        for (UINT PrevVersion = g_Hotreload.Version; PrevVersion > 0; PrevVersion--)
-        {
-            const WCHAR* CurrentDllPath            = TEXT(HOTRELOAD_LIB_PATH);
-            const WCHAR* Ext                       = CPWIN_GetFileExtensionW(CurrentDllPath);
-            WCHAR        PrevVersionPath[MAX_PATH] = {0};
-
-            int len = (int)(Ext - CurrentDllPath);
-            _snwprintf(PrevVersionPath, MAX_PATH, L"%.*s%u.dll", len, CurrentDllPath, PrevVersion);
-            BOOL ok = DeleteFileW(PrevVersionPath);
-            cplug_assert(ok);
-            _snwprintf(PrevVersionPath, MAX_PATH, L"%.*s%u.pdb", len, CurrentDllPath, PrevVersion);
-            // Some (not all) debuggers hold a lock on pdb files which causes deleting the file to fail
-            DeleteFileW(PrevVersionPath);
-        }
-#endif
-        DestroyWindow(hWnd);
-        return 0;
-    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
-    case WM_SIZING: // User is resizing
-    {
-        // Note: The size of the child window is different to the size of our window.
-        // The area of (RECT*)lParam below includes the toolbar, window title, window border, etc.
-        RECT* parent = (RECT*)lParam;
-        LONG  width  = parent->right - parent->left;
-        LONG  height = parent->bottom - parent->top;
-
-        // Calculate the size of the child window
-        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-adjustwindowrect
-        RECT child = *parent;
-        AdjustWindowRect(&child, WS_OVERLAPPEDWINDOW, TRUE);
-        LONG padding_x = (child.right - child.left) - width;
-        LONG padding_y = (child.bottom - child.top) - height;
-
-        width      -= padding_x;
-        height     -= padding_y;
-        uint32_t w  = width < 0 ? 0 : width;
-        uint32_t h  = height < 0 ? 0 : height;
-        cplug_assert(w >= 0);
-        cplug_assert(h >= 0);
-        g_plugin.checkSize(g_plugin.UserGUI, &w, &h);
-        width   = w;
-        height  = h;
-        width  += padding_x;
-        height += padding_y;
-
-        // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
-        if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
-            parent->left = parent->right - width;
-        else
-            parent->right = parent->left + width;
-
-        if (wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT)
-            parent->top = parent->bottom - height;
-        else
-            parent->bottom = parent->top + height;
-
-        return TRUE;
-    }
-    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-size
-    case WM_SIZE: // Window has resized, minimised, maximised, or unminimised/unmaximised?
-    {
-        UINT Width  = LOWORD(lParam);
-        UINT Height = HIWORD(lParam);
-
-        switch (wParam)
-        {
-        case SIZE_RESTORED:
-        case SIZE_MAXSHOW:
-            g_plugin.setSize(g_plugin.UserGUI, Width, Height);
-            g_plugin.setVisible(g_plugin.UserGUI, true);
-            break;
-        case SIZE_MINIMIZED:
-        case SIZE_MAXHIDE:
-            g_plugin.setVisible(g_plugin.UserGUI, false);
-            break;
-        case SIZE_MAXIMIZED:
-            g_plugin.checkSize(g_plugin.UserGUI, &Width, &Height);
-            g_plugin.setSize(g_plugin.UserGUI, Width, Height);
-            break;
-        }
-        return 0;
-    }
-    // https://learn.microsoft.com/en-us/windows/win32/hidpi/wm-dpichanged
-    case WM_DPICHANGED:
-    {
-        int Yaxis = HIWORD(wParam);
-        int Xaxis = LOWORD(wParam);
-        g_dpi     = (float)Yaxis / USER_DEFAULT_SCREEN_DPI;
-        g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
-
-        RECT* const prcNewWindow = (RECT*)lParam;
-        SetWindowPos(
-            hWnd,
-            NULL,
-            prcNewWindow->left,
-            prcNewWindow->top,
-            prcNewWindow->right - prcNewWindow->left,
-            prcNewWindow->bottom - prcNewWindow->top,
-            SWP_NOZORDER | SWP_NOACTIVATE);
-        break;
-    }
-    case WM_COMMAND: // clicking nav menu items triggers commands. You can also send commands for other things
-    {
-        switch (wParam)
-        {
-        case IDM_SampleRate_44100:
-        case IDM_SampleRate_48000:
-        case IDM_SampleRate_88200:
-        case IDM_SampleRate_96000:
-        {
-            CPWIN_Audio_Stop();
-            WCHAR text[8];
-            // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
-            int numCharsCopied =
-                GetMenuStringW(g_Menus.hSampleRateSubmenu, wParam, text, ARRAYSIZE(text), MF_BYCOMMAND);
-            cplug_assert(numCharsCopied > 0);
-            g_Audio.SampleRate = _wtoi(text);
-            CPWIN_Audio_Start();
-            CPWIN_Menu_RefreshSampleRates();
-            break;
-        }
-        case IDM_BlockSize_128:
-        case IDM_BlockSize_192:
-        case IDM_BlockSize_256:
-        case IDM_BlockSize_384:
-        case IDM_BlockSize_448:
-        case IDM_BlockSize_512:
-        case IDM_BlockSize_768:
-        case IDM_BlockSize_1024:
-        case IDM_BlockSize_2048:
-        {
-            CPWIN_Audio_Stop();
-            WCHAR text[8];
-            int numCharsCopied = GetMenuStringW(g_Menus.hBlockSizeSubmenu, wParam, text, ARRAYSIZE(text), MF_BYCOMMAND);
-            cplug_assert(numCharsCopied > 0);
-            g_Audio.BlockSize = _wtoi(text);
-            CPWIN_Audio_Start();
-            CPWIN_Menu_RefreshBlockSizes();
-            break;
-        }
-        case IDM_RefreshAudioDeviceList:
-            CPWIN_Menu_RefreshAudioOutputs();
-            break;
-        case IDM_RefreshMIDIDeviceList:
-            CPWIN_Menu_RefreshMIDIInputs();
-            break;
-        case IDM_HandleRemovedMIDIDevice:
-        {
-            fprintf(stderr, "Callback: Removed MIDI input device\n");
-            if (g_MIDI.IsConnected)
-            {
-                UINT num = midiInGetNumDevs();
-                if (num == 0)
-                {
-                    CPWIN_MIDI_DisconnectInput();
-                    fprintf(stderr, "WARNING: Not connected to a MIDI input device\n");
-                }
-                else
-                {
-                    // Check it was the connected device which was removed
-                    UINT     i      = 0;
-                    MMRESULT result = 0;
-                    for (; i < num; i++)
-                    {
-                        MIDIINCAPS2W caps = {0};
-                        result            = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
-                        BOOL IsMatch      = CPWIN_MIDI_MatchDevice(&caps, &g_MIDI.ConnectedDevice);
-                        if (result == MMSYSERR_NOERROR && IsMatch)
-                            break;
-                    }
-                    // Failed to match our connected device
-                    if (i == num)
-                    {
-                        fprintf(
-                            stderr,
-                            "Connected MIDI input device was removed. Trying to connecting to the next available "
-                            "device\n");
-                        CPWIN_MIDI_DisconnectInput();
-                        CPWIN_MIDI_ConnectInput(0);
-                    }
-                }
-            }
-            CPWIN_Menu_RefreshMIDIInputs();
-            break;
-        }
-        case IDM_HandleAddedMIDIDevice:
-            fprintf(stderr, "Callback: New MIDI input device\n");
-            if (g_MIDI.IsConnected == 0)
-            {
-                fprintf(stderr, "Trying to connect new device\n");
-                CPWIN_MIDI_ConnectInput(0);
-            }
-            else if (g_MIDI.HotplugDevice.vDriverVersion)
-            {
-                // Check to see if our last device was just connected
-                UINT num = midiInGetNumDevs();
-                UINT i   = 0;
-                for (; i < num; i++)
-                {
-                    MIDIINCAPS2W caps    = {0};
-                    MMRESULT     result  = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
-                    BOOL         IsMatch = CPWIN_MIDI_MatchDevice(&caps, &g_MIDI.HotplugDevice);
-                    if (result == MMSYSERR_NOERROR && IsMatch)
-                    {
-                        CPWIN_MIDI_ConnectInput(i);
-                        break;
-                    }
-                }
-            }
-            CPWIN_Menu_RefreshMIDIInputs();
-            break;
-        default:
-        {
-            if (wParam >= IDM_OFFSET_AUDIO_DEVICES && wParam < IDM_RefreshAudioDeviceList)
-            {
-                WPARAM idx = wParam - IDM_OFFSET_AUDIO_DEVICES;
-                CPWIN_Audio_Stop();
-                CPWIN_Audio_SetDevice((int)idx);
-                CPWIN_Audio_Start();
-                CPWIN_Menu_RefreshAudioOutputs();
-            }
-            if (wParam >= IDM_OFFSET_MIDI_DEVICES && wParam < IDM_RefreshMIDIDeviceList)
-            {
-                WPARAM   idx = wParam - IDM_OFFSET_MIDI_DEVICES;
-                MMRESULT err = CPWIN_MIDI_ConnectInput((UINT)idx);
-                if (err == 0 && g_MIDI.IsConnected)
-                {
-                    g_MIDI.HotplugDevice = g_MIDI.ConnectedDevice;
-                }
-                CPWIN_Menu_RefreshMIDIInputs();
-            }
-        }
-        }
-        DrawMenuBar(hWnd);
-        break;
-    }
-    // Not sure if we need this...
-    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd
-    // case WM_ERASEBKGND:
-    // {
-    //     if (g_DarkMode.colBG)
-    //     {
-    //         HDC  hdc = (HDC)wParam;
-    //         RECT rc;
-    //         GetClientRect(hWnd, &rc);
-    //         FillRect(hdc, &rc, g_DarkMode.hBrushBG);
-    //         return 1;
-    //     }
-    //     break;
-    // }
-    // https://learn.microsoft.com/en-us/windows/win32/gdi/wm-ncpaint
-    case WM_NCPAINT:
-    case WM_NCACTIVATE:
-    {
-        LRESULT ret = DefWindowProcW(hWnd, uMsg, wParam, lParam);
-        if (g_DarkMode.IsDarkMode && !!g_Menus.hMain)
-        {
-            RECT rcClient = {0};
-            BOOL ok       = GetClientRect(hWnd, &rcClient);
-            cplug_assert(ok);
-            MapWindowPoints(hWnd, NULL, (POINT*)&rcClient, 2);
-
-            RECT rcWindow = {0};
-            ok            = GetWindowRect(hWnd, &rcWindow);
-            cplug_assert(ok);
-            ok = OffsetRect(&rcClient, -rcWindow.left, -rcWindow.top);
-            cplug_assert(ok);
-
-            // the rcBar is offset by the window rect
-            RECT rc   = rcClient;
-            rc.bottom = rcClient.top;
-            rc.top    = rcClient.top - 1;
-
-            HDC hdc = GetWindowDC(hWnd);
-            DrawThemeBackground(g_DarkMode.hThemeMenu, hdc, MENU_POPUPITEM, MPI_NORMAL, &rc, NULL);
-            ReleaseDC(hWnd, hdc);
-        }
-
-        return ret;
-    }
-    case WM_UAHDRAWMENU:
-    {
-        if (g_DarkMode.IsDarkMode)
-        {
-            OpenMenuTheme();
-
-            UAHMENU*    pUDM = (UAHMENU*)lParam;
-            RECT        rc   = {0};
-            MENUBARINFO mbi  = {sizeof(mbi)};
-            RECT        rcWindow;
-
-            GetMenuBarInfo(hWnd, OBJID_MENU, 0, &mbi);
-            GetWindowRect(hWnd, &rcWindow);
-            rc = mbi.rcBar;
-            OffsetRect(&rc, -rcWindow.left, -rcWindow.top);
-            rc.top -= 1;
-
-            DrawThemeBackground(g_DarkMode.hThemeMenu, pUDM->hdc, MENU_POPUPITEM, MPI_NORMAL, &rc, NULL);
-
-            return 0;
-        }
-        break;
-    }
-    case WM_UAHDRAWMENUITEM:
-    {
-        if (g_DarkMode.IsDarkMode)
-        {
-            OpenMenuTheme();
-
-            UAHDRAWMENUITEM* pUDMI = (UAHDRAWMENUITEM*)lParam;
-
-            // Get menu title
-            WCHAR        StringBuffer[256] = {0};
-            MENUITEMINFO mii               = {sizeof(mii), MIIM_STRING};
-            mii.dwTypeData                 = StringBuffer;
-            mii.cch                        = (sizeof(StringBuffer) / 2) - 1;
-            GetMenuItemInfoW(pUDMI->um.hmenu, pUDMI->umi.iPosition, TRUE, &mii);
-
-            // get the item state for drawing
-            DWORD dwFlags = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
-
-            int iTextStateID       = 0;
-            int iBackgroundStateID = 0;
-            if ((pUDMI->dis.itemState & ODS_INACTIVE) | (pUDMI->dis.itemState & ODS_DEFAULT))
-            {
-                // iTextStateID       = MBI_NORMAL; // normal display
-                // iBackgroundStateID = MBI_NORMAL;
-                iTextStateID       = MPI_NORMAL; // normal display
-                iBackgroundStateID = MPI_NORMAL;
-            }
-
-            if ((pUDMI->dis.itemState & ODS_HOTLIGHT) && !(pUDMI->dis.itemState & ODS_INACTIVE))
-            {
-                // iTextStateID       = MBI_HOT; // hot tracking / hover
-                // iBackgroundStateID = MBI_HOT;
-                iTextStateID       = MPI_HOT; // hot tracking
-                iBackgroundStateID = MPI_HOT;
-            }
-            if (pUDMI->dis.itemState & ODS_SELECTED)
-            {
-                // iTextStateID       = MBI_PUSHED; // clicked
-                // iBackgroundStateID = MBI_PUSHED;
-                iTextStateID       = MPI_HOT; // hot tracking
-                iBackgroundStateID = MPI_HOT;
-            }
-            if ((pUDMI->dis.itemState & ODS_GRAYED) || (pUDMI->dis.itemState & ODS_DISABLED) ||
-                (pUDMI->dis.itemState & ODS_INACTIVE))
-            {
-                // iTextStateID       = MBI_DISABLED; // disabled / grey text/ inactive
-                // iBackgroundStateID = MBI_DISABLED;
-                iTextStateID       = MPI_DISABLED; // disabled / grey text/ inactive
-                iBackgroundStateID = MPI_DISABLED;
-            }
-            if (pUDMI->dis.itemState & ODS_NOACCEL)
-            {
-                dwFlags |= DT_HIDEPREFIX;
-            }
-
-            // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-drawthemebackground
-            // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-drawthemetext
-
-            // NOTE: I think 'MENU_BARITEM' is the _correct_ ID to use here, however my Windows 11 machine will
-            // _incorrectly_ draw the light mode theme instead! Using 'MENU_POPUPITEM' is a good fallback and has an
-            // identical look and feel
-            DrawThemeBackground(
-                g_DarkMode.hThemeMenu,
-                pUDMI->um.hdc,
-                MENU_POPUPITEM,
-                iBackgroundStateID,
-                &pUDMI->dis.rcItem,
-                NULL);
-            DrawThemeText(
-                g_DarkMode.hThemeMenu,
-                pUDMI->um.hdc,
-                MENU_POPUPITEM,
-                // MENU_BARITEM,
-                iTextStateID,
-                StringBuffer,
-                mii.cch,
-                dwFlags,
-                0,
-                &pUDMI->dis.rcItem);
-            return 0;
-        }
-        break;
-    }
-    case WM_THEMECHANGED:
-    {
-        CloseMenuTheme();
-        InvalidateRect(hWnd, NULL, TRUE);
-        UpdateWindow(hWnd);
-        break;
-    }
-        // Noisy
-        // case WM_SETCURSOR:
-        // case WM_NCMOUSEMOVE:
-        // case WM_NCHITTEST:
-        //     break;
-    }
-    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
-}
-
-#ifdef HOTRELOAD_WATCH_DIR
-#pragma region PLUGIN_STATE
-int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
+    BYTE*  Data;
+    SIZE_T BytesReserved;
+    SIZE_T BytesCommited;
+
+    SIZE_T BytesWritten;
+    SIZE_T BytesRead;
+} g_PluginState;
+
+int64_t Cplug_WriteStateProc(const void* stateCtx, void* writePos, size_t numBytesToWrite)
 {
     cplug_assert(stateCtx != NULL);
     cplug_assert(writePos != NULL);
@@ -1403,12 +182,12 @@ int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numByt
     // The idea is we reserve heaps of address space up front, and hope we never spill over it.
     // In the rare case your plugin does, simply reserve more address space
     // Some plugins may save big audio files in their state, hence the BIG reserve
-    struct CPWIN_PluginStateContext* ctx = (struct CPWIN_PluginStateContext*)stateCtx;
+    struct Cplug_PluginStateContext* ctx = (struct Cplug_PluginStateContext*)stateCtx;
 
     if (ctx->Data == NULL)
     {
         const SIZE_T largePageSize  = GetLargePageMinimum();
-        SIZE_T       bigreserve     = (SIZE_T)CPWIN_RoundUp(numBytesToWrite, largePageSize);
+        SIZE_T       bigreserve     = (SIZE_T)Cplug_RoundUp(numBytesToWrite, largePageSize);
         bigreserve                 *= 8;
         ctx->Data                   = (BYTE*)VirtualAlloc(NULL, bigreserve, MEM_RESERVE, PAGE_READWRITE);
         cplug_assert(ctx->Data != NULL);
@@ -1435,9 +214,9 @@ int64_t CPWIN_WriteStateProc(const void* stateCtx, void* writePos, size_t numByt
     return numBytesToWrite;
 }
 
-int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead)
+int64_t Cplug_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytesToRead)
 {
-    struct CPWIN_PluginStateContext* ctx = (struct CPWIN_PluginStateContext*)stateCtx;
+    struct Cplug_PluginStateContext* ctx = (struct Cplug_PluginStateContext*)stateCtx;
 
     cplug_assert(stateCtx != NULL);
     cplug_assert(readPos != NULL);
@@ -1454,7 +233,37 @@ int64_t CPWIN_ReadStateProc(const void* stateCtx, void* readPos, size_t maxBytes
 
     return bytesToActualyRead;
 }
-#pragma endregion PLUGIN_STATE
+
+// Get time func taken from here https://gist.github.com/jspohr/3dc4f00033d79ec5bdaf67bc46c813e3
+struct
+{
+    LARGE_INTEGER freq, start;
+} g_Timer;
+
+const WCHAR* Cplug_GetFileNameW(const WCHAR* path)
+{
+    const WCHAR* filename = NULL;
+    for (const WCHAR* c = path; *c != 0; c++)
+    {
+        if (*c == L'\\')
+            filename = c + 1;
+    }
+    return filename;
+}
+
+const WCHAR* Cplug_GetFileExtensionW(const WCHAR* path)
+{
+    const WCHAR* ext = NULL;
+    const WCHAR* c   = path;
+    for (c = path; *c != 0; c++)
+    {
+        if (*c == L'.')
+            ext = c;
+    }
+    if (!ext)
+        ext = c;
+    return ext;
+}
 
 // This avoids having to inlcude <Shlwapi.h>, which causes some issues when trying to build in both C & C++
 EXTERN_C __declspec(dllimport) BOOL __stdcall PathFileExistsW(_In_ LPCWSTR pszPath);
@@ -1462,7 +271,7 @@ EXTERN_C __declspec(dllimport) BOOL __stdcall PathFileExistsW(_In_ LPCWSTR pszPa
 // Debuggers on Windows have a tough time loading an updated DLL and PDB with the same name of a previously loaded DLL
 // So we simply duplicate the file, add a version suffix to the name, then load that
 // A quirk of Windows DLLs is the associated PDB will be embedded within the file. We patch this with the new PDB name
-void CPWIN_DuplicatePatchAndLoadDll()
+void Cplug_DuplicatePatchAndLoadDll()
 {
     cplug_assert(g_Hotreload.hPluginDLL == NULL);
 
@@ -1480,7 +289,7 @@ void CPWIN_DuplicatePatchAndLoadDll()
     // Build paths
     {
         cplug_assert(PathFileExistsW(CurrentDllPath));
-        const WCHAR* Ext = CPWIN_GetFileExtensionW(CurrentDllPath);
+        const WCHAR* Ext = Cplug_GetFileExtensionW(CurrentDllPath);
         cplug_assert(Ext != NULL);
 
         // Create paths with the same name, but with a version suffix
@@ -1603,7 +412,7 @@ void CPWIN_DuplicatePatchAndLoadDll()
             // Patch DLL with new path
             // Because we append a version number to the file name, the string length will be longer.
             // Replacing the path with only the new filename (no directory) appears to work fine
-            const WCHAR* NextPdbFilename    = CPWIN_GetFileNameW(NextPdbPath);
+            const WCHAR* NextPdbFilename    = Cplug_GetFileNameW(NextPdbPath);
             const size_t EmbeddedPdbPathLen = 1 + strlen(EmbeddedPdbPath);
             cplug_assert(EmbeddedPdbPathLen >= wcslen(NextPdbFilename));
             ok = snprintf(EmbeddedPdbPath, EmbeddedPdbPathLen, "%ls", NextPdbFilename);
@@ -1629,12 +438,24 @@ void CPWIN_DuplicatePatchAndLoadDll()
         cplug_assert(g_Hotreload.hPluginDLL != NULL);
     }
 }
-#endif // HOTRELOAD
 
-void CPWIN_LoadPlugin()
+static inline INT64 Cplug_GetNowNS()
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    now.QuadPart -= g_Timer.start.QuadPart;
+    INT64 q       = now.QuadPart / g_Timer.freq.QuadPart;
+    INT64 r       = now.QuadPart % g_Timer.freq.QuadPart;
+    return q * 1000000000 + r * 1000000000 / g_Timer.freq.QuadPart;
+}
+
+#endif // HOTRELOAD_LIB_PATH
+
+// Loads the DLL + loads symbols for library functions
+void Cplug_LoadPlugin()
 {
 #ifdef HOTRELOAD_WATCH_DIR
-    CPWIN_DuplicatePatchAndLoadDll();
+    Cplug_DuplicatePatchAndLoadDll();
     cplug_assert(g_Hotreload.hPluginDLL != NULL);
 #define CPLUG_GET_PROC(name) GetProcAddress(g_Hotreload.hPluginDLL, #name)
 #else // not a hotrealoding build
@@ -1682,231 +503,91 @@ void CPWIN_LoadPlugin()
 
     g_plugin.libraryLoad();
     g_plugin.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-    g_plugin.HostContext.sendParamEvent = CPWIN_HostContext_SendParamEvent;
-    g_plugin.HostContext.rescan         = CPWIN_HostContext_Rescan;
-    g_plugin.HostContext.getHostName    = CPWIN_HostContext_GetHostName;
-    g_plugin.HostContext.requestResize  = CPWIN_HostContext_RequestResize;
+    g_plugin.HostContext.sendParamEvent = Cplug_HostContext_SendParamEvent;
+    g_plugin.HostContext.rescan         = Cplug_HostContext_Rescan;
+    g_plugin.HostContext.getHostName    = Cplug_HostContext_GetHostName;
+    g_plugin.HostContext.requestResize  = Cplug_HostContext_RequestResize;
 
     g_plugin.UserPlugin = g_plugin.createPlugin(&g_plugin.HostContext);
     cplug_assert(g_plugin.UserPlugin != NULL);
 }
 
-bool CPWIN_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+// ----==== MIDI ====----
+
+typedef struct MIDIMessage
 {
-    if (g_plugin.UserGUI)
+    union
     {
-        RECT parent;
-        BOOL ok = 0;
-        ok      = GetWindowRect(g_hwnd, &parent);
-        cplug_assert(ok == 1);
-        if (ok)
+        struct
         {
-            LONG parent_width  = parent.right - parent.left;
-            LONG parent_height = parent.bottom - parent.top;
-            RECT child         = parent;
-            ok                 = AdjustWindowRect(&child, WS_OVERLAPPEDWINDOW, TRUE);
-            cplug_assert(ok == 1);
-            if (ok)
-            {
-                LONG diff_x = (child.right - child.left) - parent_width;
-                LONG diff_y = (child.bottom - child.top) - parent_height;
+            BYTE status;
+            BYTE data1;
+            BYTE data2;
+        };
+        BYTE bytes[4];
+        UINT bytesAsInt;
+    };
+    /* Milliseconds since first connected to MIDI port */
+    UINT timestampMs;
+} MIDIMessage;
 
-                LONG next_parent_width  = width + diff_x;
-                LONG next_parent_height = height + diff_y;
-
-                // This should trigger WM_SIZE - SIZE_RESTORED
-                // https://learn.microsoft.com/en-gb/windows/win32/api/winuser/nf-winuser-setwindowpos
-                ok = SetWindowPos(g_hwnd, NULL, parent.left, parent.top, next_parent_width, next_parent_height, 0);
-                cplug_assert(ok == 1);
-            }
-        }
-    }
-    return false;
-}
-
-#pragma region MENUS
-
-static inline UINT CPWIN_MenuFlag(UINT a, UINT b) { return a == b ? (MF_STRING | MF_CHECKED) : MF_STRING; }
-
-void CPWIN_Menu_RefreshSampleRates()
+struct
 {
-    while (RemoveMenu(g_Menus.hSampleRateSubmenu, 0, MF_BYPOSITION))
+    HMIDIIN hInput;
+    int     IsConnected;
+
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/extended-capabilities-from-a-wdm-audio-driver
+    UINT         NumDevices;
+    MIDIINCAPS2W Devices[16];
+    MIDIINCAPS2W ConnectedDevice;
+    MIDIINCAPS2W HotplugDevice;
+
+    struct
     {
-    }
+        volatile LONG writePos;
+        volatile LONG readPos;
 
-    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 44100), IDM_SampleRate_44100, L"44100");
-    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 48000), IDM_SampleRate_48000, L"48000");
-    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 88200), IDM_SampleRate_88200, L"88200");
-    AppendMenuW(g_Menus.hSampleRateSubmenu, CPWIN_MenuFlag(g_Audio.SampleRate, 96000), IDM_SampleRate_96000, L"96000");
-}
+        MIDIMessage buffer[CPLUG_MIDI_RINGBUFFER_SIZE];
+    } RingBuffer;
 
-void CPWIN_Menu_RefreshBlockSizes()
+    struct CplugMidiBuffer
+    {
+        MIDIHDR Header;
+        char    Buffer[CPLUG_MIDI_BUFFER_SIZE];
+    } Buffers[CPLUG_MIDI_BUFFER_COUNT];
+} g_MIDI = {0};
+
+BOOL Cplug_MIDI_MatchDevice(MIDIINCAPS2W* a, MIDIINCAPS2W* b)
 {
-    while (RemoveMenu(g_Menus.hBlockSizeSubmenu, 0, MF_BYPOSITION))
-    {
-    }
-
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 128), IDM_BlockSize_128, L"128");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 192), IDM_BlockSize_192, L"192");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 256), IDM_BlockSize_256, L"256");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 384), IDM_BlockSize_384, L"384");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 448), IDM_BlockSize_448, L"448");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 512), IDM_BlockSize_512, L"512");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 768), IDM_BlockSize_768, L"768");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 1024), IDM_BlockSize_1024, L"1024");
-    AppendMenuW(g_Menus.hBlockSizeSubmenu, CPWIN_MenuFlag(g_Audio.BlockSize, 2048), IDM_BlockSize_2048, L"2048");
-}
-
-void CPWIN_Menu_RefreshAudioOutputs()
-{
-    while (RemoveMenu(g_Menus.hAudioOutputSubmenu, 0, MF_BYPOSITION))
-    {
-    }
-
-    IMMDeviceCollection* pCollection = NULL;
-    g_Audio.pIMMDeviceEnumerator->lpVtbl
-        ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
-    cplug_assert(pCollection != NULL);
-
-    pCollection->lpVtbl->GetCount(pCollection, &g_Menus.numAudioOutputs);
-
-    for (UINT i = 0; i < g_Menus.numAudioOutputs; i++)
-    {
-        IMMDevice* pDevice = NULL;
-
-        pCollection->lpVtbl->Item(pCollection, i, &pDevice);
-        if (pDevice != NULL)
-        {
-            WCHAR* deviceID = NULL;
-            pDevice->lpVtbl->GetId(pDevice, &deviceID);
-
-            static const PROPERTYKEY _PKEY_Device_FriendlyName = {
-                {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
-                14};
-
-            IPropertyStore* pProperties = NULL;
-            HRESULT         hr          = pDevice->lpVtbl->OpenPropertyStore(pDevice, STGM_READ, &pProperties);
-            cplug_assert(!FAILED(hr));
-
-            PROPVARIANT varName;
-            pProperties->lpVtbl->GetValue(pProperties, CPLUG_WTF_IS_A_REFERENCE(_PKEY_Device_FriendlyName), &varName);
-
-            if (varName.vt != VT_EMPTY)
-            {
-                UINT uFlags = MF_STRING;
-                if (0 == wcsncmp(deviceID, g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer)))
-                    uFlags |= MF_CHECKED;
-
-                AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, varName.pwszVal);
-            }
-
-            PropVariantClear(&varName);
-
-            pProperties->lpVtbl->Release(pProperties);
-            pDevice->lpVtbl->Release(pDevice);
-            CoTaskMemFree(deviceID);
-        }
-    }
-
-    pCollection->lpVtbl->Release(pCollection);
-
-    AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_SEPARATOR, IDM_RefreshAudioDeviceList - 1, NULL);
-    AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, L"Refresh list");
-}
-
-void CPWIN_Menu_RefreshMIDIInputs()
-{
-    while (RemoveMenu(g_Menus.hMIDIInputsSubMenu, 0, MF_BYPOSITION))
-    {
-    }
+    BOOL Val = FALSE;
 
     const GUID NullGUID = {0};
 
-    int numMidiIn = midiInGetNumDevs();
-    for (int i = 0; i < numMidiIn; i++)
-    {
-        MIDIINCAPS2W caps   = {0};
-        MMRESULT     result = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
-        cplug_assert(result == MMSYSERR_NOERROR);
+    BOOL MatchName = 0 == memcmp(a->szPname, b->szPname, sizeof(a->szPname));
 
-        if (result == MMSYSERR_NOERROR)
-        {
-            UINT uFlags = MF_STRING;
+    BOOL IsNameGuidNull = 0 == memcmp(&b->NameGuid, &NullGUID, sizeof(GUID));
+    BOOL MatchNameGuid  = 0 == memcmp(&b->NameGuid, &a->NameGuid, sizeof(GUID));
 
-            BOOL IsMatch = CPWIN_MIDI_MatchDevice(&caps, &g_MIDI.ConnectedDevice);
-            if (IsMatch)
-            {
-                fprintf(stderr, "Checking %ls\n", caps.szPname);
-                uFlags |= MF_CHECKED;
-            }
+    BOOL IsProductGuidNull = 0 == memcmp(&b->ProductGuid, &NullGUID, sizeof(GUID));
+    BOOL MatchProductGuid  = 0 == memcmp(&b->ProductGuid, &a->ProductGuid, sizeof(GUID));
 
-            AppendMenuW(g_Menus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, caps.szPname);
-        }
-    }
+    Val |= !IsNameGuidNull && !IsProductGuidNull && MatchNameGuid && MatchProductGuid;
+    // Fallback if we are unable to obtain the GUIDs through midiInGetDevCapsW. This API function appears to
+    // have started failing in early 2026 on Windows 11.
+    Val |= IsNameGuidNull && IsProductGuidNull && MatchName;
+
+    return Val;
 }
 
-#pragma endregion MENUS
-
-DWORD CALLBACK CPWIN_HandleDeviceChange(
-    HCMNOTIFICATION       hNotify,
-    PVOID                 hwnd,
-    CM_NOTIFY_ACTION      Action,
-    PCM_NOTIFY_EVENT_DATA EventData,
-    DWORD                 EventDataSize)
+void CALLBACK Cplug_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
-    WCHAR* InstanceId = &EventData->u.DeviceInstance.InstanceId[0];
-
-    switch (Action)
-    {
-    case CM_NOTIFY_ACTION_DEVICEINSTANCEENUMERATED:
-        // I've found updating MIDI lists here less reliable than in the following 2 enums
-        break;
-    case CM_NOTIFY_ACTION_DEVICEINSTANCEREMOVED:
-        // MIDI input instance IDs come in this format:
-        // SWD\MMDEVAPI\MIDII_(4 byte hex).P_(2 byte hex)
-        // Software device - MMDevice API - MIDI Input
-        // For audio devices I'm less sure of thier format.
-        // The format I have seen on my own PC is: L"SWD\MMDEVAPI\{0.0.0.00000000}.{(GUID)}""
-        // TODO: test for patten used by audio devices
-        // Update 2026: Microsoft is working on their MIDI APIs atm with the new "Windows MIDI Services".
-        // MIDI input devices now appear to begin with "SWD\\MIDISRV\\MIDIU_KSA_"
-        // https://learn.microsoft.com/en-us/windows-hardware/drivers/install/device-instance-ids
-        if (0 == wcsncmp(L"SWD\\MIDISRV\\MIDIU_KSA_", InstanceId, 22) ||
-            0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
-        {
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedMIDIDevice, 0);
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
-        }
-        else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
-        break;
-    case CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED:
-        if (0 == wcsncmp(L"SWD\\MIDISRV\\MIDIU_KSA_", InstanceId, 22) ||
-            0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
-        {
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedMIDIDevice, 0);
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
-        }
-        else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
-        break;
-    default:
-        break;
-    }
-    return 0;
-}
-
-#pragma region MIDI
-
-void CALLBACK CPWIN_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
-{
-    /* https://learn.microsoft.com/en-gb/windows/win32/multimedia/mim-data?redirectedfrom=MSDN */
+    // https://learn.microsoft.com/en-gb/windows/win32/multimedia/mim-data?redirectedfrom=MSDN
     if (wMsg == MM_MIM_DATA)
     {
         MIDIMessage midi;
         LONG        writePos;
 
-        /* take first 3 bytes. remember, the rest are junk, including possibly the ones we're taking */
+        // take first 3 bytes. remember, the rest are junk, including possibly the ones we're taking
         midi.bytesAsInt  = dwParam1 & 0xffffff;
         midi.timestampMs = (UINT)dwParam2;
 
@@ -1918,18 +599,46 @@ void CALLBACK CPWIN_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
             writePos = 0;
         _InterlockedExchange(&g_MIDI.RingBuffer.writePos, writePos);
     }
-    /* handle sysex*/
-    /* https://www.midi.org/specifications-old/item/table-4-universal-system-exclusive-messages */
-    /* else if (wMsg == MIM_LONGDATA) {} */
+    // handle sysex?
+    // https://www.midi.org/specifications-old/item/table-4-universal-system-exclusive-messages */
+    // else if (wMsg == MIM_LONGDATA) {}
 }
 
-MMRESULT CPWIN_MIDI_ConnectInput(UINT portNum)
+// [Main Thread]
+void Cplug_MIDI_DisconnectInput()
+{
+    if (g_MIDI.IsConnected)
+    {
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinreset
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinstop
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinunprepareheader
+        UINT result;
+        midiInReset(g_MIDI.hInput);
+        midiInStop(g_MIDI.hInput);
+
+        for (int i = 0; i < ARRAYSIZE(g_MIDI.Buffers); i++)
+        {
+            MIDIHDR* head = &g_MIDI.Buffers[i].Header;
+            result        = midiInUnprepareHeader(g_MIDI.hInput, head, sizeof(*head));
+
+            if (result != MMSYSERR_NOERROR)
+                break;
+        }
+        midiInClose(g_MIDI.hInput);
+        g_MIDI.hInput      = NULL;
+        g_MIDI.IsConnected = 0;
+        memset(&g_MIDI.ConnectedDevice, 0, sizeof(g_MIDI.ConnectedDevice));
+    }
+}
+
+// [Main Thread]
+MMRESULT Cplug_MIDI_ConnectInput(UINT portNum)
 {
     MMRESULT result = 0;
 
     if (g_MIDI.IsConnected)
     {
-        CPWIN_MIDI_DisconnectInput();
+        Cplug_MIDI_DisconnectInput();
     }
 
     // For some mysterious reason, possibly in a new update of Windows 11, calling midiInOpen(portnum=0) before
@@ -1959,7 +668,7 @@ MMRESULT CPWIN_MIDI_ConnectInput(UINT portNum)
     // Set up MIDI reading callback
     cplug_assert(g_MIDI.hInput == NULL);
     // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinopen
-    result = midiInOpen(&g_MIDI.hInput, portNum, (DWORD_PTR)&CPWIN_MIDIInProc, 0, CALLBACK_FUNCTION);
+    result = midiInOpen(&g_MIDI.hInput, portNum, (DWORD_PTR)&Cplug_MIDIInProc, 0, CALLBACK_FUNCTION);
 
     if (result != MMSYSERR_NOERROR)
         goto failed;
@@ -1998,35 +707,30 @@ failed:
     return result;
 }
 
-void CPWIN_MIDI_DisconnectInput()
+// ----==== AUDIO ====----
+
+struct
 {
-    if (g_MIDI.IsConnected)
-    {
-        // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinreset
-        // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinstop
-        // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinunprepareheader
-        UINT result;
-        midiInReset(g_MIDI.hInput);
-        midiInStop(g_MIDI.hInput);
+    // Devices
+    IMMDeviceEnumerator* pIMMDeviceEnumerator;
+    IMMDevice*           pIMMDevice;
+    WCHAR                DeviceIDBuffer[64];
+    // Process
+    IAudioClient*       pIAudioClient;
+    IAudioRenderClient* pIAudioRenderClient;
+    HANDLE              hAudioEvent;
+    HANDLE              hAudioProcessThread;
+    UINT32              FlagExitAudioThread;
 
-        for (int i = 0; i < ARRAYSIZE(g_MIDI.Buffers); i++)
-        {
-            MIDIHDR* head = &g_MIDI.Buffers[i].Header;
-            result        = midiInUnprepareHeader(g_MIDI.hInput, head, sizeof(*head));
-
-            if (result != MMSYSERR_NOERROR)
-                break;
-        }
-        midiInClose(g_MIDI.hInput);
-        g_MIDI.hInput      = NULL;
-        g_MIDI.IsConnected = 0;
-        memset(&g_MIDI.ConnectedDevice, 0, sizeof(g_MIDI.ConnectedDevice));
-    }
-}
-
-#pragma endregion MIDI
-
-#pragma region AUDIO
+    SIZE_T ProcessBufferCap;
+    BYTE*  ProcessBuffer;
+    UINT32 ProcessBufferMaxFrames;
+    UINT32 ProcessBufferNumOverprocessedFrames;
+    // Config
+    UINT32 NumChannels;
+    UINT32 SampleRate;
+    UINT32 BlockSize;
+} g_Audio;
 
 typedef struct WindowsProcessContext
 {
@@ -2034,9 +738,11 @@ typedef struct WindowsProcessContext
     float*              output[2];
 } WindowsProcessContext;
 
-bool CPWIN_Audio_enqueueEvent(struct CplugProcessContext* ctx, const CplugEvent* e, uint32_t frameIdx) { return true; }
+// [Audio Thread]
+bool Cplug_Audio_enqueueEvent(struct CplugProcessContext* ctx, const CplugEvent* e, uint32_t frameIdx) { return true; }
 
-bool CPWIN_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
+// [Audio Thread]
+bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
 {
     if (frameIdx >= ctx->numFrames)
         return false;
@@ -2062,9 +768,11 @@ bool CPWIN_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
     return true;
 }
 
-float** CPWIN_Audio_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx) { return NULL; }
+// [Audio Thread]
+float** Cplug_Audio_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx) { return NULL; }
 
-float** CPWIN_Audio_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
+// [Audio Thread]
+float** Cplug_Audio_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
 {
     const WindowsProcessContext* winctx = (const WindowsProcessContext*)ctx;
     if (busIdx == 0)
@@ -2072,7 +780,8 @@ float** CPWIN_Audio_getAudioOutput(const struct CplugProcessContext* ctx, uint32
     return NULL;
 }
 
-void CPWIN_Audio_Process(const UINT32 blockSize)
+// [Audio Thread]
+void Cplug_Audio_Process(const UINT32 blockSize)
 {
     BYTE*   outBuffer            = NULL;
     UINT32  remainingBlockFrames = blockSize;
@@ -2101,13 +810,13 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
     ctx.cplugContext.numFrames       = g_Audio.BlockSize;
     ctx.cplugContext.numInputBusses  = 0;
     ctx.cplugContext.numOutputBusses = 1;
-    ctx.cplugContext.enqueueEvent    = CPWIN_Audio_enqueueEvent;
-    ctx.cplugContext.dequeueEvent    = CPWIN_Audio_dequeueEvent;
-    ctx.cplugContext.getAudioInput   = CPWIN_Audio_getAudioInput;
-    ctx.cplugContext.getAudioOutput  = CPWIN_Audio_getAudioOutput;
+    ctx.cplugContext.enqueueEvent    = Cplug_Audio_enqueueEvent;
+    ctx.cplugContext.dequeueEvent    = Cplug_Audio_dequeueEvent;
+    ctx.cplugContext.getAudioInput   = Cplug_Audio_getAudioInput;
+    ctx.cplugContext.getAudioOutput  = Cplug_Audio_getAudioOutput;
 
     SIZE_T processBufferOffset = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferMaxFrames;
-    processBufferOffset        = (SIZE_T)CPWIN_RoundUp(processBufferOffset, 32);
+    processBufferOffset        = (SIZE_T)Cplug_RoundUp(processBufferOffset, 32);
     ctx.output[0]              = (float*)(g_Audio.ProcessBuffer + processBufferOffset);
     ctx.output[1]              = ctx.output[0] + g_Audio.BlockSize;
 
@@ -2143,10 +852,10 @@ void CPWIN_Audio_Process(const UINT32 blockSize)
     // This is just how you hand the buffer back to windows
     g_Audio.pIAudioRenderClient->lpVtbl->ReleaseBuffer(g_Audio.pIAudioRenderClient, blockSize, 0);
 }
-
-DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
+// [Audio Thread]
+DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
 {
-    CPWIN_Audio_Process(g_Audio.ProcessBufferMaxFrames);
+    Cplug_Audio_Process(g_Audio.ProcessBufferMaxFrames);
 
     // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avsetmmthreadcharacteristicsw
     DWORD  TaskIndex             = 0;
@@ -2170,7 +879,7 @@ DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
         if (blockSize == 0)
             continue;
 
-        CPWIN_Audio_Process(blockSize);
+        Cplug_Audio_Process(blockSize);
     }
 
     // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avrevertmmthreadcharacteristics
@@ -2179,12 +888,12 @@ DWORD WINAPI CPWIN_Audio_RunProcessThread(LPVOID data)
 
     return 0;
 }
-
-void CPWIN_Audio_Stop()
+// [Main Thread]
+void Cplug_Audio_Stop()
 {
     if (g_Audio.hAudioProcessThread == NULL)
     {
-        fprintf(stderr, "[WARNING] Called CPWIN_Audio_Stop() when audio is not running\n");
+        fprintf(stderr, "[WARNING] Called Cplug_Audio_Stop() when audio is not running\n");
         return;
     }
     cplug_assert(g_Audio.FlagExitAudioThread == 0);
@@ -2211,55 +920,13 @@ void CPWIN_Audio_Stop()
     g_Audio.hAudioEvent = NULL;
 }
 
-void CPWIN_Audio_SetDevice(int deviceIdx)
-{
-    cplug_assert(g_Audio.hAudioProcessThread == NULL);
-
-    if (g_Audio.pIMMDevice != NULL)
-        g_Audio.pIMMDevice->lpVtbl->Release(g_Audio.pIMMDevice);
-
-    if (deviceIdx >= 0)
-    {
-        IMMDeviceCollection* pCollection = NULL;
-        g_Audio.pIMMDeviceEnumerator->lpVtbl
-            ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
-        cplug_assert(pCollection != NULL);
-
-        UINT numDevices = 0;
-        pCollection->lpVtbl->GetCount(pCollection, &numDevices);
-
-        if ((UINT)deviceIdx < numDevices)
-            pCollection->lpVtbl->Item(pCollection, (UINT)deviceIdx, &g_Audio.pIMMDevice);
-
-        pCollection->lpVtbl->Release(pCollection);
-    }
-
-    if (g_Audio.pIMMDevice == NULL)
-    {
-        // eConsole or eMultimedia? Microsoft say console is for games, multimedia for playing live music
-        // https://learn.microsoft.com/en-us/windows/win32/coreaudio/device-roles
-        HRESULT hr = g_Audio.pIMMDeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(
-            g_Audio.pIMMDeviceEnumerator,
-            eRender,
-            eMultimedia,
-            &g_Audio.pIMMDevice);
-        cplug_assert(!FAILED(hr));
-    }
-
-    WCHAR* audioDeviceID = NULL;
-    // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid
-    g_Audio.pIMMDevice->lpVtbl->GetId(g_Audio.pIMMDevice, &audioDeviceID);
-    wcscpy_s(g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer), audioDeviceID);
-    g_Audio.DeviceIDBuffer[ARRAYSIZE(g_Audio.DeviceIDBuffer) - 1] = 0;
-    CoTaskMemFree(audioDeviceID);
-}
-
-void CPWIN_Audio_Start()
+// [Main Thread]
+void Cplug_Audio_Start()
 {
 #ifdef HOTRELOAD_WATCH_DIR
     if (g_Hotreload.hPluginDLL == NULL)
     {
-        fprintf(stderr, "[FAILED] Called CPWIN_Audio_Start when no plugin is loaded\n");
+        fprintf(stderr, "[FAILED] Called Cplug_Audio_Start when no plugin is loaded\n");
         return;
     }
 #endif // Hotreload
@@ -2329,10 +996,10 @@ void CPWIN_Audio_Start()
 
     SIZE_T req_bytes_reserve    = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferMaxFrames;
     SIZE_T req_bytes_processing = sizeof(float) * g_Audio.NumChannels * g_Audio.BlockSize;
-    req_bytes_reserve           = (SIZE_T)CPWIN_RoundUp(req_bytes_reserve, 32);
-    req_bytes_processing        = (SIZE_T)CPWIN_RoundUp(req_bytes_processing, 32);
+    req_bytes_reserve           = (SIZE_T)Cplug_RoundUp(req_bytes_reserve, 32);
+    req_bytes_processing        = (SIZE_T)Cplug_RoundUp(req_bytes_processing, 32);
 
-    SIZE_T requiredCap = (SIZE_T)CPWIN_RoundUp(req_bytes_reserve + req_bytes_processing, 4096);
+    SIZE_T requiredCap = (SIZE_T)Cplug_RoundUp(req_bytes_reserve + req_bytes_processing, 4096);
     if (requiredCap > g_Audio.ProcessBufferCap)
     {
         if (g_Audio.ProcessBuffer != NULL)
@@ -2349,7 +1016,1299 @@ void CPWIN_Audio_Start()
     g_Audio.ProcessBufferNumOverprocessedFrames = 0;
     g_Audio.FlagExitAudioThread                 = 0;
 
-    g_Audio.hAudioProcessThread = CreateThread(NULL, 0, CPWIN_Audio_RunProcessThread, NULL, 0, 0);
+    g_Audio.hAudioProcessThread = CreateThread(NULL, 0, Cplug_Audio_RunProcessThread, NULL, 0, 0);
     cplug_assert(g_Audio.hAudioProcessThread != NULL);
 }
-#pragma endregion AUDIO
+
+// [Main Thread]
+// Pass a deviceIdx < 0 for default device
+void Cplug_Audio_SetDevice(int deviceIdx)
+{
+    cplug_assert(g_Audio.hAudioProcessThread == NULL);
+
+    if (g_Audio.pIMMDevice != NULL)
+        g_Audio.pIMMDevice->lpVtbl->Release(g_Audio.pIMMDevice);
+
+    if (deviceIdx >= 0)
+    {
+        IMMDeviceCollection* pCollection = NULL;
+        g_Audio.pIMMDeviceEnumerator->lpVtbl
+            ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
+        cplug_assert(pCollection != NULL);
+
+        UINT numDevices = 0;
+        pCollection->lpVtbl->GetCount(pCollection, &numDevices);
+
+        if ((UINT)deviceIdx < numDevices)
+            pCollection->lpVtbl->Item(pCollection, (UINT)deviceIdx, &g_Audio.pIMMDevice);
+
+        pCollection->lpVtbl->Release(pCollection);
+    }
+
+    if (g_Audio.pIMMDevice == NULL)
+    {
+        // eConsole or eMultimedia? Microsoft say console is for games, multimedia for playing live music
+        // https://learn.microsoft.com/en-us/windows/win32/coreaudio/device-roles
+        HRESULT hr = g_Audio.pIMMDeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(
+            g_Audio.pIMMDeviceEnumerator,
+            eRender,
+            eMultimedia,
+            &g_Audio.pIMMDevice);
+        cplug_assert(!FAILED(hr));
+    }
+
+    WCHAR* audioDeviceID = NULL;
+    // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid
+    g_Audio.pIMMDevice->lpVtbl->GetId(g_Audio.pIMMDevice, &audioDeviceID);
+    wcscpy_s(g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer), audioDeviceID);
+    g_Audio.DeviceIDBuffer[ARRAYSIZE(g_Audio.DeviceIDBuffer) - 1] = 0;
+    CoTaskMemFree(audioDeviceID);
+}
+
+// ----==== MENUS ====----
+typedef enum
+{
+    APPMODE_DEFAULT    = 0,
+    APPMODE_ALLOWDARK  = 1,
+    APPMODE_FORCEDARK  = 2,
+    APPMODE_FORCELIGHT = 3,
+} PreferredAppMode;
+
+typedef bool(WINAPI* ShouldAppsUseDarkModeProc)(void);                       // ordinal 132
+typedef PreferredAppMode(WINAPI* SetPreferredAppModeProc)(PreferredAppMode); // ordinal 135
+typedef void(WINAPI* FlushMenuThemesProc)(void);                             // ordinal 136
+
+// https://github.com/adzm/win32-custom-menubar-aero-theme
+#define WM_UAHDRAWMENU        0x0091 // lParam is UAHMENU
+#define WM_UAHDRAWMENUITEM    0x0092 // lParam is UAHDRAWMENUITEM
+#define WM_UAHMEASUREMENUITEM 0x0094 // lParam is UAHMEASUREMENUITEM
+
+// describes the sizes of the menu bar or menu item
+typedef union tagUAHMENUITEMMETRICS
+{
+    struct
+    {
+        DWORD cx;
+        DWORD cy;
+    } rgsizeBar[2];
+    struct
+    {
+        DWORD cx;
+        DWORD cy;
+    } rgsizePopup[4];
+} UAHMENUITEMMETRICS;
+
+// not really used in our case but part of the other structures
+typedef struct tagUAHMENUPOPUPMETRICS
+{
+    DWORD rgcx[4];
+    DWORD fUpdateMaxWidths : 2; // from kernel symbols, padded to full dword
+} UAHMENUPOPUPMETRICS;
+
+// hmenu is the main window menu; hdc is the context to draw in
+typedef struct tagUAHMENU
+{
+    HMENU hmenu;
+    HDC   hdc;
+    DWORD dwFlags; // no idea what these mean, in my testing it's either 0x00000a00 or sometimes 0x00000a10
+} UAHMENU;
+
+// menu items are always referred to by iPosition here
+typedef struct tagUAHMENUITEM
+{
+    int                 iPosition; // 0-based position of menu item in menubar
+    UAHMENUITEMMETRICS  umim;
+    UAHMENUPOPUPMETRICS umpm;
+} UAHMENUITEM;
+
+// the DRAWITEMSTRUCT contains the states of the menu items, as well as
+// the position index of the item in the menu, which is duplicated in
+// the UAHMENUITEM's iPosition as well
+typedef struct UAHDRAWMENUITEM
+{
+    DRAWITEMSTRUCT dis; // itemID looks uninitialized
+    UAHMENU        um;
+    UAHMENUITEM    umi;
+} UAHDRAWMENUITEM;
+
+// the MEASUREITEMSTRUCT is intended to be filled with the size of the item
+// height appears to be ignored, but width can be modified
+typedef struct tagUAHMEASUREMENUITEM
+{
+    MEASUREITEMSTRUCT mis;
+    UAHMENU           um;
+    UAHMENUITEM       umi;
+} UAHMEASUREMENUITEM;
+
+struct
+{
+    BOOL   IsDarkMode;
+    HTHEME hThemeMenu;
+
+    ShouldAppsUseDarkModeProc ShouldAppsUseDarkMode;
+    SetPreferredAppModeProc   SetPreferredAppMode;
+    FlushMenuThemesProc       FlushMenuThemes;
+} g_DarkMode;
+
+void Cplug_OpenMenuTheme()
+{
+    // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-openthemedata
+    if (g_hwnd && !g_DarkMode.hThemeMenu)
+    {
+        // g_DarkMode.hThemeMenu = OpenThemeData(g_hwnd, L"Menu"); // Light mode
+        g_DarkMode.hThemeMenu = OpenThemeData(g_hwnd, L"DarkMode::Menu");
+    }
+}
+void Cplug_CloseMenuTheme()
+{
+    if (g_DarkMode.hThemeMenu)
+    {
+        CloseThemeData(g_DarkMode.hThemeMenu);
+        g_DarkMode.hThemeMenu = NULL;
+    }
+}
+
+enum
+{
+    IDM_SampleRate_44100,
+    IDM_SampleRate_48000,
+    IDM_SampleRate_88200,
+    IDM_SampleRate_96000,
+    IDM_BlockSize_128,
+    IDM_BlockSize_192,
+    IDM_BlockSize_256,
+    IDM_BlockSize_384,
+    IDM_BlockSize_448,
+    IDM_BlockSize_512,
+    IDM_BlockSize_768,
+    IDM_BlockSize_1024,
+    IDM_BlockSize_2048,
+
+    IDM_HandleRemovedMIDIDevice,
+    IDM_HandleAddedMIDIDevice,
+
+    IDM_OFFSET_AUDIO_DEVICES   = 50,
+    IDM_RefreshAudioDeviceList = 99,
+
+    IDM_OFFSET_MIDI_DEVICES   = 100,
+    IDM_RefreshMIDIDeviceList = 149,
+};
+
+struct
+{
+    HMENU hMain;
+
+    HMENU hAudioMenu;
+    HMENU hSampleRateSubmenu;
+    HMENU hBlockSizeSubmenu;
+    HMENU hAudioOutputSubmenu;
+    UINT  numAudioOutputs;
+
+    HMENU hMIDIMenu;
+    HMENU hMIDIInputsSubMenu;
+} g_Menus;
+
+#pragma region MENUS
+
+static inline UINT Cplug_MenuFlag(UINT a, UINT b) { return a == b ? (MF_STRING | MF_CHECKED) : MF_STRING; }
+
+void Cplug_Menu_RefreshSampleRates()
+{
+    while (RemoveMenu(g_Menus.hSampleRateSubmenu, 0, MF_BYPOSITION))
+    {
+    }
+
+    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 44100), IDM_SampleRate_44100, L"44100");
+    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 48000), IDM_SampleRate_48000, L"48000");
+    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 88200), IDM_SampleRate_88200, L"88200");
+    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 96000), IDM_SampleRate_96000, L"96000");
+}
+
+void Cplug_Menu_RefreshBlockSizes()
+{
+    while (RemoveMenu(g_Menus.hBlockSizeSubmenu, 0, MF_BYPOSITION))
+    {
+    }
+
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 128), IDM_BlockSize_128, L"128");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 192), IDM_BlockSize_192, L"192");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 256), IDM_BlockSize_256, L"256");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 384), IDM_BlockSize_384, L"384");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 448), IDM_BlockSize_448, L"448");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 512), IDM_BlockSize_512, L"512");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 768), IDM_BlockSize_768, L"768");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 1024), IDM_BlockSize_1024, L"1024");
+    AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 2048), IDM_BlockSize_2048, L"2048");
+}
+
+void Cplug_Menu_RefreshAudioOutputs()
+{
+    while (RemoveMenu(g_Menus.hAudioOutputSubmenu, 0, MF_BYPOSITION))
+    {
+    }
+
+    IMMDeviceCollection* pCollection = NULL;
+    g_Audio.pIMMDeviceEnumerator->lpVtbl
+        ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
+    cplug_assert(pCollection != NULL);
+
+    pCollection->lpVtbl->GetCount(pCollection, &g_Menus.numAudioOutputs);
+
+    for (UINT i = 0; i < g_Menus.numAudioOutputs; i++)
+    {
+        IMMDevice* pDevice = NULL;
+
+        pCollection->lpVtbl->Item(pCollection, i, &pDevice);
+        if (pDevice != NULL)
+        {
+            WCHAR* deviceID = NULL;
+            pDevice->lpVtbl->GetId(pDevice, &deviceID);
+
+            static const PROPERTYKEY _PKEY_Device_FriendlyName = {
+                {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
+                14};
+
+            IPropertyStore* pProperties = NULL;
+            HRESULT         hr          = pDevice->lpVtbl->OpenPropertyStore(pDevice, STGM_READ, &pProperties);
+            cplug_assert(!FAILED(hr));
+
+            PROPVARIANT varName;
+            pProperties->lpVtbl->GetValue(pProperties, CPLUG_WTF_IS_A_REFERENCE(_PKEY_Device_FriendlyName), &varName);
+
+            if (varName.vt != VT_EMPTY)
+            {
+                UINT uFlags = MF_STRING;
+                if (0 == wcsncmp(deviceID, g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer)))
+                    uFlags |= MF_CHECKED;
+
+                AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, varName.pwszVal);
+            }
+
+            PropVariantClear(&varName);
+
+            pProperties->lpVtbl->Release(pProperties);
+            pDevice->lpVtbl->Release(pDevice);
+            CoTaskMemFree(deviceID);
+        }
+    }
+
+    pCollection->lpVtbl->Release(pCollection);
+
+    AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_SEPARATOR, IDM_RefreshAudioDeviceList - 1, NULL);
+    AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, L"Refresh list");
+}
+
+void Cplug_Menu_RefreshMIDIInputs()
+{
+    while (RemoveMenu(g_Menus.hMIDIInputsSubMenu, 0, MF_BYPOSITION))
+    {
+    }
+
+    const GUID NullGUID = {0};
+
+    int numMidiIn = midiInGetNumDevs();
+    for (int i = 0; i < numMidiIn; i++)
+    {
+        MIDIINCAPS2W caps   = {0};
+        MMRESULT     result = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
+        cplug_assert(result == MMSYSERR_NOERROR);
+
+        if (result == MMSYSERR_NOERROR)
+        {
+            UINT uFlags = MF_STRING;
+
+            BOOL IsMatch = Cplug_MIDI_MatchDevice(&caps, &g_MIDI.ConnectedDevice);
+            if (IsMatch)
+            {
+                fprintf(stderr, "Checking %ls\n", caps.szPname);
+                uFlags |= MF_CHECKED;
+            }
+
+            AppendMenuW(g_Menus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, caps.szPname);
+        }
+    }
+}
+
+#pragma endregion MENUS
+
+HCMNOTIFICATION g_hCMNotification;
+
+// Unknown system thread. Notify Connected/disconnected devices. We only check Audio/MIDI
+DWORD CALLBACK Cplug_HandleDeviceChange(
+    HCMNOTIFICATION       hNotify,
+    PVOID                 hwnd,
+    CM_NOTIFY_ACTION      Action,
+    PCM_NOTIFY_EVENT_DATA EventData,
+    DWORD                 EventDataSize)
+{
+    WCHAR* InstanceId = &EventData->u.DeviceInstance.InstanceId[0];
+
+    switch (Action)
+    {
+    case CM_NOTIFY_ACTION_DEVICEINSTANCEENUMERATED:
+        // I've found updating MIDI lists here less reliable than in the following 2 enums
+        break;
+    case CM_NOTIFY_ACTION_DEVICEINSTANCEREMOVED:
+        // MIDI input instance IDs come in this format:
+        // SWD\MMDEVAPI\MIDII_(4 byte hex).P_(2 byte hex)
+        // Software device - MMDevice API - MIDI Input
+        // For audio devices I'm less sure of thier format.
+        // The format I have seen on my own PC is: L"SWD\MMDEVAPI\{0.0.0.00000000}.{(GUID)}""
+        // TODO: test for patten used by audio devices
+        // Update 2026: Microsoft is working on their MIDI APIs atm with the new "Windows MIDI Services".
+        // MIDI input devices now appear to begin with "SWD\\MIDISRV\\MIDIU_KSA_"
+        // https://learn.microsoft.com/en-us/windows-hardware/drivers/install/device-instance-ids
+        if (0 == wcsncmp(L"SWD\\MIDISRV\\MIDIU_KSA_", InstanceId, 22) ||
+            0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
+        {
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedMIDIDevice, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
+        }
+        else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
+        break;
+    case CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED:
+        if (0 == wcsncmp(L"SWD\\MIDISRV\\MIDIU_KSA_", InstanceId, 22) ||
+            0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
+        {
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedMIDIDevice, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
+        }
+        else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+
+LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
+    case WM_CREATE:
+        break;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    case WM_CLOSE: // User pressed the window X/Close button
+        // Shutdown device notifications
+        CM_Unregister_Notification(g_hCMNotification);
+
+        // Shutdown audio
+        if (g_Audio.hAudioEvent)
+            Cplug_Audio_Stop();
+        cplug_assert(g_Audio.ProcessBuffer != NULL);
+        VirtualFree(g_Audio.ProcessBuffer, g_Audio.ProcessBufferCap, 0);
+        cplug_assert(g_Audio.pIMMDevice != NULL);
+        g_Audio.pIMMDevice->lpVtbl->Release(g_Audio.pIMMDevice);
+        cplug_assert(g_Audio.pIMMDeviceEnumerator != NULL);
+        g_Audio.pIMMDeviceEnumerator->lpVtbl->Release(g_Audio.pIMMDeviceEnumerator);
+
+        // Shutdown MIDI
+        Cplug_MIDI_DisconnectInput();
+
+        Cplug_CloseMenuTheme();
+
+        // Destroy plugin
+#ifdef HOTRELOAD_WATCH_DIR
+        if (g_Hotreload.hPluginDLL)
+        {
+#endif
+            g_plugin.setVisible(g_plugin.UserGUI, false);
+            g_plugin.setParent(g_plugin.UserGUI, NULL);
+            g_plugin.destroyGUI(g_plugin.UserGUI);
+            g_plugin.destroyPlugin(g_plugin.UserPlugin);
+            g_plugin.libraryUnload();
+#ifdef HOTRELOAD_WATCH_DIR
+            FreeLibrary(g_Hotreload.hPluginDLL);
+        }
+        if (g_PluginState.Data)
+            VirtualFree(g_PluginState.Data, g_PluginState.BytesReserved, 0);
+
+        // Cleanup old versions
+        // Debuggers appear to release their lock on previously loaded DLLs after the WM_CLOSE message is sent
+        for (UINT PrevVersion = g_Hotreload.Version; PrevVersion > 0; PrevVersion--)
+        {
+            const WCHAR* CurrentDllPath            = TEXT(HOTRELOAD_LIB_PATH);
+            const WCHAR* Ext                       = Cplug_GetFileExtensionW(CurrentDllPath);
+            WCHAR        PrevVersionPath[MAX_PATH] = {0};
+
+            int len = (int)(Ext - CurrentDllPath);
+            _snwprintf(PrevVersionPath, MAX_PATH, L"%.*s%u.dll", len, CurrentDllPath, PrevVersion);
+            BOOL ok = DeleteFileW(PrevVersionPath);
+            cplug_assert(ok);
+            _snwprintf(PrevVersionPath, MAX_PATH, L"%.*s%u.pdb", len, CurrentDllPath, PrevVersion);
+            // Some (not all) debuggers hold a lock on pdb files which causes deleting the file to fail
+            DeleteFileW(PrevVersionPath);
+        }
+#endif
+        DestroyWindow(hWnd);
+        return 0;
+    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
+    case WM_SIZING: // User is resizing
+    {
+        // Note: The size of the child window is different to the size of our window.
+        // The area of (RECT*)lParam below includes the toolbar, window title, window border, etc.
+        RECT* parent = (RECT*)lParam;
+        LONG  width  = parent->right - parent->left;
+        LONG  height = parent->bottom - parent->top;
+
+        // Calculate the size of the child window
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-adjustwindowrect
+        RECT child = *parent;
+        AdjustWindowRect(&child, WS_OVERLAPPEDWINDOW, TRUE);
+        LONG padding_x = (child.right - child.left) - width;
+        LONG padding_y = (child.bottom - child.top) - height;
+
+        width      -= padding_x;
+        height     -= padding_y;
+        uint32_t w  = width < 0 ? 0 : width;
+        uint32_t h  = height < 0 ? 0 : height;
+        cplug_assert(w >= 0);
+        cplug_assert(h >= 0);
+        g_plugin.checkSize(g_plugin.UserGUI, &w, &h);
+        width   = w;
+        height  = h;
+        width  += padding_x;
+        height += padding_y;
+
+        // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing
+        if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT)
+            parent->left = parent->right - width;
+        else
+            parent->right = parent->left + width;
+
+        if (wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT)
+            parent->top = parent->bottom - height;
+        else
+            parent->bottom = parent->top + height;
+
+        return TRUE;
+    }
+    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-size
+    case WM_SIZE: // Window has resized, minimised, maximised, or unminimised/unmaximised?
+    {
+        UINT Width  = LOWORD(lParam);
+        UINT Height = HIWORD(lParam);
+
+        switch (wParam)
+        {
+        case SIZE_RESTORED:
+        case SIZE_MAXSHOW:
+            g_plugin.setSize(g_plugin.UserGUI, Width, Height);
+            g_plugin.setVisible(g_plugin.UserGUI, true);
+            break;
+        case SIZE_MINIMIZED:
+        case SIZE_MAXHIDE:
+            g_plugin.setVisible(g_plugin.UserGUI, false);
+            break;
+        case SIZE_MAXIMIZED:
+            g_plugin.checkSize(g_plugin.UserGUI, &Width, &Height);
+            g_plugin.setSize(g_plugin.UserGUI, Width, Height);
+            break;
+        }
+        return 0;
+    }
+    // https://learn.microsoft.com/en-us/windows/win32/hidpi/wm-dpichanged
+    case WM_DPICHANGED:
+    {
+        int Yaxis = HIWORD(wParam);
+        int Xaxis = LOWORD(wParam);
+        g_dpi     = (float)Yaxis / USER_DEFAULT_SCREEN_DPI;
+        g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
+
+        RECT* const prcNewWindow = (RECT*)lParam;
+        SetWindowPos(
+            hWnd,
+            NULL,
+            prcNewWindow->left,
+            prcNewWindow->top,
+            prcNewWindow->right - prcNewWindow->left,
+            prcNewWindow->bottom - prcNewWindow->top,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        break;
+    }
+    case WM_COMMAND: // clicking nav menu items triggers commands. You can also send commands for other things
+    {
+        switch (wParam)
+        {
+        case IDM_SampleRate_44100:
+        case IDM_SampleRate_48000:
+        case IDM_SampleRate_88200:
+        case IDM_SampleRate_96000:
+        {
+            Cplug_Audio_Stop();
+            WCHAR text[8];
+            // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
+            int numCharsCopied =
+                GetMenuStringW(g_Menus.hSampleRateSubmenu, wParam, text, ARRAYSIZE(text), MF_BYCOMMAND);
+            cplug_assert(numCharsCopied > 0);
+            g_Audio.SampleRate = _wtoi(text);
+            Cplug_Audio_Start();
+            Cplug_Menu_RefreshSampleRates();
+            break;
+        }
+        case IDM_BlockSize_128:
+        case IDM_BlockSize_192:
+        case IDM_BlockSize_256:
+        case IDM_BlockSize_384:
+        case IDM_BlockSize_448:
+        case IDM_BlockSize_512:
+        case IDM_BlockSize_768:
+        case IDM_BlockSize_1024:
+        case IDM_BlockSize_2048:
+        {
+            Cplug_Audio_Stop();
+            WCHAR text[8];
+            int numCharsCopied = GetMenuStringW(g_Menus.hBlockSizeSubmenu, wParam, text, ARRAYSIZE(text), MF_BYCOMMAND);
+            cplug_assert(numCharsCopied > 0);
+            g_Audio.BlockSize = _wtoi(text);
+            Cplug_Audio_Start();
+            Cplug_Menu_RefreshBlockSizes();
+            break;
+        }
+        case IDM_RefreshAudioDeviceList:
+            Cplug_Menu_RefreshAudioOutputs();
+            break;
+        case IDM_RefreshMIDIDeviceList:
+            Cplug_Menu_RefreshMIDIInputs();
+            break;
+        case IDM_HandleRemovedMIDIDevice:
+        {
+            fprintf(stderr, "Callback: Removed MIDI input device\n");
+            if (g_MIDI.IsConnected)
+            {
+                UINT num = midiInGetNumDevs();
+                if (num == 0)
+                {
+                    Cplug_MIDI_DisconnectInput();
+                    fprintf(stderr, "WARNING: Not connected to a MIDI input device\n");
+                }
+                else
+                {
+                    // Check it was the connected device which was removed
+                    UINT     i      = 0;
+                    MMRESULT result = 0;
+                    for (; i < num; i++)
+                    {
+                        MIDIINCAPS2W caps = {0};
+                        result            = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
+                        BOOL IsMatch      = Cplug_MIDI_MatchDevice(&caps, &g_MIDI.ConnectedDevice);
+                        if (result == MMSYSERR_NOERROR && IsMatch)
+                            break;
+                    }
+                    // Failed to match our connected device
+                    if (i == num)
+                    {
+                        fprintf(
+                            stderr,
+                            "Connected MIDI input device was removed. Trying to connecting to the next available "
+                            "device\n");
+                        Cplug_MIDI_DisconnectInput();
+                        Cplug_MIDI_ConnectInput(0);
+                    }
+                }
+            }
+            Cplug_Menu_RefreshMIDIInputs();
+            break;
+        }
+        case IDM_HandleAddedMIDIDevice:
+            fprintf(stderr, "Callback: New MIDI input device\n");
+            if (g_MIDI.IsConnected == 0)
+            {
+                fprintf(stderr, "Trying to connect new device\n");
+                Cplug_MIDI_ConnectInput(0);
+            }
+            else if (g_MIDI.HotplugDevice.vDriverVersion)
+            {
+                // Check to see if our last device was just connected
+                UINT num = midiInGetNumDevs();
+                UINT i   = 0;
+                for (; i < num; i++)
+                {
+                    MIDIINCAPS2W caps    = {0};
+                    MMRESULT     result  = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
+                    BOOL         IsMatch = Cplug_MIDI_MatchDevice(&caps, &g_MIDI.HotplugDevice);
+                    if (result == MMSYSERR_NOERROR && IsMatch)
+                    {
+                        Cplug_MIDI_ConnectInput(i);
+                        break;
+                    }
+                }
+            }
+            Cplug_Menu_RefreshMIDIInputs();
+            break;
+        default:
+        {
+            if (wParam >= IDM_OFFSET_AUDIO_DEVICES && wParam < IDM_RefreshAudioDeviceList)
+            {
+                WPARAM idx = wParam - IDM_OFFSET_AUDIO_DEVICES;
+                Cplug_Audio_Stop();
+                Cplug_Audio_SetDevice((int)idx);
+                Cplug_Audio_Start();
+                Cplug_Menu_RefreshAudioOutputs();
+            }
+            if (wParam >= IDM_OFFSET_MIDI_DEVICES && wParam < IDM_RefreshMIDIDeviceList)
+            {
+                WPARAM   idx = wParam - IDM_OFFSET_MIDI_DEVICES;
+                MMRESULT err = Cplug_MIDI_ConnectInput((UINT)idx);
+                if (err == 0 && g_MIDI.IsConnected)
+                {
+                    g_MIDI.HotplugDevice = g_MIDI.ConnectedDevice;
+                }
+                Cplug_Menu_RefreshMIDIInputs();
+            }
+        }
+        }
+        DrawMenuBar(hWnd);
+        break;
+    }
+    // Not sure if we need this...
+    // https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-erasebkgnd
+    // case WM_ERASEBKGND:
+    // {
+    //     if (g_DarkMode.colBG)
+    //     {
+    //         HDC  hdc = (HDC)wParam;
+    //         RECT rc;
+    //         GetClientRect(hWnd, &rc);
+    //         FillRect(hdc, &rc, g_DarkMode.hBrushBG);
+    //         return 1;
+    //     }
+    //     break;
+    // }
+    // https://learn.microsoft.com/en-us/windows/win32/gdi/wm-ncpaint
+    case WM_NCPAINT:
+    case WM_NCACTIVATE:
+    {
+        LRESULT ret = DefWindowProcW(hWnd, uMsg, wParam, lParam);
+        if (g_DarkMode.IsDarkMode && !!g_Menus.hMain)
+        {
+            RECT rcClient = {0};
+            BOOL ok       = GetClientRect(hWnd, &rcClient);
+            cplug_assert(ok);
+            MapWindowPoints(hWnd, NULL, (POINT*)&rcClient, 2);
+
+            RECT rcWindow = {0};
+            ok            = GetWindowRect(hWnd, &rcWindow);
+            cplug_assert(ok);
+            ok = OffsetRect(&rcClient, -rcWindow.left, -rcWindow.top);
+            cplug_assert(ok);
+
+            // the rcBar is offset by the window rect
+            RECT rc   = rcClient;
+            rc.bottom = rcClient.top;
+            rc.top    = rcClient.top - 1;
+
+            HDC hdc = GetWindowDC(hWnd);
+            DrawThemeBackground(g_DarkMode.hThemeMenu, hdc, MENU_POPUPITEM, MPI_NORMAL, &rc, NULL);
+            ReleaseDC(hWnd, hdc);
+        }
+
+        return ret;
+    }
+    case WM_UAHDRAWMENU:
+    {
+        if (g_DarkMode.IsDarkMode)
+        {
+            Cplug_OpenMenuTheme();
+
+            UAHMENU*    pUDM = (UAHMENU*)lParam;
+            RECT        rc   = {0};
+            MENUBARINFO mbi  = {sizeof(mbi)};
+            RECT        rcWindow;
+
+            GetMenuBarInfo(hWnd, OBJID_MENU, 0, &mbi);
+            GetWindowRect(hWnd, &rcWindow);
+            rc = mbi.rcBar;
+            OffsetRect(&rc, -rcWindow.left, -rcWindow.top);
+            rc.top -= 1;
+
+            DrawThemeBackground(g_DarkMode.hThemeMenu, pUDM->hdc, MENU_POPUPITEM, MPI_NORMAL, &rc, NULL);
+
+            return 0;
+        }
+        break;
+    }
+    case WM_UAHDRAWMENUITEM:
+    {
+        if (g_DarkMode.IsDarkMode)
+        {
+            Cplug_OpenMenuTheme();
+
+            UAHDRAWMENUITEM* pUDMI = (UAHDRAWMENUITEM*)lParam;
+
+            // Get menu title
+            WCHAR        StringBuffer[256] = {0};
+            MENUITEMINFO mii               = {sizeof(mii), MIIM_STRING};
+            mii.dwTypeData                 = StringBuffer;
+            mii.cch                        = (sizeof(StringBuffer) / 2) - 1;
+            GetMenuItemInfoW(pUDMI->um.hmenu, pUDMI->umi.iPosition, TRUE, &mii);
+
+            // get the item state for drawing
+            DWORD dwFlags = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
+
+            int iTextStateID       = 0;
+            int iBackgroundStateID = 0;
+            if ((pUDMI->dis.itemState & ODS_INACTIVE) | (pUDMI->dis.itemState & ODS_DEFAULT))
+            {
+                // iTextStateID       = MBI_NORMAL; // normal display
+                // iBackgroundStateID = MBI_NORMAL;
+                iTextStateID       = MPI_NORMAL; // normal display
+                iBackgroundStateID = MPI_NORMAL;
+            }
+
+            if ((pUDMI->dis.itemState & ODS_HOTLIGHT) && !(pUDMI->dis.itemState & ODS_INACTIVE))
+            {
+                // iTextStateID       = MBI_HOT; // hot tracking / hover
+                // iBackgroundStateID = MBI_HOT;
+                iTextStateID       = MPI_HOT; // hot tracking
+                iBackgroundStateID = MPI_HOT;
+            }
+            if (pUDMI->dis.itemState & ODS_SELECTED)
+            {
+                // iTextStateID       = MBI_PUSHED; // clicked
+                // iBackgroundStateID = MBI_PUSHED;
+                iTextStateID       = MPI_HOT; // hot tracking
+                iBackgroundStateID = MPI_HOT;
+            }
+            if ((pUDMI->dis.itemState & ODS_GRAYED) || (pUDMI->dis.itemState & ODS_DISABLED) ||
+                (pUDMI->dis.itemState & ODS_INACTIVE))
+            {
+                // iTextStateID       = MBI_DISABLED; // disabled / grey text/ inactive
+                // iBackgroundStateID = MBI_DISABLED;
+                iTextStateID       = MPI_DISABLED; // disabled / grey text/ inactive
+                iBackgroundStateID = MPI_DISABLED;
+            }
+            if (pUDMI->dis.itemState & ODS_NOACCEL)
+            {
+                dwFlags |= DT_HIDEPREFIX;
+            }
+
+            // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-drawthemebackground
+            // https://learn.microsoft.com/en-us/windows/win32/api/uxtheme/nf-uxtheme-drawthemetext
+
+            // NOTE: I think 'MENU_BARITEM' is the _correct_ ID to use here, however my Windows 11 machine will
+            // _incorrectly_ draw the light mode theme instead! Using 'MENU_POPUPITEM' is a good fallback and has an
+            // identical look and feel
+            DrawThemeBackground(
+                g_DarkMode.hThemeMenu,
+                pUDMI->um.hdc,
+                MENU_POPUPITEM,
+                iBackgroundStateID,
+                &pUDMI->dis.rcItem,
+                NULL);
+            DrawThemeText(
+                g_DarkMode.hThemeMenu,
+                pUDMI->um.hdc,
+                MENU_POPUPITEM,
+                // MENU_BARITEM,
+                iTextStateID,
+                StringBuffer,
+                mii.cch,
+                dwFlags,
+                0,
+                &pUDMI->dis.rcItem);
+            return 0;
+        }
+        break;
+    }
+    case WM_THEMECHANGED:
+    {
+        Cplug_CloseMenuTheme();
+        InvalidateRect(hWnd, NULL, TRUE);
+        UpdateWindow(hWnd);
+        break;
+    }
+        // Noisy
+        // case WM_SETCURSOR:
+        // case WM_NCMOUSEMOVE:
+        // case WM_NCHITTEST:
+        //     break;
+    }
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmdshow)
+{
+    // https://stackoverflow.com/questions/171213/how-to-block-running-two-instances-of-the-same-program
+    HANDLE hMutexOneInstance = CreateMutexW(NULL, TRUE, L"Single instance - " TEXT(CPLUG_PLUGIN_NAME));
+    if (hMutexOneInstance == NULL || GetLastError() == ERROR_ALREADY_EXISTS)
+    {
+        if (hMutexOneInstance)
+        {
+            ReleaseMutex(hMutexOneInstance);
+            CloseHandle(hMutexOneInstance);
+        }
+        return 1;
+    }
+
+    if (FAILED(OleInitialize(NULL)))
+    {
+        fprintf(stderr, "Failed initialising COM\n");
+        return 1;
+    }
+
+#ifdef HOTRELOAD_WATCH_DIR
+    QueryPerformanceFrequency(&g_Timer.freq);
+    QueryPerformanceCounter(&g_Timer.start);
+    memset(&g_PluginState, 0, sizeof(g_PluginState));
+    memset(&g_Hotreload, 0, sizeof(g_Hotreload));
+#endif
+
+    memset(&g_plugin, 0, sizeof(g_plugin));
+    memset(&g_MIDI, 0, sizeof(g_MIDI));
+    memset(&g_Audio, 0, sizeof(g_Audio));
+    memset(&g_DarkMode, 0, sizeof(g_DarkMode));
+    memset(&g_Menus, 0, sizeof(g_Menus));
+
+    // Warning: Windows 10+
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setprocessdpiawarenesscontext
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+
+    Cplug_LoadPlugin();
+
+    // INIT WINDOW
+    {
+        g_dpi = (float)GetDpiForSystem() / (float)USER_DEFAULT_SCREEN_DPI;
+
+        g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
+        cplug_assert(g_plugin.UserGUI != NULL);
+
+        g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
+
+        uint32_t guiWidth, guiHeight;
+        g_plugin.getSize(g_plugin.UserGUI, &guiWidth, &guiHeight);
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadiconw
+        // Load icon from RC file, if you used one...
+        HICON hResIcon = LoadIconW(GetModuleHandleW(0), MAKEINTRESOURCE(1));
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-wndclassexw
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.cbSize      = sizeof(wc);
+        wc.lpfnWndProc = Cplug_WindowProc;
+        wc.hInstance   = hInst;
+        wc.hIcon       = hResIcon != NULL ? hResIcon : LoadIconW(NULL, IDI_APPLICATION); // fallback icon
+        wc.hCursor     = LoadCursorW(NULL, IDC_ARROW);
+        // wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+        wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        wc.lpszClassName = L"CPLUG - " TEXT(CPLUG_PLUGIN_NAME);
+        wc.hIconSm       = wc.hIcon;
+
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerclassexw
+        if (!RegisterClassExW(&wc))
+        {
+            fprintf(stderr, "Could not register window class\n");
+            return 1;
+        }
+
+        RECT rect = {0, 0, (LONG)guiWidth, (LONG)guiHeight};
+        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, TRUE);
+
+        g_hwnd = CreateWindowExW(
+            0L,
+            wc.lpszClassName,
+            TEXT(CPLUG_PLUGIN_NAME),
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            NULL,
+            NULL,
+            hInst,
+            NULL);
+        if (g_hwnd == NULL)
+        {
+            fprintf(stderr, "Could not create window\n");
+            return 1;
+        }
+
+        // May not be required if we set the icons in WndClass?
+        // if (hResIcon)
+        // {
+        //     SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)hResIcon);   // set taskbar icon
+        //     SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hResIcon); // set window icon
+        // }
+    }
+
+    // DARK MODE
+    {
+        // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmsetwindowattribute
+        // https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+        // https://discourse.glfw.org/t/dark-theme-titlebar/2537/2
+        // https://github.com/mintty/mintty/issues/983
+        // https://gist.github.com/rounk-ctrl/b04e5622e30e0d62956870d5c22b7017
+
+        HMODULE hUXTheme                 = LoadLibraryW(L"uxtheme.dll");
+        g_DarkMode.ShouldAppsUseDarkMode = (ShouldAppsUseDarkModeProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(132));
+        g_DarkMode.SetPreferredAppMode   = (SetPreferredAppModeProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(135));
+        g_DarkMode.FlushMenuThemes       = (FlushMenuThemesProc)GetProcAddress(hUXTheme, MAKEINTRESOURCEA(136));
+
+        if (g_DarkMode.ShouldAppsUseDarkMode && g_DarkMode.SetPreferredAppMode && g_DarkMode.FlushMenuThemes)
+        {
+            g_DarkMode.IsDarkMode = g_DarkMode.ShouldAppsUseDarkMode();
+            if (g_DarkMode.IsDarkMode)
+            {
+                DWORD dwDarkModeWindows11 = 20;   // DWMWA_USE_IMMERSIVE_DARK_MODE
+                DWORD dwDarkModeWindows10 = 19;   // DWMWA_USE_IMMERSIVE_DARK_MODE (old?)
+                BOOL  Dark                = TRUE; // NOTE: requires 4 byte BOOL
+
+                HRESULT hr = DwmSetWindowAttribute(g_hwnd, dwDarkModeWindows11, &Dark, sizeof(Dark));
+                if (hr != S_OK)
+                    hr = DwmSetWindowAttribute(g_hwnd, dwDarkModeWindows10, &Dark, sizeof(Dark));
+
+                cplug_assert(hr == S_OK);
+
+                g_DarkMode.SetPreferredAppMode(APPMODE_FORCEDARK);
+                g_DarkMode.FlushMenuThemes();
+
+                Cplug_OpenMenuTheme();
+            }
+        }
+    }
+
+    // INIT AUDIO
+    {
+        g_Audio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
+        g_Audio.BlockSize   = CPLUG_DEFAULT_BLOCK_SIZE;
+        g_Audio.NumChannels = g_plugin.getOutputBusChannelCount(g_plugin.UserPlugin, 0);
+        cplug_assert(g_Audio.NumChannels == 1 || g_Audio.NumChannels == 2); // TODO: supported other configurations
+
+        // Scan for device
+        static const GUID _CLSID_MMDeviceEnumerator =
+            {0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e}};
+        static const GUID _IID_IMMDeviceEnumerator =
+            {0xa95664d2, 0x9614, 0x4f35, {0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6}};
+        HRESULT hr = CoCreateInstance(
+            (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_CLSID_MMDeviceEnumerator),
+            0,
+            CLSCTX_ALL,
+            (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_IID_IMMDeviceEnumerator),
+            (void**)&g_Audio.pIMMDeviceEnumerator);
+        cplug_assert(!FAILED(hr));
+
+        Cplug_Audio_SetDevice(-1); // -1 == default device
+        Cplug_Audio_Start();
+        cplug_assert(g_Audio.ProcessBuffer);
+    }
+
+    // INIT MIDI
+    {
+        for (int i = 0; i < ARRAYSIZE(g_MIDI.Buffers); i++)
+        {
+            MIDIHDR* head        = &g_MIDI.Buffers[i].Header;
+            head->lpData         = &g_MIDI.Buffers[i].Buffer[0];
+            head->dwBufferLength = ARRAYSIZE(g_MIDI.Buffers[i].Buffer);
+            head->dwUser         = i;
+        }
+        Cplug_MIDI_ConnectInput(0);
+        g_MIDI.HotplugDevice = g_MIDI.ConnectedDevice;
+    }
+
+    // INIT MENU
+    {
+        g_Menus.hMain = CreateMenu();
+
+        g_Menus.hAudioMenu          = CreatePopupMenu();
+        g_Menus.hSampleRateSubmenu  = CreatePopupMenu();
+        g_Menus.hBlockSizeSubmenu   = CreatePopupMenu();
+        g_Menus.hAudioOutputSubmenu = CreatePopupMenu();
+        g_Menus.hMIDIMenu           = CreatePopupMenu();
+        g_Menus.hMIDIInputsSubMenu  = CreatePopupMenu();
+
+        AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioMenu, L"Audio");
+        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hSampleRateSubmenu, L"Sample Rate");
+        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hBlockSizeSubmenu, L"Block Size");
+        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioOutputSubmenu, L"Outputs");
+
+        AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIMenu, L"MIDI");
+        AppendMenuW(g_Menus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIInputsSubMenu, L"Inputs");
+
+        Cplug_Menu_RefreshSampleRates();
+        Cplug_Menu_RefreshBlockSizes();
+        Cplug_Menu_RefreshAudioOutputs();
+        Cplug_Menu_RefreshMIDIInputs();
+
+        SetMenu(g_hwnd, g_Menus.hMain);
+    }
+
+    // Hotplugging
+    {
+        // Callback to detect connected/disconnected MIDI/Audio devices
+        // Must be initialised afer the menu because the callback changes menu items based on new/removed devices
+        CM_NOTIFY_FILTER notifyFilter;
+        memset(&notifyFilter, 0, sizeof(notifyFilter));
+        notifyFilter.cbSize     = sizeof(notifyFilter);
+        notifyFilter.Flags      = CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES;
+        notifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
+
+        // Warning: CM_Register_Notification is Windows 8+
+        // https://learn.microsoft.com/en-us/windows/win32/api/cfgmgr32/nf-cfgmgr32-cm_register_notification
+        HRESULT result = CM_Register_Notification(&notifyFilter, g_hwnd, Cplug_HandleDeviceChange, &g_hCMNotification);
+        cplug_assert(result == CR_SUCCESS);
+        cplug_assert(g_hCMNotification != NULL);
+    }
+
+    // Window ready
+    g_plugin.setParent(g_plugin.UserGUI, g_hwnd);
+
+    ShowWindow(g_hwnd, cmdshow);
+    g_plugin.setVisible(g_plugin.UserGUI, true);
+    SetForegroundWindow(g_hwnd);
+
+    MSG msg;
+#ifndef HOTRELOAD_WATCH_DIR
+    // Default event loop
+    while (GetMessageW(&msg, NULL, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+#else  // Hotreloading uses different event loop
+    // Setup file watcher
+    // Most this code was taken from here: https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8
+    g_Hotreload.hWatchDirectory = CreateFileW(
+        TEXT(HOTRELOAD_WATCH_DIR),
+        FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
+        NULL);
+    if (g_Hotreload.hWatchDirectory == INVALID_HANDLE_VALUE)
+    {
+        fprintf(stderr, "Failed to get directory handle\n");
+        return 1;
+    }
+    g_Hotreload.Overlapped.hEvent = CreateEventW(NULL, FALSE, 0, NULL);
+    cplug_assert(g_Hotreload.Overlapped.hEvent);
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
+    BOOL ok = ReadDirectoryChangesW(
+        g_Hotreload.hWatchDirectory,
+        g_Hotreload.ReadDirectoryBuffer,
+        sizeof(g_Hotreload.ReadDirectoryBuffer),
+        TRUE,
+        FILE_NOTIFY_CHANGE_LAST_WRITE,
+        NULL,
+        &g_Hotreload.Overlapped,
+        NULL);
+    cplug_assert(ok);
+    if (!ok)
+    {
+        fprintf(stderr, "Failed to queue info buffer\n");
+        return 1;
+    }
+    fprintf(stderr, "Watching folder %s\n", HOTRELOAD_WATCH_DIR);
+    BOOL  running          = TRUE;
+    INT64 LastFileChangeNs = 0;
+    while (running)
+    {
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            if (msg.message == WM_QUIT)
+                running = false;
+        }
+
+        // Check file change
+        DWORD code = WaitForSingleObject(g_Hotreload.Overlapped.hEvent, 0);
+        if (code == WAIT_OBJECT_0)
+        {
+            DWORD NumberOfBytesTransferred;
+            GetOverlappedResult(g_Hotreload.hWatchDirectory, &g_Hotreload.Overlapped, &NumberOfBytesTransferred, TRUE);
+            FILE_NOTIFY_INFORMATION* Info = (FILE_NOTIFY_INFORMATION*)g_Hotreload.ReadDirectoryBuffer;
+
+            INT64 NowNs = Cplug_GetNowNS();
+            while (TRUE)
+            {
+                DWORD name_len = Info->FileNameLength / sizeof(wchar_t);
+
+                if (Info->Action == FILE_ACTION_MODIFIED)
+                {
+                    if (g_Hotreload.ReloadStartNs == 0)
+                        g_Hotreload.ReloadStartNs = NowNs;
+                    LastFileChangeNs = NowNs;
+                    fwprintf(stderr, L"File changed at %lld: %.*s\n", NowNs, name_len, Info->FileName);
+                }
+
+                // Iterate events
+                if (Info->NextEntryOffset)
+                    *((BYTE**)&Info) += Info->NextEntryOffset;
+                else
+                    break;
+            }
+
+            // Queue next event
+            ok = ReadDirectoryChangesW(
+                g_Hotreload.hWatchDirectory,
+                g_Hotreload.ReadDirectoryBuffer,
+                sizeof(g_Hotreload.ReadDirectoryBuffer),
+                TRUE,
+                FILE_NOTIFY_CHANGE_LAST_WRITE,
+                NULL,
+                &g_Hotreload.Overlapped,
+                NULL);
+
+            if (!ok)
+            {
+                fprintf(stderr, "Failed to queue info buffer\n");
+                return 1;
+            }
+        }
+
+        // Throttle hotreload
+        INT64 Now  = Cplug_GetNowNS();
+        INT64 diff = Now - LastFileChangeNs;
+        // Add 50ms latency to account for multiple files being changed in quick succession
+        // This accounts for things like mass renaming of variables by an IDE, clang-format, etc.
+        if (LastFileChangeNs && diff > 50000000)
+        {
+            LastFileChangeNs = 0;
+
+            if (g_Hotreload.hPluginDLL)
+            {
+                // Deinit
+                g_plugin.setVisible(g_plugin.UserGUI, false);
+                g_plugin.setParent(g_plugin.UserGUI, NULL);
+                g_plugin.destroyGUI(g_plugin.UserGUI);
+
+                DefWindowProcA(
+                    g_hwnd,
+                    WM_CHANGEUISTATE,
+                    UIS_INITIALIZE | UISF_ACTIVE | UISF_HIDEACCEL | UISF_HIDEFOCUS,
+                    0);
+
+                Cplug_Audio_Stop();
+
+                g_PluginState.BytesWritten = 0;
+                g_PluginState.BytesRead    = 0;
+                g_plugin.saveState(g_plugin.UserPlugin, &g_PluginState, Cplug_WriteStateProc);
+
+                g_plugin.destroyPlugin(g_plugin.UserPlugin);
+                g_plugin.libraryUnload();
+                ok = FreeLibrary(g_Hotreload.hPluginDLL);
+                cplug_assert(ok);
+                g_Hotreload.hPluginDLL = NULL;
+                memset(&g_plugin, 0, sizeof(g_plugin));
+            }
+
+            // Using 'system()' to call our build command is way simpler, but creates some stdout buffering problems...
+            // Windows prefer that you use CreateProcessW.
+            // https://learn.microsoft.com/en-us/windows/win32/procthread/creating-processes
+            // https://learn.microsoft.com/en-au/windows/win32/procthread/creating-a-child-process-with-redirected-input-and-output?redirectedfrom=MSDN
+            STARTUPINFO         si;
+            PROCESS_INFORMATION pi;
+            SECURITY_ATTRIBUTES sa;
+            memset(&si, 0, sizeof(si));
+            memset(&pi, 0, sizeof(pi));
+            memset(&sa, 0, sizeof(sa));
+
+            sa.nLength              = sizeof(sa);
+            sa.bInheritHandle       = TRUE;
+            sa.lpSecurityDescriptor = NULL;
+
+            HANDLE hChildStdoutRd, hChildStdoutWr;
+            if (!CreatePipe(&hChildStdoutRd, &hChildStdoutWr, &sa, 0) ||
+                !SetHandleInformation(hChildStdoutRd, HANDLE_FLAG_INHERIT, 0))
+            {
+                fprintf(stderr, "Failed to create pipes.");
+                cplug_assert(false);
+                return -1;
+            }
+
+            si.cb          = sizeof(si);
+            si.dwFlags    |= STARTF_USESHOWWINDOW; // Stops a terminal window popping up as it runs the command
+            si.hStdOutput  = hChildStdoutWr;
+            si.dwFlags    |= STARTF_USESTDHANDLES; // Lets us use the stdout pipe
+
+            const UINT64 buildStart = Cplug_GetNowNS();
+            // Run build command in child process.
+            WCHAR cmdbuf[512];
+            _snwprintf(cmdbuf, ARRAYSIZE(cmdbuf), L"%s", TEXT(HOTRELOAD_BUILD_COMMAND));
+            if (!CreateProcessW(0, cmdbuf, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
+            {
+                fprintf(stderr, "CreateProcess failed (%lu).\n", GetLastError());
+                return 1;
+            }
+
+            // Wait until child process exits
+            WaitForSingleObject(pi.hProcess, INFINITE);
+
+            char  buffer[4096] = {0};
+            DWORD bytesRead    = 0;
+
+            do
+            {
+                ok = ReadFile(hChildStdoutRd, buffer, sizeof(buffer) - 1, &bytesRead, NULL);
+                if (ok)
+                    fwrite(buffer, 1, bytesRead, stderr);
+            }
+            while (bytesRead == sizeof(buffer) - 1);
+            // TODO: get stderr also working. Currently it hangs forever when you call ReadFile
+
+            DWORD exitCode = 0;
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+            // Cleanup build process
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            CloseHandle(hChildStdoutWr);
+
+            const UINT64 buildEnd = Cplug_GetNowNS();
+
+            if (exitCode != 0)
+            {
+                fprintf(stderr, "[WARNING] Rebuild failed. Exited with code: %lu\n", exitCode);
+            }
+            else
+            {
+                Cplug_LoadPlugin();
+                g_plugin.loadState(g_plugin.UserPlugin, &g_PluginState, Cplug_ReadStateProc);
+
+                Cplug_Audio_Start();
+
+                // Note: GetClientRect() will set RECT to all zeros if the window is minimised
+                RECT size;
+                GetClientRect(g_hwnd, &size);
+                uint32_t width  = size.right - size.left;
+                uint32_t height = size.bottom - size.top;
+
+                g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
+                cplug_assert(g_plugin.UserGUI != NULL);
+                g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
+                if (width && height)
+                    g_plugin.setSize(g_plugin.UserGUI, size.right - size.left, size.bottom - size.top);
+
+                g_plugin.setParent(g_plugin.UserGUI, g_hwnd);
+                if (width && height)
+                    g_plugin.setVisible(g_plugin.UserGUI, true);
+            }
+
+            const UINT64 reloadEnd = Cplug_GetNowNS();
+
+            double rebuild_ms = (double)(buildEnd - buildStart) / 1.e6;
+            double reload_ms  = (double)(reloadEnd - g_Hotreload.ReloadStartNs) / 1.e6;
+            fprintf(stderr, "Rebuild time %.2fms\n", rebuild_ms);
+            fprintf(stderr, "Reload time %.2fms\n", reload_ms);
+            g_Hotreload.ReloadStartNs = 0;
+        }
+
+        Sleep(5);
+    }
+    CloseHandle(g_Hotreload.Overlapped.hEvent);
+    CloseHandle(g_Hotreload.hWatchDirectory);
+#endif // Main loop
+
+    OleUninitialize();
+    ReleaseMutex(hMutexOneInstance);
+    CloseHandle(hMutexOneInstance);
+    return (int)msg.wParam;
+}
