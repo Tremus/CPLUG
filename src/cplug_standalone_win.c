@@ -572,8 +572,8 @@ BOOL Cplug_MIDI_MatchDevice(MIDIINCAPS2W* a, MIDIINCAPS2W* b)
     BOOL MatchProductGuid  = 0 == memcmp(&b->ProductGuid, &a->ProductGuid, sizeof(GUID));
 
     Val |= !IsNameGuidNull && !IsProductGuidNull && MatchNameGuid && MatchProductGuid;
-    // Fallback if we are unable to obtain the GUIDs through midiInGetDevCapsW. This API function appears to
-    // have started failing in early 2026 on Windows 11.
+    // Fallback if we are unable to obtain the GUIDs through midiInGetDevCapsW.
+    // This API function appears to have started failing to set GUIDs in early 2026 on Windows 11...?
     Val |= IsNameGuidNull && IsProductGuidNull && MatchName;
 
     return Val;
@@ -631,20 +631,9 @@ void Cplug_MIDI_DisconnectInput()
     }
 }
 
-// [Main Thread]
-MMRESULT Cplug_MIDI_ConnectInput(UINT portNum)
+MMRESULT Cplug_MIDI_RescanInputs()
 {
-    MMRESULT result = 0;
-
-    if (g_MIDI.IsConnected)
-    {
-        Cplug_MIDI_DisconnectInput();
-    }
-
-    // For some mysterious reason, possibly in a new update of Windows 11, calling midiInOpen(portnum=0) before
-    // midiInOpen() appears to not to work. It's like they recently removed any scanning for
-    // devices that used to occur in midiInOpen or something?
-
+    MMRESULT result = MMSYSERR_NOERROR;
     // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiingetnumdevs
     g_MIDI.NumDevices = midiInGetNumDevs(); // Hopefully this triggeres Windows 11 to scan for & cache MIDI devices
     if (g_MIDI.NumDevices > ARRAYSIZE(g_MIDI.Devices))
@@ -653,10 +642,28 @@ MMRESULT Cplug_MIDI_ConnectInput(UINT portNum)
     memset(g_MIDI.Devices, 0, sizeof(g_MIDI.Devices));
     for (UINT i = 0; i < g_MIDI.NumDevices; i++)
     {
+        MIDIINCAPS2W* Caps = &g_MIDI.Devices[i];
         // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiingetdevcapsw
-        result = midiInGetDevCapsW(i, (MIDIINCAPSW*)&g_MIDI.Devices[i], sizeof(g_MIDI.Devices[i]));
+        result = midiInGetDevCapsW(i, (MIDIINCAPSW*)Caps, sizeof(*Caps));
         if (result != MMSYSERR_NOERROR)
-            goto failed;
+        {
+            g_MIDI.NumDevices = i;
+            break;
+        }
+    }
+    return result;
+}
+
+// [Main Thread]
+// Disconnects current device if already connected.
+// Sets connected device as preferred "hotplug device" if one is not already set
+MMRESULT Cplug_MIDI_ConnectInput(UINT portNum)
+{
+    MMRESULT result = 0;
+
+    if (g_MIDI.IsConnected)
+    {
+        Cplug_MIDI_DisconnectInput();
     }
 
     if (portNum >= g_MIDI.NumDevices)
@@ -694,6 +701,9 @@ MMRESULT Cplug_MIDI_ConnectInput(UINT portNum)
     fprintf(stderr, "Connected to MIDI input %u\n", portNum);
 
     g_MIDI.ConnectedDevice = g_MIDI.Devices[portNum];
+
+    if (g_MIDI.HotplugDevice.vDriverVersion == 0)
+        g_MIDI.HotplugDevice = g_MIDI.ConnectedDevice; // Make this our default device to hotplug
 
     return result;
 
@@ -1190,8 +1200,7 @@ enum
     IDM_OFFSET_AUDIO_DEVICES   = 50,
     IDM_RefreshAudioDeviceList = 99,
 
-    IDM_OFFSET_MIDI_DEVICES   = 100,
-    IDM_RefreshMIDIDeviceList = 149,
+    IDM_OFFSET_MIDI_DEVICES = 100,
 };
 
 struct
@@ -1298,40 +1307,38 @@ void Cplug_Menu_RefreshAudioOutputs()
     AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, L"Refresh list");
 }
 
-void Cplug_Menu_RefreshMIDIInputs()
+void Cplug_Menu_RebuildMIDIInputSubmenu()
 {
+    // Remove everything in submenu
     while (RemoveMenu(g_Menus.hMIDIInputsSubMenu, 0, MF_BYPOSITION))
     {
     }
 
-    const GUID NullGUID = {0};
-
-    int numMidiIn = midiInGetNumDevs();
-    for (int i = 0; i < numMidiIn; i++)
+    for (int i = 0; i < g_MIDI.NumDevices; i++)
     {
-        MIDIINCAPS2W caps   = {0};
-        MMRESULT     result = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
-        cplug_assert(result == MMSYSERR_NOERROR);
+        MIDIINCAPS2W* Caps    = &g_MIDI.Devices[i];
+        BOOL          IsMatch = Cplug_MIDI_MatchDevice(Caps, &g_MIDI.ConnectedDevice);
+        UINT          uFlags  = MF_STRING;
+        if (IsMatch)
+            uFlags |= MF_CHECKED;
 
-        if (result == MMSYSERR_NOERROR)
-        {
-            UINT uFlags = MF_STRING;
-
-            BOOL IsMatch = Cplug_MIDI_MatchDevice(&caps, &g_MIDI.ConnectedDevice);
-            if (IsMatch)
-            {
-                fprintf(stderr, "Checking %ls\n", caps.szPname);
-                uFlags |= MF_CHECKED;
-            }
-
-            AppendMenuW(g_Menus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, caps.szPname);
-        }
+        AppendMenuW(g_Menus.hMIDIInputsSubMenu, uFlags, IDM_OFFSET_MIDI_DEVICES + i, Caps->szPname);
     }
 }
 
 #pragma endregion MENUS
 
 HCMNOTIFICATION g_hCMNotification;
+
+BOOL Cplug_StartsWith(const WCHAR* str, const WCHAR* prefix)
+{
+    while (*str != 0 && prefix != 0 && *str == *prefix)
+    {
+        str++;
+        prefix++;
+    }
+    return *prefix == 0;
+}
 
 // Unknown system thread. Notify Connected/disconnected devices. We only check Audio/MIDI
 DWORD CALLBACK Cplug_HandleDeviceChange(
@@ -1341,12 +1348,13 @@ DWORD CALLBACK Cplug_HandleDeviceChange(
     PCM_NOTIFY_EVENT_DATA EventData,
     DWORD                 EventDataSize)
 {
-    WCHAR* InstanceId = &EventData->u.DeviceInstance.InstanceId[0];
+    const WCHAR* Id = &EventData->u.DeviceInstance.InstanceId[0];
 
     switch (Action)
     {
     case CM_NOTIFY_ACTION_DEVICEINSTANCEENUMERATED:
-        // I've found updating MIDI lists here less reliable than in the following 2 enums
+        // I've found updating MIDI lists here less reliable than doing a full rescan every time a device is
+        // added/removed
         break;
     case CM_NOTIFY_ACTION_DEVICEINSTANCEREMOVED:
         // MIDI input instance IDs come in this format:
@@ -1355,26 +1363,18 @@ DWORD CALLBACK Cplug_HandleDeviceChange(
         // For audio devices I'm less sure of thier format.
         // The format I have seen on my own PC is: L"SWD\MMDEVAPI\{0.0.0.00000000}.{(GUID)}""
         // TODO: test for patten used by audio devices
-        // Update 2026: Microsoft is working on their MIDI APIs atm with the new "Windows MIDI Services".
+        // Update 2026: Microsoft has been working on their MIDI APIs atm with the new "Windows MIDI Services".
         // MIDI input devices now appear to begin with "SWD\\MIDISRV\\MIDIU_KSA_"
         // https://learn.microsoft.com/en-us/windows-hardware/drivers/install/device-instance-ids
-        if (0 == wcsncmp(L"SWD\\MIDISRV\\MIDIU_KSA_", InstanceId, 22) ||
-            0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
-        {
+        if (Cplug_StartsWith(Id, L"SWD\\MIDISRV\\MIDIU_KSA_") || Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\MIDII_"))
             PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedMIDIDevice, 0);
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
-        }
-        else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
+        else if (Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\"))
             PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
         break;
     case CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED:
-        if (0 == wcsncmp(L"SWD\\MIDISRV\\MIDIU_KSA_", InstanceId, 22) ||
-            0 == wcsncmp(L"SWD\\MMDEVAPI\\MIDII_", InstanceId, 19))
-        {
+        if (Cplug_StartsWith(Id, L"SWD\\MIDISRV\\MIDIU_KSA_") || Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\MIDII_"))
             PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedMIDIDevice, 0);
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshMIDIDeviceList, 0);
-        }
-        else if (0 == wcsncmp(L"SWD\\MMDEVAPI\\", InstanceId, 13))
+        else if (Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\"))
             PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
         break;
     default:
@@ -1572,12 +1572,10 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_RefreshAudioDeviceList:
             Cplug_Menu_RefreshAudioOutputs();
             break;
-        case IDM_RefreshMIDIDeviceList:
-            Cplug_Menu_RefreshMIDIInputs();
-            break;
         case IDM_HandleRemovedMIDIDevice:
         {
             fprintf(stderr, "Callback: Removed MIDI input device\n");
+            Cplug_MIDI_RescanInputs();
             if (g_MIDI.IsConnected)
             {
                 UINT num = midiInGetNumDevs();
@@ -1589,14 +1587,12 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 else
                 {
                     // Check it was the connected device which was removed
-                    UINT     i      = 0;
-                    MMRESULT result = 0;
+                    UINT i = 0;
                     for (; i < num; i++)
                     {
-                        MIDIINCAPS2W caps = {0};
-                        result            = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
-                        BOOL IsMatch      = Cplug_MIDI_MatchDevice(&caps, &g_MIDI.ConnectedDevice);
-                        if (result == MMSYSERR_NOERROR && IsMatch)
+                        MIDIINCAPS2W* Caps    = &g_MIDI.Devices[i];
+                        BOOL          IsMatch = Cplug_MIDI_MatchDevice(Caps, &g_MIDI.ConnectedDevice);
+                        if (IsMatch)
                             break;
                     }
                     // Failed to match our connected device
@@ -1611,54 +1607,62 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                     }
                 }
             }
-            Cplug_Menu_RefreshMIDIInputs();
+            Cplug_Menu_RebuildMIDIInputSubmenu();
             break;
         }
         case IDM_HandleAddedMIDIDevice:
+        {
             fprintf(stderr, "Callback: New MIDI input device\n");
-            if (g_MIDI.IsConnected == 0)
-            {
-                fprintf(stderr, "Trying to connect new device\n");
-                Cplug_MIDI_ConnectInput(0);
-            }
-            else if (g_MIDI.HotplugDevice.vDriverVersion)
+            Cplug_MIDI_RescanInputs();
+
+            BOOL HasHotplugDevice = g_MIDI.HotplugDevice.vDriverVersion != 0;
+            BOOL IsConnectedToHotplugDevice =
+                0 == memcmp(&g_MIDI.ConnectedDevice, &g_MIDI.HotplugDevice, sizeof(g_MIDI.HotplugDevice));
+            if (HasHotplugDevice && !IsConnectedToHotplugDevice)
             {
                 // Check to see if our last device was just connected
-                UINT num = midiInGetNumDevs();
-                UINT i   = 0;
-                for (; i < num; i++)
+                for (UINT i = 0; i < g_MIDI.NumDevices; i++)
                 {
-                    MIDIINCAPS2W caps    = {0};
-                    MMRESULT     result  = midiInGetDevCapsW(i, (MIDIINCAPSW*)&caps, sizeof(caps));
-                    BOOL         IsMatch = Cplug_MIDI_MatchDevice(&caps, &g_MIDI.HotplugDevice);
-                    if (result == MMSYSERR_NOERROR && IsMatch)
+                    MIDIINCAPS2W* Caps    = &g_MIDI.Devices[i];
+                    BOOL          IsMatch = Cplug_MIDI_MatchDevice(Caps, &g_MIDI.HotplugDevice);
+                    if (IsMatch)
                     {
                         Cplug_MIDI_ConnectInput(i);
                         break;
                     }
                 }
             }
-            Cplug_Menu_RefreshMIDIInputs();
+            // At least connect to something...
+            if (g_MIDI.IsConnected == 0 && g_MIDI.NumDevices)
+            {
+                fprintf(stderr, "Trying to connect new device\n");
+                Cplug_MIDI_ConnectInput(0);
+            }
+
+            Cplug_Menu_RebuildMIDIInputSubmenu();
             break;
+        }
         default:
         {
-            if (wParam >= IDM_OFFSET_AUDIO_DEVICES && wParam < IDM_RefreshAudioDeviceList)
+            // TODO: retain data from all audio devices used in out submenu
+            UINT64 AudioDeviceIdx = (UINT64)wParam - IDM_OFFSET_AUDIO_DEVICES;
+            UINT64 MidiDeviceIdx  = (UINT64)wParam - IDM_OFFSET_MIDI_DEVICES;
+            if (AudioDeviceIdx < 50)
             {
-                WPARAM idx = wParam - IDM_OFFSET_AUDIO_DEVICES;
                 Cplug_Audio_Stop();
-                Cplug_Audio_SetDevice((int)idx);
+                Cplug_Audio_SetDevice(AudioDeviceIdx);
                 Cplug_Audio_Start();
                 Cplug_Menu_RefreshAudioOutputs();
             }
-            if (wParam >= IDM_OFFSET_MIDI_DEVICES && wParam < IDM_RefreshMIDIDeviceList)
+            if (MidiDeviceIdx < g_MIDI.NumDevices)
             {
-                WPARAM   idx = wParam - IDM_OFFSET_MIDI_DEVICES;
-                MMRESULT err = Cplug_MIDI_ConnectInput((UINT)idx);
+                MMRESULT err = Cplug_MIDI_ConnectInput((UINT)MidiDeviceIdx);
                 if (err == 0 && g_MIDI.IsConnected)
                 {
+                    // Set new preferred hotplug device
                     g_MIDI.HotplugDevice = g_MIDI.ConnectedDevice;
                 }
-                Cplug_Menu_RefreshMIDIInputs();
+                Cplug_Menu_RebuildMIDIInputSubmenu();
             }
         }
         }
@@ -1974,6 +1978,28 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         }
     }
 
+    // INIT MENU
+    {
+        g_Menus.hMain = CreateMenu();
+
+        g_Menus.hAudioMenu          = CreatePopupMenu();
+        g_Menus.hSampleRateSubmenu  = CreatePopupMenu();
+        g_Menus.hBlockSizeSubmenu   = CreatePopupMenu();
+        g_Menus.hAudioOutputSubmenu = CreatePopupMenu();
+        g_Menus.hMIDIMenu           = CreatePopupMenu();
+        g_Menus.hMIDIInputsSubMenu  = CreatePopupMenu();
+
+        AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioMenu, L"Audio");
+        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hSampleRateSubmenu, L"Sample Rate");
+        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hBlockSizeSubmenu, L"Block Size");
+        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioOutputSubmenu, L"Outputs");
+
+        AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIMenu, L"MIDI");
+        AppendMenuW(g_Menus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIInputsSubMenu, L"Inputs");
+
+        SetMenu(g_hwnd, g_Menus.hMain);
+    }
+
     // INIT AUDIO
     {
         g_Audio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
@@ -2008,35 +2034,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
             head->dwBufferLength = ARRAYSIZE(g_MIDI.Buffers[i].Buffer);
             head->dwUser         = i;
         }
+        // For some mysterious reason, possibly in a new update of Windows 11, calling midiInOpen(portnum=0) before
+        // midiInOpen() appears to not to work. It's like they recently removed any scanning for
+        // devices that used to occur in midiInOpen or something?
+        Cplug_MIDI_RescanInputs();
         Cplug_MIDI_ConnectInput(0);
-        g_MIDI.HotplugDevice = g_MIDI.ConnectedDevice;
-    }
-
-    // INIT MENU
-    {
-        g_Menus.hMain = CreateMenu();
-
-        g_Menus.hAudioMenu          = CreatePopupMenu();
-        g_Menus.hSampleRateSubmenu  = CreatePopupMenu();
-        g_Menus.hBlockSizeSubmenu   = CreatePopupMenu();
-        g_Menus.hAudioOutputSubmenu = CreatePopupMenu();
-        g_Menus.hMIDIMenu           = CreatePopupMenu();
-        g_Menus.hMIDIInputsSubMenu  = CreatePopupMenu();
-
-        AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioMenu, L"Audio");
-        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hSampleRateSubmenu, L"Sample Rate");
-        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hBlockSizeSubmenu, L"Block Size");
-        AppendMenuW(g_Menus.hAudioMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hAudioOutputSubmenu, L"Outputs");
-
-        AppendMenuW(g_Menus.hMain, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIMenu, L"MIDI");
-        AppendMenuW(g_Menus.hMIDIMenu, MF_STRING | MF_POPUP, (UINT_PTR)g_Menus.hMIDIInputsSubMenu, L"Inputs");
-
-        Cplug_Menu_RefreshSampleRates();
-        Cplug_Menu_RefreshBlockSizes();
-        Cplug_Menu_RefreshAudioOutputs();
-        Cplug_Menu_RefreshMIDIInputs();
-
-        SetMenu(g_hwnd, g_Menus.hMain);
     }
 
     // Hotplugging
@@ -2055,6 +2057,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         cplug_assert(result == CR_SUCCESS);
         cplug_assert(g_hCMNotification != NULL);
     }
+
+    // Populate submenu items
+    Cplug_Menu_RefreshSampleRates();
+    Cplug_Menu_RefreshBlockSizes();
+    Cplug_Menu_RefreshAudioOutputs();
+    Cplug_Menu_RebuildMIDIInputSubmenu();
 
     // Window ready
     g_plugin.setParent(g_plugin.UserGUI, g_hwnd);
