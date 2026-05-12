@@ -59,10 +59,18 @@
 #endif
 
 #ifdef __cplusplus
+// In cpp, this should be a "reference"
 #define CPLUG_WTF_IS_A_REFERENCE(obj) obj
 #else
+// In c, this should be a pointer
 #define CPLUG_WTF_IS_A_REFERENCE(obj) &obj
 #endif
+#define CPLUG_COM_RELEASE(obj)                                                                                         \
+    if (obj)                                                                                                           \
+    {                                                                                                                  \
+        obj->lpVtbl->Release(obj);                                                                                     \
+        obj = NULL;                                                                                                    \
+    }
 
 HWND  g_hwnd = NULL;
 float g_dpi  = 1;
@@ -149,6 +157,8 @@ bool Cplug_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint
     }
     return false;
 }
+
+#pragma region HOTRELOAD
 
 #ifdef HOTRELOAD_LIB_PATH
 struct Cplug_Hotreload
@@ -511,8 +521,10 @@ void Cplug_LoadPlugin()
     g_plugin.UserPlugin = g_plugin.createPlugin(&g_plugin.HostContext);
     cplug_assert(g_plugin.UserPlugin != NULL);
 }
+#pragma endregion HOTRELOAD
 
 // ----==== MIDI ====----
+#pragma region MIDI
 
 typedef struct MIDIMessage
 {
@@ -716,15 +728,38 @@ failed:
     }
     return result;
 }
+#pragma endregion MIDI
 
 // ----==== AUDIO ====----
+#pragma region AUDIO
+
+const INT    CPLUG_SAMPLE_RATES[]     = {44100, 48000, 88200, 96000, 192000};
+const WCHAR* CPLUG_SAMPLE_RATES_STR[] = {L"44100", L"48000", L"88200", L"96000", L"192000"};
+enum
+{
+    CPLUG_SAMPLE_RATES_COUNT = 5,
+};
+_STATIC_ASSERT(CPLUG_SAMPLE_RATES_COUNT == ARRAYSIZE(CPLUG_SAMPLE_RATES));
+
+typedef struct CplugAudioDeviceID
+{
+    WCHAR Buffer[64];
+} CplugAudioDeviceID;
 
 struct
 {
+    UINT NumDevices;
+    struct CplugAudioDevice
+    {
+        WCHAR              Name[128];
+        CplugAudioDeviceID DeviceID;
+        BOOL               SupportedSampleRates[CPLUG_SAMPLE_RATES_COUNT];
+    } Devices[16];
+
     // Devices
     IMMDeviceEnumerator* pIMMDeviceEnumerator;
     IMMDevice*           pIMMDevice;
-    WCHAR                DeviceIDBuffer[64];
+    CplugAudioDeviceID   CurrentDeviceID;
     // Process
     IAudioClient*       pIAudioClient;
     IAudioRenderClient* pIAudioRenderClient;
@@ -742,11 +777,188 @@ struct
     UINT32 BlockSize;
 } g_Audio;
 
+static const PROPERTYKEY _PKEY_Device_FriendlyName = {
+    {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
+    14};
+static const IID  _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};
+static const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT =
+    {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+static const IID _IID_IAudioRenderClient =
+    {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
+static const GUID _CLSID_MMDeviceEnumerator =
+    {0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e}};
+static const GUID _IID_IMMDeviceEnumerator =
+    {0xa95664d2, 0x9614, 0x4f35, {0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6}};
+
 typedef struct WindowsProcessContext
 {
     CplugProcessContext cplugContext;
     float*              output[2];
 } WindowsProcessContext;
+
+WAVEFORMATEXTENSIBLE Cplug_Audio_CreateWaveFormat(DWORD NumChannels, DWORD SampleRate)
+{
+    // https://learn.microsoft.com/en-us/windows/win32/api/mmreg/ns-mmreg-waveformatextensible
+    WAVEFORMATEXTENSIBLE wfmt;
+    memset(&wfmt, 0, sizeof(wfmt));
+    wfmt.Format.wFormatTag           = WAVE_FORMAT_EXTENSIBLE;
+    wfmt.Format.nChannels            = NumChannels;
+    wfmt.Format.nSamplesPerSec       = SampleRate;
+    wfmt.Format.wBitsPerSample       = sizeof(float) * 8;
+    wfmt.Format.nBlockAlign          = sizeof(float) * NumChannels;
+    wfmt.Format.nAvgBytesPerSec      = sizeof(float) * SampleRate * NumChannels;
+    wfmt.Format.cbSize               = sizeof(wfmt) - sizeof(wfmt.Format);
+    wfmt.Samples.wValidBitsPerSample = sizeof(float) * 8;
+
+    if (wfmt.Format.nChannels == 1)
+        wfmt.dwChannelMask = SPEAKER_FRONT_CENTER;
+    else
+        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+
+    wfmt.SubFormat = _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+
+    return wfmt;
+}
+
+// [Main Thread]
+void Cplug_Audio_ScanDevices()
+{
+    g_Audio.NumDevices = 0;
+
+    IMMDeviceCollection* pCollection = NULL;
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-enumaudioendpoints
+    HRESULT hr = g_Audio.pIMMDeviceEnumerator->lpVtbl
+                     ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
+    cplug_assert(hr == S_OK);
+    cplug_assert(pCollection != NULL);
+
+    if (pCollection)
+    {
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevicecollection-getcount
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevicecollection-item
+        UINT DeviceCount = 0;
+        hr               = pCollection->lpVtbl->GetCount(pCollection, &DeviceCount);
+        cplug_assert(hr == S_OK);
+
+        if (DeviceCount > ARRAYSIZE(g_Audio.Devices))
+            DeviceCount = ARRAYSIZE(g_Audio.Devices);
+
+        UINT i = 0;
+
+        for (; i < DeviceCount; i++)
+        {
+            struct CplugAudioDevice* pDevice = &g_Audio.Devices[g_Audio.NumDevices];
+            memset(pDevice, 0, sizeof(*pDevice));
+
+            IMMDevice*      pIMMDevice         = NULL;
+            WCHAR*          deviceID           = NULL;
+            IPropertyStore* pProperties        = NULL;
+            PROPVARIANT     varName            = {0};
+            int             len                = 0;
+            IAudioClient*   pIAudioClient      = NULL;
+            BOOL            HasSupportedFormat = FALSE;
+
+            hr = pCollection->lpVtbl->Item(pCollection, i, &pIMMDevice);
+            cplug_assert(hr == S_OK);
+            if (hr != S_OK || pIMMDevice == NULL)
+                goto cleanup;
+
+            hr = pIMMDevice->lpVtbl->GetId(pIMMDevice, &deviceID);
+            cplug_assert(hr == S_OK);
+            if (hr != S_OK || deviceID == NULL)
+                goto cleanup;
+
+            len = swprintf(pDevice->DeviceID.Buffer, ARRAYSIZE(pDevice->DeviceID.Buffer), deviceID);
+            cplug_assert(len < ARRAYSIZE(pDevice->DeviceID.Buffer)); // assert string wasn't truncated
+
+            // https://learn.microsoft.com/en-us/windows/win32/api/propsys/nn-propsys-ipropertystore
+            // https://learn.microsoft.com/en-us/windows/win32/api/propsys/nf-propsys-ipropertystore-getvalue
+            // https://learn.microsoft.com/en-us/previous-versions/aa912007(v=msdn.10)
+            // https://learn.microsoft.com/en-us/windows/win32/coreaudio/device-properties
+            // https://learn.microsoft.com/en-us/windows/win32/coreaudio/audio-endpoint-properties
+
+            hr = pIMMDevice->lpVtbl->OpenPropertyStore(pIMMDevice, STGM_READ, &pProperties);
+            cplug_assert(hr == S_OK);
+            if (hr != S_OK || pProperties == NULL)
+                goto cleanup;
+
+            hr = pProperties->lpVtbl->GetValue(
+                pProperties,
+                CPLUG_WTF_IS_A_REFERENCE(_PKEY_Device_FriendlyName),
+                &varName);
+
+            cplug_assert(hr == S_OK);
+            if (hr != S_OK || varName.pwszVal == NULL || varName.vt == VT_EMPTY)
+                goto cleanup;
+
+            swprintf(pDevice->Name, ARRAYSIZE(pDevice->Name), varName.pwszVal);
+
+            // Unfortunately MS don't just tell you what configurations are supported. We have to jump through COM hoops
+            // querying support for all the granular configurations we can offer the user
+            // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-activate
+            // "Activate" is really just used to create more COM obejcts... It's poorly named.
+            hr = pIMMDevice->lpVtbl->Activate(
+                pIMMDevice,
+                CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClient),
+                CLSCTX_ALL,
+                0,
+                (void**)&pIAudioClient);
+            if (hr != S_OK || pIAudioClient == NULL)
+                goto cleanup;
+
+            // query available sample rates
+            for (int j = 0; j < ARRAYSIZE(pDevice->SupportedSampleRates); j++)
+            {
+                int                  SampleRate = CPLUG_SAMPLE_RATES[j];
+                WAVEFORMATEXTENSIBLE wfmt       = Cplug_Audio_CreateWaveFormat(g_Audio.NumChannels, SampleRate);
+
+                WAVEFORMATEX* SupportedFormat = NULL;
+                // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-isformatsupported
+                hr = pIAudioClient->lpVtbl->IsFormatSupported(
+                    pIAudioClient,
+                    AUDCLNT_SHAREMODE_SHARED,
+                    (WAVEFORMATEX*)&wfmt,
+                    &SupportedFormat);
+
+                if (hr == S_OK)
+                {
+                    pDevice->SupportedSampleRates[j] = TRUE;
+                    HasSupportedFormat               = TRUE;
+                }
+                else if (hr == S_FALSE)
+                {
+                    // TODO: MS want you to check for the "closest match" inside SupportedFormat upon S_FALSE
+                }
+
+                if (SupportedFormat)
+                    CoTaskMemFree(SupportedFormat);
+            }
+
+        cleanup:
+            CPLUG_COM_RELEASE(pIAudioClient);
+
+            if (varName.pwszVal)
+            {
+                PropVariantClear(&varName);
+            }
+            CPLUG_COM_RELEASE(pProperties);
+
+            if (deviceID)
+            {
+                CoTaskMemFree(deviceID);
+            }
+            CPLUG_COM_RELEASE(pIMMDevice);
+
+            if (HasSupportedFormat)
+            {
+                g_Audio.NumDevices++;
+            }
+        }
+    }
+
+    CPLUG_COM_RELEASE(pCollection);
+}
 
 // [Audio Thread]
 bool Cplug_Audio_enqueueEvent(struct CplugProcessContext* ctx, const CplugEvent* e, uint32_t frameIdx) { return true; }
@@ -942,12 +1154,6 @@ void Cplug_Audio_Start()
 #endif // Hotreload
     cplug_assert(g_Audio.SampleRate != 0);
     cplug_assert(g_Audio.BlockSize != 0);
-    static const IID _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};
-    static const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT =
-        {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
-    static const IID _IID_IAudioRenderClient =
-        {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
-
     cplug_assert(g_Audio.pIMMDevice != NULL);
     cplug_assert(g_Audio.pIAudioClient == NULL);
     HRESULT hr = g_Audio.pIMMDevice->lpVtbl->Activate(
@@ -959,23 +1165,23 @@ void Cplug_Audio_Start()
     cplug_assert(!FAILED(hr));
 
     // https://learn.microsoft.com/en-us/windows/win32/api/mmreg/ns-mmreg-waveformatextensible
-    WAVEFORMATEXTENSIBLE fmtex;
-    memset(&fmtex, 0, sizeof(fmtex));
-    fmtex.Format.wFormatTag           = WAVE_FORMAT_EXTENSIBLE;
-    fmtex.Format.nChannels            = g_Audio.NumChannels;
-    fmtex.Format.nSamplesPerSec       = g_Audio.SampleRate;
-    fmtex.Format.wBitsPerSample       = sizeof(float) * 8;
-    fmtex.Format.nBlockAlign          = sizeof(float) * g_Audio.NumChannels;
-    fmtex.Format.nAvgBytesPerSec      = sizeof(float) * g_Audio.SampleRate * g_Audio.NumChannels;
-    fmtex.Format.cbSize               = sizeof(fmtex) - sizeof(fmtex.Format);
-    fmtex.Samples.wValidBitsPerSample = sizeof(float) * 8;
+    WAVEFORMATEXTENSIBLE wfmt;
+    memset(&wfmt, 0, sizeof(wfmt));
+    wfmt.Format.wFormatTag           = WAVE_FORMAT_EXTENSIBLE;
+    wfmt.Format.nChannels            = g_Audio.NumChannels;
+    wfmt.Format.nSamplesPerSec       = g_Audio.SampleRate;
+    wfmt.Format.wBitsPerSample       = sizeof(float) * 8;
+    wfmt.Format.nBlockAlign          = sizeof(float) * g_Audio.NumChannels;
+    wfmt.Format.nAvgBytesPerSec      = sizeof(float) * g_Audio.SampleRate * g_Audio.NumChannels;
+    wfmt.Format.cbSize               = sizeof(wfmt) - sizeof(wfmt.Format);
+    wfmt.Samples.wValidBitsPerSample = sizeof(float) * 8;
 
-    if (fmtex.Format.nChannels == 1)
-        fmtex.dwChannelMask = SPEAKER_FRONT_CENTER;
+    if (wfmt.Format.nChannels == 1)
+        wfmt.dwChannelMask = SPEAKER_FRONT_CENTER;
     else
-        fmtex.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
 
-    fmtex.SubFormat = _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+    wfmt.SubFormat = _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 
     REFERENCE_TIME reftime = (REFERENCE_TIME)((double)g_Audio.BlockSize / ((double)g_Audio.SampleRate * 1.e-7));
 
@@ -987,7 +1193,7 @@ void Cplug_Audio_Start()
             AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
         reftime,
         0,
-        (WAVEFORMATEX*)&fmtex,
+        (WAVEFORMATEX*)&wfmt,
         0);
     cplug_assert(!FAILED(hr));
 
@@ -1031,19 +1237,38 @@ void Cplug_Audio_Start()
 }
 
 // [Main Thread]
+INT Cplug_Audio_GetActiveDeviceIndex()
+{
+    // Find active device
+    for (INT i = 0; i < g_Audio.NumDevices; i++)
+    {
+        struct CplugAudioDevice* pDevice = &g_Audio.Devices[i];
+
+        BOOL IsMatch = 0 == memcmp(&pDevice->DeviceID, &g_Audio.CurrentDeviceID, sizeof(g_Audio.CurrentDeviceID));
+        if (IsMatch)
+            return i;
+    }
+    cplug_assert(false);
+    return -1;
+}
+
+// [Main Thread]
 // Pass a deviceIdx < 0 for default device
 void Cplug_Audio_SetDevice(int deviceIdx)
 {
     cplug_assert(g_Audio.hAudioProcessThread == NULL);
+    HRESULT hr = S_OK;
 
-    if (g_Audio.pIMMDevice != NULL)
-        g_Audio.pIMMDevice->lpVtbl->Release(g_Audio.pIMMDevice);
+    CPLUG_COM_RELEASE(g_Audio.pIMMDevice);
+    g_Audio.CurrentDeviceID = (CplugAudioDeviceID){0};
 
     if (deviceIdx >= 0)
     {
         IMMDeviceCollection* pCollection = NULL;
-        g_Audio.pIMMDeviceEnumerator->lpVtbl
-            ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
+
+        hr = g_Audio.pIMMDeviceEnumerator->lpVtbl
+                 ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
+        cplug_assert(hr == S_OK);
         cplug_assert(pCollection != NULL);
 
         UINT numDevices = 0;
@@ -1053,29 +1278,67 @@ void Cplug_Audio_SetDevice(int deviceIdx)
             pCollection->lpVtbl->Item(pCollection, (UINT)deviceIdx, &g_Audio.pIMMDevice);
 
         pCollection->lpVtbl->Release(pCollection);
+        CPLUG_COM_RELEASE(pCollection);
     }
 
     if (g_Audio.pIMMDevice == NULL)
     {
         // eConsole or eMultimedia? Microsoft say console is for games, multimedia for playing live music
         // https://learn.microsoft.com/en-us/windows/win32/coreaudio/device-roles
-        HRESULT hr = g_Audio.pIMMDeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(
-            g_Audio.pIMMDeviceEnumerator,
-            eRender,
-            eMultimedia,
-            &g_Audio.pIMMDevice);
-        cplug_assert(!FAILED(hr));
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdefaultaudioendpoint
+        hr = g_Audio.pIMMDeviceEnumerator->lpVtbl
+                 ->GetDefaultAudioEndpoint(g_Audio.pIMMDeviceEnumerator, eRender, eMultimedia, &g_Audio.pIMMDevice);
+        cplug_assert(hr == S_OK);
     }
 
-    WCHAR* audioDeviceID = NULL;
-    // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid
-    g_Audio.pIMMDevice->lpVtbl->GetId(g_Audio.pIMMDevice, &audioDeviceID);
-    wcscpy_s(g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer), audioDeviceID);
-    g_Audio.DeviceIDBuffer[ARRAYSIZE(g_Audio.DeviceIDBuffer) - 1] = 0;
-    CoTaskMemFree(audioDeviceID);
+    if (g_Audio.pIMMDevice)
+    {
+        WCHAR* audioDeviceID = NULL;
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid
+        hr = g_Audio.pIMMDevice->lpVtbl->GetId(g_Audio.pIMMDevice, &audioDeviceID);
+        cplug_assert(hr == S_OK);
+        cplug_assert(audioDeviceID != NULL);
+        if (audioDeviceID)
+        {
+            swprintf(g_Audio.CurrentDeviceID.Buffer, ARRAYSIZE(g_Audio.CurrentDeviceID.Buffer), audioDeviceID);
+            CoTaskMemFree(audioDeviceID);
+        }
+
+        // Check that our last chosen sample rate is supported by this device
+        INT DeviceIndex = Cplug_Audio_GetActiveDeviceIndex();
+
+        if (DeviceIndex >= 0 && DeviceIndex < g_Audio.NumDevices)
+        {
+            struct CplugAudioDevice* pDevice = &g_Audio.Devices[DeviceIndex];
+
+            BOOL IsSupported = FALSE;
+            for (int i = 0; i < ARRAYSIZE(CPLUG_SAMPLE_RATES); i++)
+            {
+                INT SampleRate  = CPLUG_SAMPLE_RATES[i];
+                IsSupported    |= (SampleRate == g_Audio.SampleRate) & pDevice->SupportedSampleRates[i];
+            }
+
+            if (IsSupported == FALSE)
+            {
+                // Oh dear, we will have to force a sample rate change here
+                for (int i = 0; i < ARRAYSIZE(CPLUG_SAMPLE_RATES); i++)
+                {
+                    if (pDevice->SupportedSampleRates[i])
+                    {
+                        INT SampleRate     = CPLUG_SAMPLE_RATES[i];
+                        g_Audio.SampleRate = SampleRate;
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
-// ----==== MENUS ====----
+#pragma endregion AUDIO
+
+#pragma region DARKMODE
+
 typedef enum
 {
     APPMODE_DEFAULT    = 0,
@@ -1178,12 +1441,16 @@ void Cplug_CloseMenuTheme()
     }
 }
 
+#pragma endregion DARKMODE
+
+// ----==== MENUS ====----
 enum
 {
     IDM_SampleRate_44100,
     IDM_SampleRate_48000,
     IDM_SampleRate_88200,
     IDM_SampleRate_96000,
+    IDM_SampleRate_192000,
     IDM_BlockSize_128,
     IDM_BlockSize_192,
     IDM_BlockSize_256,
@@ -1196,6 +1463,9 @@ enum
 
     IDM_HandleRemovedMIDIDevice,
     IDM_HandleAddedMIDIDevice,
+
+    IDM_HandleRemovedAudioDevice,
+    IDM_HandleAddedAudioDevice,
 
     IDM_OFFSET_AUDIO_DEVICES   = 50,
     IDM_RefreshAudioDeviceList = 99,
@@ -1221,16 +1491,30 @@ struct
 
 static inline UINT Cplug_MenuFlag(UINT a, UINT b) { return a == b ? (MF_STRING | MF_CHECKED) : MF_STRING; }
 
-void Cplug_Menu_RefreshSampleRates()
+void Cplug_Menu_RebuildSampleRateSubmenu()
 {
     while (RemoveMenu(g_Menus.hSampleRateSubmenu, 0, MF_BYPOSITION))
     {
     }
 
-    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 44100), IDM_SampleRate_44100, L"44100");
-    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 48000), IDM_SampleRate_48000, L"48000");
-    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 88200), IDM_SampleRate_88200, L"88200");
-    AppendMenuW(g_Menus.hSampleRateSubmenu, Cplug_MenuFlag(g_Audio.SampleRate, 96000), IDM_SampleRate_96000, L"96000");
+    INT DeviceIdx = Cplug_Audio_GetActiveDeviceIndex();
+    if (DeviceIdx >= 0 && DeviceIdx < g_Audio.NumDevices)
+    {
+        struct CplugAudioDevice* pDevice = &g_Audio.Devices[DeviceIdx];
+
+        // Build submenu of supported sample rates
+        for (UINT i = 0; i < ARRAYSIZE(pDevice->SupportedSampleRates); i++)
+        {
+            if (pDevice->SupportedSampleRates[i])
+            {
+                INT          SampleRate    = CPLUG_SAMPLE_RATES[i];
+                const WCHAR* SampleRateStr = CPLUG_SAMPLE_RATES_STR[i];
+
+                UINT Flag = Cplug_MenuFlag(g_Audio.SampleRate, SampleRate);
+                AppendMenuW(g_Menus.hSampleRateSubmenu, Flag, IDM_SampleRate_44100 + i, SampleRateStr);
+            }
+        }
+    }
 }
 
 void Cplug_Menu_RefreshBlockSizes()
@@ -1250,58 +1534,23 @@ void Cplug_Menu_RefreshBlockSizes()
     AppendMenuW(g_Menus.hBlockSizeSubmenu, Cplug_MenuFlag(g_Audio.BlockSize, 2048), IDM_BlockSize_2048, L"2048");
 }
 
-void Cplug_Menu_RefreshAudioOutputs()
+void Cplug_Menu_RebuildAudioOutputsSubmenu()
 {
     while (RemoveMenu(g_Menus.hAudioOutputSubmenu, 0, MF_BYPOSITION))
     {
     }
 
-    IMMDeviceCollection* pCollection = NULL;
-    g_Audio.pIMMDeviceEnumerator->lpVtbl
-        ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
-    cplug_assert(pCollection != NULL);
-
-    pCollection->lpVtbl->GetCount(pCollection, &g_Menus.numAudioOutputs);
-
-    for (UINT i = 0; i < g_Menus.numAudioOutputs; i++)
+    for (UINT i = 0; i < g_Audio.NumDevices; i++)
     {
-        IMMDevice* pDevice = NULL;
+        struct CplugAudioDevice* pDevice = &g_Audio.Devices[i];
 
-        pCollection->lpVtbl->Item(pCollection, i, &pDevice);
-        if (pDevice != NULL)
-        {
-            WCHAR* deviceID = NULL;
-            pDevice->lpVtbl->GetId(pDevice, &deviceID);
+        UINT uFlags = MF_STRING;
+        _STATIC_ASSERT(sizeof(pDevice->DeviceID) == sizeof(g_Audio.CurrentDeviceID));
+        if (0 == memcmp(&pDevice->DeviceID, &g_Audio.CurrentDeviceID, sizeof(g_Audio.CurrentDeviceID)))
+            uFlags |= MF_CHECKED;
 
-            static const PROPERTYKEY _PKEY_Device_FriendlyName = {
-                {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
-                14};
-
-            IPropertyStore* pProperties = NULL;
-            HRESULT         hr          = pDevice->lpVtbl->OpenPropertyStore(pDevice, STGM_READ, &pProperties);
-            cplug_assert(!FAILED(hr));
-
-            PROPVARIANT varName;
-            pProperties->lpVtbl->GetValue(pProperties, CPLUG_WTF_IS_A_REFERENCE(_PKEY_Device_FriendlyName), &varName);
-
-            if (varName.vt != VT_EMPTY)
-            {
-                UINT uFlags = MF_STRING;
-                if (0 == wcsncmp(deviceID, g_Audio.DeviceIDBuffer, ARRAYSIZE(g_Audio.DeviceIDBuffer)))
-                    uFlags |= MF_CHECKED;
-
-                AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, varName.pwszVal);
-            }
-
-            PropVariantClear(&varName);
-
-            pProperties->lpVtbl->Release(pProperties);
-            pDevice->lpVtbl->Release(pDevice);
-            CoTaskMemFree(deviceID);
-        }
+        AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, pDevice->Name);
     }
-
-    pCollection->lpVtbl->Release(pCollection);
 
     AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_SEPARATOR, IDM_RefreshAudioDeviceList - 1, NULL);
     AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_STRING, IDM_RefreshAudioDeviceList, L"Refresh list");
@@ -1327,6 +1576,8 @@ void Cplug_Menu_RebuildMIDIInputSubmenu()
 }
 
 #pragma endregion MENUS
+
+#pragma region HOTPLUGGING
 
 HCMNOTIFICATION g_hCMNotification;
 
@@ -1362,26 +1613,26 @@ DWORD CALLBACK Cplug_HandleDeviceChange(
         // Software device - MMDevice API - MIDI Input
         // For audio devices I'm less sure of thier format.
         // The format I have seen on my own PC is: L"SWD\MMDEVAPI\{0.0.0.00000000}.{(GUID)}""
-        // TODO: test for patten used by audio devices
         // Update 2026: Microsoft has been working on their MIDI APIs atm with the new "Windows MIDI Services".
         // MIDI input devices now appear to begin with "SWD\\MIDISRV\\MIDIU_KSA_"
         // https://learn.microsoft.com/en-us/windows-hardware/drivers/install/device-instance-ids
         if (Cplug_StartsWith(Id, L"SWD\\MIDISRV\\MIDIU_KSA_") || Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\MIDII_"))
             PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedMIDIDevice, 0);
         else if (Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\"))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedAudioDevice, 0);
         break;
     case CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED:
         if (Cplug_StartsWith(Id, L"SWD\\MIDISRV\\MIDIU_KSA_") || Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\MIDII_"))
             PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedMIDIDevice, 0);
         else if (Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\"))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_RefreshAudioDeviceList, 0);
+            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedAudioDevice, 0);
         break;
     default:
         break;
     }
     return 0;
 }
+#pragma endregion HOTPLUGGING
 
 LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -1538,6 +1789,7 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_SampleRate_48000:
         case IDM_SampleRate_88200:
         case IDM_SampleRate_96000:
+        case IDM_SampleRate_192000:
         {
             Cplug_Audio_Stop();
             WCHAR text[8];
@@ -1547,7 +1799,7 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             cplug_assert(numCharsCopied > 0);
             g_Audio.SampleRate = _wtoi(text);
             Cplug_Audio_Start();
-            Cplug_Menu_RefreshSampleRates();
+            Cplug_Menu_RebuildSampleRateSubmenu();
             break;
         }
         case IDM_BlockSize_128:
@@ -1570,7 +1822,8 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             break;
         }
         case IDM_RefreshAudioDeviceList:
-            Cplug_Menu_RefreshAudioOutputs();
+            Cplug_Audio_ScanDevices();
+            Cplug_Menu_RebuildAudioOutputsSubmenu();
             break;
         case IDM_HandleRemovedMIDIDevice:
         {
@@ -1642,6 +1895,32 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             Cplug_Menu_RebuildMIDIInputSubmenu();
             break;
         }
+        case IDM_HandleRemovedAudioDevice:
+        {
+            Cplug_Audio_ScanDevices();
+            INT ActiveIndex = Cplug_Audio_GetActiveDeviceIndex();
+            if (ActiveIndex == -1) // failed. Our connceted device got removed...
+            {
+                Cplug_Audio_Stop();
+                Cplug_Audio_SetDevice(-1);
+                Cplug_Audio_Start();
+            }
+            Cplug_Menu_RebuildAudioOutputsSubmenu();
+            Cplug_Menu_RebuildSampleRateSubmenu();
+            break;
+        }
+        case IDM_HandleAddedAudioDevice:
+        {
+            // The OS will determine the "preferred device". Other apps like Chrome automatically switch to the new
+            // default on the fly. We will copy that behaviour
+            Cplug_Audio_ScanDevices();
+            Cplug_Audio_Stop();
+            Cplug_Audio_SetDevice(-1);
+            Cplug_Audio_Start();
+            Cplug_Menu_RebuildAudioOutputsSubmenu();
+            Cplug_Menu_RebuildSampleRateSubmenu();
+            break;
+        }
         default:
         {
             // TODO: retain data from all audio devices used in out submenu
@@ -1652,7 +1931,7 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 Cplug_Audio_Stop();
                 Cplug_Audio_SetDevice(AudioDeviceIdx);
                 Cplug_Audio_Start();
-                Cplug_Menu_RefreshAudioOutputs();
+                Cplug_Menu_RebuildAudioOutputsSubmenu();
             }
             if (MidiDeviceIdx < g_MIDI.NumDevices)
             {
@@ -2008,10 +2287,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         cplug_assert(g_Audio.NumChannels == 1 || g_Audio.NumChannels == 2); // TODO: supported other configurations
 
         // Scan for device
-        static const GUID _CLSID_MMDeviceEnumerator =
-            {0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e}};
-        static const GUID _IID_IMMDeviceEnumerator =
-            {0xa95664d2, 0x9614, 0x4f35, {0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6}};
         HRESULT hr = CoCreateInstance(
             (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_CLSID_MMDeviceEnumerator),
             0,
@@ -2020,6 +2295,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
             (void**)&g_Audio.pIMMDeviceEnumerator);
         cplug_assert(!FAILED(hr));
 
+        Cplug_Audio_ScanDevices();
         Cplug_Audio_SetDevice(-1); // -1 == default device
         Cplug_Audio_Start();
         cplug_assert(g_Audio.ProcessBuffer);
@@ -2059,9 +2335,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     }
 
     // Populate submenu items
-    Cplug_Menu_RefreshSampleRates();
+    Cplug_Menu_RebuildSampleRateSubmenu();
     Cplug_Menu_RefreshBlockSizes();
-    Cplug_Menu_RefreshAudioOutputs();
+    Cplug_Menu_RebuildAudioOutputsSubmenu();
     Cplug_Menu_RebuildMIDIInputSubmenu();
 
     // Window ready
