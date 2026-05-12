@@ -151,6 +151,15 @@ typedef struct CplugWindow
     } ChooseFile;
 } CplugWindow;
 
+// Centralise all NULL checks, just in case we get weird DAW behaviour...
+bool PWSendEvent(const PWEvent* e)
+{
+    bool consumed = false;
+    if (e->gui)
+        consumed = pw_event(e);
+    return consumed;
+}
+
 LPSTR PWMakeUTF8String(PWCHAR utf16)
 {
     LPSTR utf8 = NULL;
@@ -353,7 +362,7 @@ PWDropTarget_DragEnter(IDropTarget* This, IDataObject* pDataObj, DWORD grfKeySta
             .file.num_paths = pw->DropTarget.NumPaths,
         };
 
-        bool interested = pw_event(&event);
+        bool interested = PWSendEvent(&event);
 
         // If user is not interested, they will not receive any file drag move or exit events
         // Cleanup is required
@@ -389,7 +398,7 @@ HRESULT STDMETHODCALLTYPE PWDropTarget_DragOver(IDropTarget* This, DWORD grfKeyS
         .file.paths     = (const char* const*)pw->DropTarget.pFilePaths,
         .file.num_paths = pw->DropTarget.NumPaths,
     };
-    bool ok = pw_event(&event);
+    bool ok = PWSendEvent(&event);
 
     // TODO: make this change cursor. Currently not working?
     *pdwEffect = ok ? DROPEFFECT_COPY : DROPEFFECT_NONE;
@@ -409,7 +418,7 @@ HRESULT STDMETHODCALLTYPE PWDropTarget_DragLeave(IDropTarget* This)
         .type = PW_EVENT_FILE_EXIT,
         .gui  = pw->gui,
     };
-    pw_event(&event);
+    PWSendEvent(&event);
 
     PWFreeDropTarget(pw);
     return 0;
@@ -436,7 +445,7 @@ PWDropTarget_Drop(IDropTarget* This, IDataObject* pDataObj, DWORD grfKeyState, P
         .file.num_paths = pw->DropTarget.NumPaths,
         .file.paths     = (const char* const*)pw->DropTarget.pFilePaths,
     };
-    bool ok = pw_event(&event);
+    bool ok = PWSendEvent(&event);
 
     PWFreeDropTarget(pw);
     return ok ? 0 : -1;
@@ -1163,7 +1172,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             UnhookWindowsHookEx(pw->hGetMessageHook);
         pw->hGetMessageHook    = NULL;
         pw->hPrevKeyboardFocus = NULL;
-        pw_event(&(PWEvent){.type = PW_EVENT_KEY_FOCUS_LOST, .gui = pw->gui});
+        PWSendEvent(&(PWEvent){.type = PW_EVENT_KEY_FOCUS_LOST, .gui = pw->gui});
         return 0;
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-lbuttondown
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mbuttondown
@@ -1181,7 +1190,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             e.type = PW_EVENT_MOUSE_MIDDLE_DOWN;
         if (uMsg == WM_RBUTTONDOWN)
             e.type = PW_EVENT_MOUSE_RIGHT_DOWN;
-        pw_event(&e);
+        PWSendEvent(&e);
         return 0;
     }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-lbuttonup
@@ -1201,7 +1210,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             e.type = PW_EVENT_MOUSE_MIDDLE_UP;
         if (uMsg == WM_RBUTTONUP)
             e.type = PW_EVENT_MOUSE_RIGHT_UP;
-        pw_event(&e);
+        PWSendEvent(&e);
         return 0;
     }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousemove
@@ -1224,7 +1233,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             pw->MouseIsOver = TRUE;
             SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_ARROW));
         }
-        pw_event(&e);
+        PWSendEvent(&e);
 
         return 0;
     }
@@ -1235,7 +1244,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         e.type    = PW_EVENT_MOUSE_SCROLL_WHEEL;
         e.mouse.x = 0;
         e.mouse.y = GET_WHEEL_DELTA_WPARAM(wParam);
-        pw_event(&e);
+        PWSendEvent(&e);
         return 0;
     }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mouseleave
@@ -1246,7 +1255,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         PWEvent e = {0};
         e.type    = PW_EVENT_MOUSE_EXIT;
         e.gui     = pw->gui;
-        pw_event(&e);
+        PWSendEvent(&e);
         return 0;
     }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-char
@@ -1267,7 +1276,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (e.text.codepoint == 127) // DEL ASCII. Not considered text
             return 0;
 
-        pw_event(&e);
+        PWSendEvent(&e);
         return 0;
     }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-syskeydown
@@ -1296,7 +1305,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (KeyRepeated)
             e.key.modifiers |= PW_MOD_KEY_REPEAT;
 
-        pw_event(&e);
+        PWSendEvent(&e);
         return 0;
     }
     case WM_CHOOSE_FILE_CALLBACK:
@@ -1499,12 +1508,12 @@ LRESULT CALLBACK PWCallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
                 if (cwp->message == WM_ENTERSIZEMOVE)
                 {
                     PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN, .gui = pw->gui};
-                    pw_event(&event);
+                    PWSendEvent(&event);
                 }
                 if (cwp->message == WM_EXITSIZEMOVE)
                 {
                     PWEvent event = {.type = PW_EVENT_RESIZE_END, .gui = pw->gui};
-                    pw_event(&event);
+                    PWSendEvent(&event);
                     pw->ResizeDirection = PW_RESIZE_UNKNOWN;
                 }
             }
@@ -2300,7 +2309,7 @@ void cplug_setScaleFactor(void* userGUI, float scale)
         .gui                  = pw->gui,
         .content_scale_factor = scale,
     };
-    pw_event(&e);
+    PWSendEvent(&e);
 }
 
 void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
@@ -2328,7 +2337,8 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
            .constrain_size.height    = *height,
            .constrain_size.direction = pw->ResizeDirection,
     };
-    pw_get_info(&Info);
+    if (Info.constrain_size.gui)
+        pw_get_info(&Info);
     *width  = Info.constrain_size.width;
     *height = Info.constrain_size.height;
 }
@@ -2347,7 +2357,7 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     pw->NextHeight = height;
 #endif
 
-    pw_event(&(PWEvent){
+    PWSendEvent(&(PWEvent){
         .type             = PW_EVENT_RESIZE_UPDATE,
         .gui              = pw->gui,
         .resize.width     = width,
