@@ -164,6 +164,18 @@ uint64_t pwTranslateModifierFlags(PW_CLASS* pw, NSEvent* event)
     return mods;
 }
 
+// Cetralise all NULL checks
+// The order in which NSView methods are called during init/deinit are highly inconsistent between DAWs, and especially
+// with Audio Units, with many calls happening before your window has event attached to a parent, as well as after it
+// has been removed.
+bool pwSendEvent(const PWEvent* e)
+{
+    bool consumed = false;
+    if (e->gui != NULL)
+        consumed = pw_event(e);
+    return consumed;
+}
+
 bool pwHandleKeyDown(PW_CLASS* pw, NSEvent* event)
 {
     bool    eventConsumed = false;
@@ -176,7 +188,7 @@ bool pwHandleKeyDown(PW_CLASS* pw, NSEvent* event)
     if (event.isARepeat)
         e.key.modifiers |= PW_MOD_KEY_REPEAT;
 
-    eventConsumed = pw_event(&e);
+    eventConsumed = pwSendEvent(&e);
 
     if (pw_check_keyboard_focus(pw))
     {
@@ -205,7 +217,7 @@ bool pwHandleKeyDown(PW_CLASS* pw, NSEvent* event)
             return eventConsumed;
 
         if (e.text.codepoint)
-            eventConsumed |= pw_event(&e);
+            eventConsumed |= pwSendEvent(&e);
     }
 
     return eventConsumed;
@@ -222,7 +234,7 @@ bool pwHandleKeyUp(PW_CLASS* pw, NSEvent* event)
     e.key.virtual_key = [event keyCode];
     e.key.modifiers   = pwTranslateModifierFlags(pw, event);
 
-    eventConsumed = pw_event((&e));
+    eventConsumed = pwSendEvent((&e));
     return eventConsumed;
 }
 
@@ -407,19 +419,16 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
     PW_ASSERT(newSize.height > 0);
     PW_ASSERT(plugin != NULL);
 
-    if (gui)
-    {
-        const PWEvent event = {
-            .gui    = gui,
-            .type   = PW_EVENT_RESIZE_UPDATE,
-            .resize = {
-                .width  = newSize.width,
-                .height = newSize.height,
-            }};
-        pw_event(&event);
+    const PWEvent event = {
+        .gui    = gui,
+        .type   = PW_EVENT_RESIZE_UPDATE,
+        .resize = {
+            .width  = newSize.width,
+            .height = newSize.height,
+        }};
+    pwSendEvent(&event);
 
-        checkResizeFlag = false;
-    }
+    checkResizeFlag = false;
     [super setFrameSize:newSize];
 }
 
@@ -460,33 +469,31 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
 
 - (void)parentWindowStartResize
 {
-    if (self->gui)
+    if (self.window)
     {
-        NSRect rect                = self.window.frame;
-        self->resizeStartFrame     = rect;
-        self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
-        const struct PWEvent event = {.type = PW_EVENT_RESIZE_BEGIN, .gui = self->gui};
-        pw_event(&event);
+        NSRect rect            = self.window.frame;
+        self->resizeStartFrame = rect;
+        self->pwResizeFlags    = PW_FLAG_RESIZE_UNKNOWN;
+        const PWEvent event    = {.type = PW_EVENT_RESIZE_BEGIN, .gui = self->gui};
+        pwSendEvent(&event);
     }
 }
 
 - (void)parentWindowEndResize
 {
-    if (self->gui)
-    {
-        self->pwResizeFlags        = PW_FLAG_RESIZE_UNKNOWN;
-        const struct PWEvent event = {.type = PW_EVENT_RESIZE_END, .gui = self->gui};
-        pw_event(&event);
-    }
+    self->pwResizeFlags = PW_FLAG_RESIZE_UNKNOWN;
+    const PWEvent event = {.type = PW_EVENT_RESIZE_END, .gui = self->gui};
+    pwSendEvent(&event);
 }
 
 - (void)parentWindowLostKeyboardFocus
 {
+    // In Fender Studio Pro 8 this can get fired before your NSView is even attached to an NSWindow
     PWEvent event = {
         .gui  = gui,
         .type = PW_EVENT_KEY_FOCUS_LOST,
     };
-    pw_event(&event);
+    pwSendEvent(&event);
 }
 
 - (void)updateTrackingAreas
@@ -511,7 +518,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
     {
         PWEvent e = pwTranslateMouseEvent(self, event);
         e.type    = PW_EVENT_MOUSE_ENTER;
-        pw_event(&e);
+        pwSendEvent(&e);
     }
 }
 - (void)mouseExited:(NSEvent*)event;
@@ -522,59 +529,59 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
 
         PWEvent e = pwTranslateMouseEvent(self, event);
         e.type    = PW_EVENT_MOUSE_EXIT;
-        pw_event(&e);
+        pwSendEvent(&e);
     }
 }
 - (void)mouseMoved:(NSEvent*)event
 {
     PWEvent e = pwTranslateMouseEvent(self, event);
     e.type    = PW_EVENT_MOUSE_MOVE;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 - (void)mouseDragged:(NSEvent*)event
 {
     isDragging = true;
     PWEvent e  = pwTranslateMouseEvent(self, event);
     e.type     = PW_EVENT_MOUSE_MOVE;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 - (void)rightMouseDragged:(NSEvent*)event
 {
     PWEvent e = pwTranslateMouseEvent(self, event);
     e.type    = PW_EVENT_MOUSE_MOVE;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 - (void)otherMouseDragged:(NSEvent*)event
 {
     PWEvent e = pwTranslateMouseEvent(self, event);
     e.type    = PW_EVENT_MOUSE_MOVE;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 
 - (void)mouseDown:(NSEvent*)event
 {
     PWEvent e = pwTranslateMouseEvent(self, event);
     e.type    = PW_EVENT_MOUSE_LEFT_DOWN;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 - (void)rightMouseDown:(NSEvent*)event
 {
     PWEvent e = pwTranslateMouseEvent(self, event);
     e.type    = PW_EVENT_MOUSE_RIGHT_DOWN;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 - (void)otherMouseDown:(NSEvent*)event
 {
     PWEvent e = pwTranslateMouseEvent(self, event);
     e.type    = PW_EVENT_MOUSE_MIDDLE_DOWN;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 - (void)mouseUp:(NSEvent*)event
 {
     PWEvent e          = pwTranslateMouseEvent(self, event);
     e.type             = PW_EVENT_MOUSE_LEFT_UP;
     e.mouse.modifiers &= ~PW_MOD_LEFT_BUTTON;
-    pw_event(&e);
+    pwSendEvent(&e);
 
     BOOL isLeftButtonDown = e.mouse.modifiers & PW_MOD_LEFT_BUTTON;
     if (isDragging && !isLeftButtonDown)
@@ -586,7 +593,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
         if (!isMouseOver)
         {
             e.type = PW_EVENT_MOUSE_EXIT;
-            pw_event(&e);
+            pwSendEvent(&e);
         }
     }
 }
@@ -595,14 +602,14 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
     PWEvent e          = pwTranslateMouseEvent(self, event);
     e.type             = PW_EVENT_MOUSE_RIGHT_UP;
     e.mouse.modifiers &= ~PW_MOD_RIGHT_BUTTON;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 - (void)otherMouseUp:(NSEvent*)event
 {
     PWEvent e          = pwTranslateMouseEvent(self, event);
     e.type             = PW_EVENT_MOUSE_MIDDLE_UP;
     e.mouse.modifiers &= ~PW_MOD_MIDDLE_BUTTON;
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 
 - (void)scrollWheel:(NSEvent*)event
@@ -633,7 +640,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
         e.mouse.x = CGEventGetIntegerValueField(cgevent, kCGScrollWheelEventDeltaAxis2) * 120;
         e.mouse.y = CGEventGetIntegerValueField(cgevent, kCGScrollWheelEventDeltaAxis1) * 120;
     }
-    pw_event(&e);
+    pwSendEvent(&e);
 }
 
 // DRAGGING
@@ -697,7 +704,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
                 },
         };
 
-        bool interested = pw_event(&event);
+        bool interested = pwSendEvent(&event);
         return interested ? NSDragOperationGeneric : NSDragOperationNone;
     }
 
@@ -725,7 +732,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
             },
     };
 
-    bool interested = pw_event(&event);
+    bool interested = pwSendEvent(&event);
     return interested ? NSDragOperationGeneric : NSDragOperationNone;
 }
 
@@ -734,7 +741,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
     PW_ASSERT(numDraggedFiles);
     PW_ASSERT(draggedFiles);
 
-    pw_event(&(PWEvent){.gui = gui, .type = PW_EVENT_FILE_EXIT});
+    pwSendEvent(&(PWEvent){.gui = gui, .type = PW_EVENT_FILE_EXIT});
 
     if (draggedFiles)
     {
@@ -764,7 +771,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
             },
     };
 
-    bool ok = pw_event(&event);
+    bool ok = pwSendEvent(&event);
     if (draggedFiles)
     {
         PW_FREE(draggedFiles);
@@ -1028,7 +1035,10 @@ void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)
     {
         info.constrain_size.direction = pwTranslateResizeFlags(pw->pwResizeFlags);
     }
-    pw_get_info(&info);
+    if (info.constrain_size.gui)
+    {
+        pw_get_info(&info);
+    }
     *width  = info.constrain_size.width;
     *height = info.constrain_size.height;
 }
