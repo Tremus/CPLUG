@@ -233,10 +233,6 @@ void AUv2ReleaseStringArray(CFStringRef* arr, size_t arrlen)
 
 static OSStatus AUv2SendParamEvent(AUv2Plugin* auv2, const CplugEvent* event)
 {
-    CPLUG_LOG_ASSERT(
-        event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN || event->type == CPLUG_EVENT_PARAM_CHANGE_UPDATE ||
-        event->type == CPLUG_EVENT_PARAM_CHANGE_END);
-
     OSStatus       status = noErr;
     AudioUnitEvent auevent;
 
@@ -251,7 +247,14 @@ static OSStatus AUv2SendParamEvent(AUv2Plugin* auv2, const CplugEvent* event)
     case CPLUG_EVENT_PARAM_CHANGE_END:
         auevent.mEventType = kAudioUnitEvent_EndParameterChangeGesture;
         break;
+    case CPLUG_EVENT_MIDI:
+        // TODO
+        break;
+    case CPLUG_EVENT_NOTE_EXPRESSION_TUNING:
+        // Not supported? TODO: see if this is possible with new MIDI 2.0 APIs
+        break;
     default:
+        cplug_log("[WARNING] Unhandled event: %s => %p %u", __FUNCTION__, auv2, event->type);
         return 1;
     }
 
