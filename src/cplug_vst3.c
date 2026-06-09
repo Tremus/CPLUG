@@ -652,6 +652,9 @@ typedef struct VST3View
 
     VST3Plugin*           vst3;
     Steinberg_IPlugFrame* frame;
+
+    uint32_t desired_width;
+    uint32_t desired_height;
 } VST3View;
 
 static void _cplug_tryDeleteVST3View(VST3View* view)
@@ -725,6 +728,7 @@ static uint32_t SMTG_STDMETHODCALLTYPE VST3ViewContentScale_release(void* const 
     return refcount;
 }
 // Steinberg_IPlugViewContentScaleSupport
+// https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Change+History/3.6.6/IPlugViewContentScaleSupport.html
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3ViewContentScale_setContentScaleFactor(void* const self, const float factor)
 {
@@ -732,6 +736,17 @@ VST3ViewContentScale_setContentScaleFactor(void* const self, const float factor)
     VST3View* const view = _cplug_pointerShiftContentScaleSupport(self);
 
     cplug_setScaleFactor(view->userGUI, factor);
+
+    // Unfortunately due to DPI confusion on Windows, DAWs like Cubase and Akai MPC 3 will try to outsmart your plugin
+    // and scale your window for you. This is especially bad in Cubase 15, which will scale your window every time a
+    // user opens the plugin window. If you reopen windows with the previously saved window size, Cubase 15 will try to
+    // scale that size by the contentScaleFactor. Cubase 14 however will only do that when your window is first opened,
+    // rather than every time its opened.
+    if (view->frame != NULL)
+    {
+        struct Steinberg_ViewRect rect = {0, 0, view->desired_width, view->desired_height};
+        view->frame->lpVtbl->resizeView(view->frame, (Steinberg_IPlugView*)view, &rect);
+    }
 
     return Steinberg_kResultOk;
 }
@@ -849,7 +864,7 @@ VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
     cplug_log("%s => %p %p", __FUNCTION__, self, rect);
 
-    uint32_t width, height;
+    uint32_t width = 0, height = 0;
     cplug_getSize(((VST3View*)self)->userGUI, &width, &height);
 
     rect->right  = rect->left + width;
@@ -861,11 +876,29 @@ VST3View_getSize(void* const self, struct Steinberg_ViewRect* const rect)
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onSize(void* const self, struct Steinberg_ViewRect* const rect)
 {
     cplug_log("%s => %p {%d,%d,%d,%d}", __FUNCTION__, self, rect->top, rect->left, rect->right, rect->bottom);
+    VST3View* const view = (VST3View*)self;
+
     int width  = rect->right - rect->left;
     int height = rect->bottom - rect->top;
     CPLUG_LOG_ASSERT_RETURN(width >= 0, Steinberg_kInvalidArgument);
     CPLUG_LOG_ASSERT_RETURN(height >= 0, Steinberg_kInvalidArgument);
-    return !cplug_setSize(((VST3View*)self)->userGUI, width, height);
+
+    // Cubase 14 & 15 will attempt to scale the initial size of your plugin by the scaling factor.
+    // Here we use a hack to try and stop them, and keep the size the plugin had already said it wanted.
+    // Additionally, Cubase are trying to scale the size of your plugin without first calling "checkSizeConstraint()"
+    if (view->frame == NULL && (width != view->desired_width || height != view->desired_height))
+    {
+        return Steinberg_kResultFalse;
+    }
+
+    bool ok = cplug_setSize(view->userGUI, width, height);
+    if (ok)
+    {
+        view->desired_width  = (uint32_t)width;
+        view->desired_height = (uint32_t)height;
+    }
+
+    return ok ? Steinberg_kResultTrue : Steinberg_kResultFalse;
 }
 
 static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_onFocus(void* const self, const Steinberg_TBool state)
@@ -892,18 +925,30 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE
 VST3View_checkSizeConstraint(void* const self, struct Steinberg_ViewRect* const rect)
 {
     cplug_log("%s => %p %d %d %d %d", __FUNCTION__, self, rect->left, rect->top, rect->right, rect->bottom);
+    VST3View* const view = (VST3View*)self;
+
     uint32_t width  = rect->right - rect->left;
     uint32_t height = rect->bottom - rect->top;
 
     // Cubase 14.0.41 has been spotted regularly sending rects equal to 0,0,234,0. Note height is zero
     // This periodically happens multiple times during a drag, and consistently when releasing your mouse.
     // It looks like a bug, and the staff have been notified but don't appear to have any problems with it...?
-    if (height == 0)
+    // UPDATE Cubase 15 has a similar bug, but now the height is not consistently 0. Instead, now its some other garbage
+    // value. It appears to consistently be below 50 px however...?
+    if (height < 50)
+    {
+        rect->right  = rect->left + view->desired_width;
+        rect->bottom = rect->top + view->desired_height;
         return Steinberg_kInvalidArgument;
+    }
 
-    cplug_checkSize(((VST3View*)self)->userGUI, &width, &height);
+    cplug_checkSize(view->userGUI, &width, &height);
     rect->right  = rect->left + width;
     rect->bottom = rect->top + height;
+
+    view->desired_width  = width;
+    view->desired_height = height;
+
     // We always return Ok here because Ableton 10 won't change their behaviour if we return anything else
     return Steinberg_kResultOk;
 }
@@ -1427,7 +1472,7 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
     // plugin must be initialized
     CPLUG_LOG_ASSERT_RETURN(vst3->userPlugin != NULL, NULL);
 
-    VST3View* const view = (VST3View*)malloc(sizeof(VST3View));
+    VST3View* const view = (VST3View*)calloc(1, sizeof(*view));
 
     view->vst3 = vst3;
     vst3->view = view;
@@ -1464,6 +1509,8 @@ static Steinberg_IPlugView* SMTG_STDMETHODCALLTYPE VST3Controller_createView(voi
 
     view->userGUI = cplug_createGUI(&vst3->hostContext, vst3->userPlugin);
     CPLUG_LOG_ASSERT(view->userGUI != NULL);
+
+    cplug_getSize(view->userGUI, &view->desired_width, &view->desired_height);
 
     return (Steinberg_IPlugView*)view;
 #else  // !CPLUG_WANT_GUI
@@ -2613,7 +2660,7 @@ Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Factory_setHostContext(void* const 
 CPLUG_VST3_EXPORT
 const void* GetPluginFactory(void)
 {
-    VST3Factory* factory = (VST3Factory*)malloc(sizeof(VST3Factory));
+    VST3Factory* factory = (VST3Factory*)calloc(1, sizeof(*factory));
     factory->lpVtbl      = &factory->base;
     // Steinberg_FUnknown
     factory->base.queryInterface = VST3Factory_queryInterface;
