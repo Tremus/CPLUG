@@ -24,6 +24,7 @@
 #include <stdio.h>
 
 #include <Shlobj_core.h>
+#include <Shlwapi.h>
 
 #ifdef PW_DX11
 #include <d3d11.h>
@@ -2692,6 +2693,9 @@ bool pw_choose_file(const PWChooseFileArgs* args)
         pw->ChooseFile.pFolder = PW_MALLOC(((num + 1) * sizeof(WCHAR)));
         MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, args->folder, -1, pw->ChooseFile.pFolder, num);
         pw->ChooseFile.pFolder[num] = 0;
+
+        // Oh dear, you should probably make sure this folder exists!
+        PW_ASSERT(PathFileExistsW(pw->ChooseFile.pFolder));
     }
 
     if (args->filename)
