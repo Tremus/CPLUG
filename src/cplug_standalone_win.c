@@ -73,7 +73,7 @@
     }
 
 HWND  g_hwnd = NULL;
-float g_dpi  = 1;
+float g_dpi  = 1.0f;
 
 #if defined(HOTRELOAD_WATCH_DIR) || defined(HOTRELOAD_LIB_PATH) || defined(HOTRELOAD_BUILD_COMMAND)
 #if !defined(HOTRELOAD_WATCH_DIR) || !defined(HOTRELOAD_LIB_PATH) || !defined(HOTRELOAD_BUILD_COMMAND)
@@ -1592,6 +1592,7 @@ void Cplug_Menu_RebuildMIDIInputSubmenu()
 
 #pragma region HOTPLUGGING
 
+// WARNING: Windows 8+ feature
 HCMNOTIFICATION g_hCMNotification;
 
 BOOL Cplug_StartsWith(const WCHAR* str, const WCHAR* prefix)
@@ -2166,18 +2167,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     memset(&g_DarkMode, 0, sizeof(g_DarkMode));
     memset(&g_Menus, 0, sizeof(g_Menus));
 
-    // Warning: Windows 10+
+    // Windows 10+ DPI APIs loaded dynamically for compatibility with older Windows versions
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
     // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setprocessdpiawarenesscontext
-    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+    {
+        typedef DPI_AWARENESS_CONTEXT(WINAPI * SetThreadDpiAwarenessContextProc)(DPI_AWARENESS_CONTEXT);
+        typedef BOOL(WINAPI * SetProcessDpiAwarenessContextProc)(DPI_AWARENESS_CONTEXT);
+        typedef UINT(WINAPI * GetDpiForSystemProc)(void);
+
+        HMODULE                          hUser32 = GetModuleHandleW(L"user32.dll");
+        SetThreadDpiAwarenessContextProc pSetThreadDpiCtx =
+            (SetThreadDpiAwarenessContextProc)GetProcAddress(hUser32, "SetThreadDpiAwarenessContext");
+        SetProcessDpiAwarenessContextProc pSetProcessDpiCtx =
+            (SetProcessDpiAwarenessContextProc)GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
+        GetDpiForSystemProc pGetDpiForSystem = (GetDpiForSystemProc)GetProcAddress(hUser32, "GetDpiForSystem");
+        if (pSetThreadDpiCtx)
+            pSetThreadDpiCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        if (pSetProcessDpiCtx)
+            pSetProcessDpiCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        g_dpi = pGetDpiForSystem ? (float)pGetDpiForSystem() / (float)USER_DEFAULT_SCREEN_DPI : 1.0f;
+    }
 
     Cplug_LoadPlugin();
 
     // INIT WINDOW
     {
-        g_dpi = (float)GetDpiForSystem() / (float)USER_DEFAULT_SCREEN_DPI;
-
         g_plugin.UserGUI = g_plugin.createGUI(&g_plugin.HostContext, g_plugin.UserPlugin);
         cplug_assert(g_plugin.UserGUI != NULL);
 
