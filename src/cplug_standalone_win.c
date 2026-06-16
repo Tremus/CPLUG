@@ -469,51 +469,39 @@ static inline INT64 Cplug_GetNowNS()
 void Cplug_LoadPlugin()
 {
 #ifdef HOTRELOAD_WATCH_DIR
+
     Cplug_DuplicatePatchAndLoadDll();
     cplug_assert(g_Hotreload.hPluginDLL != NULL);
-#define CPLUG_GET_PROC(name) GetProcAddress(g_Hotreload.hPluginDLL, #name)
-#else // not a hotrealoding build
-#define CPLUG_GET_PROC(func) func
-#endif // Hotreload
 
-    // This looks ugly because of the strict types in C++. C is ironically more elegant
-    *(LONG_PTR*)&g_plugin.libraryLoad               = (LONG_PTR)CPLUG_GET_PROC(cplug_libraryLoad);
-    *(LONG_PTR*)&g_plugin.libraryUnload             = (LONG_PTR)CPLUG_GET_PROC(cplug_libraryUnload);
-    *(LONG_PTR*)&g_plugin.createPlugin              = (LONG_PTR)CPLUG_GET_PROC(cplug_createPlugin);
-    *(LONG_PTR*)&g_plugin.destroyPlugin             = (LONG_PTR)CPLUG_GET_PROC(cplug_destroyPlugin);
-    *(LONG_PTR*)&g_plugin.getOutputBusChannelCount  = (LONG_PTR)CPLUG_GET_PROC(cplug_getOutputBusChannelCount);
-    *(LONG_PTR*)&g_plugin.setSampleRateAndBlockSize = (LONG_PTR)CPLUG_GET_PROC(cplug_setSampleRateAndBlockSize);
-    *(LONG_PTR*)&g_plugin.process                   = (LONG_PTR)CPLUG_GET_PROC(cplug_process);
-    *(LONG_PTR*)&g_plugin.saveState                 = (LONG_PTR)CPLUG_GET_PROC(cplug_saveState);
-    *(LONG_PTR*)&g_plugin.loadState                 = (LONG_PTR)CPLUG_GET_PROC(cplug_loadState);
+#define CPLUG_GET_PROC(dst, name)                                                                                      \
+    *((LONG_PTR*)&dst) = (LONG_PTR)GetProcAddress(g_Hotreload.hPluginDLL, #name);                                      \
+    cplug_assert(dst != NULL)
 
-    *(LONG_PTR*)&g_plugin.createGUI      = (LONG_PTR)CPLUG_GET_PROC(cplug_createGUI);
-    *(LONG_PTR*)&g_plugin.destroyGUI     = (LONG_PTR)CPLUG_GET_PROC(cplug_destroyGUI);
-    *(LONG_PTR*)&g_plugin.setParent      = (LONG_PTR)CPLUG_GET_PROC(cplug_setParent);
-    *(LONG_PTR*)&g_plugin.setVisible     = (LONG_PTR)CPLUG_GET_PROC(cplug_setVisible);
-    *(LONG_PTR*)&g_plugin.setScaleFactor = (LONG_PTR)CPLUG_GET_PROC(cplug_setScaleFactor);
-    *(LONG_PTR*)&g_plugin.getSize        = (LONG_PTR)CPLUG_GET_PROC(cplug_getSize);
-    *(LONG_PTR*)&g_plugin.checkSize      = (LONG_PTR)CPLUG_GET_PROC(cplug_checkSize);
-    *(LONG_PTR*)&g_plugin.setSize        = (LONG_PTR)CPLUG_GET_PROC(cplug_setSize);
+#else // !HOTRELOAD_WATCH_DIR
+    // not a hotrealoding build
+// #define CPLUG_GET_PROC(dst, name) dst = name
+#define CPLUG_GET_PROC(dst, name) dst = name
 
-    cplug_assert(NULL != g_plugin.libraryLoad);
-    cplug_assert(NULL != g_plugin.libraryUnload);
-    cplug_assert(NULL != g_plugin.createPlugin);
-    cplug_assert(NULL != g_plugin.destroyPlugin);
-    cplug_assert(NULL != g_plugin.getOutputBusChannelCount);
-    cplug_assert(NULL != g_plugin.setSampleRateAndBlockSize);
-    cplug_assert(NULL != g_plugin.process);
-    cplug_assert(NULL != g_plugin.saveState);
-    cplug_assert(NULL != g_plugin.loadState);
+#endif // HOTRELOAD_WATCH_DIR
 
-    cplug_assert(NULL != g_plugin.createGUI);
-    cplug_assert(NULL != g_plugin.destroyGUI);
-    cplug_assert(NULL != g_plugin.setParent);
-    cplug_assert(NULL != g_plugin.setVisible);
-    cplug_assert(NULL != g_plugin.setScaleFactor);
-    cplug_assert(NULL != g_plugin.getSize);
-    cplug_assert(NULL != g_plugin.checkSize);
-    cplug_assert(NULL != g_plugin.setSize);
+    CPLUG_GET_PROC(g_plugin.libraryLoad, cplug_libraryLoad);
+    CPLUG_GET_PROC(g_plugin.libraryUnload, cplug_libraryUnload);
+    CPLUG_GET_PROC(g_plugin.createPlugin, cplug_createPlugin);
+    CPLUG_GET_PROC(g_plugin.destroyPlugin, cplug_destroyPlugin);
+    CPLUG_GET_PROC(g_plugin.getOutputBusChannelCount, cplug_getOutputBusChannelCount);
+    CPLUG_GET_PROC(g_plugin.setSampleRateAndBlockSize, cplug_setSampleRateAndBlockSize);
+    CPLUG_GET_PROC(g_plugin.process, cplug_process);
+    CPLUG_GET_PROC(g_plugin.saveState, cplug_saveState);
+    CPLUG_GET_PROC(g_plugin.loadState, cplug_loadState);
+
+    CPLUG_GET_PROC(g_plugin.createGUI, cplug_createGUI);
+    CPLUG_GET_PROC(g_plugin.destroyGUI, cplug_destroyGUI);
+    CPLUG_GET_PROC(g_plugin.setParent, cplug_setParent);
+    CPLUG_GET_PROC(g_plugin.setVisible, cplug_setVisible);
+    CPLUG_GET_PROC(g_plugin.setScaleFactor, cplug_setScaleFactor);
+    CPLUG_GET_PROC(g_plugin.getSize, cplug_getSize);
+    CPLUG_GET_PROC(g_plugin.checkSize, cplug_checkSize);
+    CPLUG_GET_PROC(g_plugin.setSize, cplug_setSize);
 
     g_plugin.libraryLoad();
     g_plugin.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
