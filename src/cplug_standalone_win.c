@@ -479,7 +479,6 @@ void Cplug_LoadPlugin()
 
 #else // !HOTRELOAD_WATCH_DIR
     // not a hotrealoding build
-// #define CPLUG_GET_PROC(dst, name) dst = name
 #define CPLUG_GET_PROC(dst, name) dst = name
 
 #endif // HOTRELOAD_WATCH_DIR
