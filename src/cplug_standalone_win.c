@@ -373,8 +373,8 @@ void Cplug_DuplicatePatchAndLoadDll()
 
         enum
         {
-            PDB2_SIGNATURE = '01BN',
-            PDB7_SIGNATURE = 'SDSR',
+            PDB2_SIGNATURE = CPLUG_FOURCC('0', '1', 'B', 'N'),
+            PDB7_SIGNATURE = CPLUG_FOURCC('S', 'D', 'S', 'R'),
         };
         struct CV_INFO_PDB70
         {
