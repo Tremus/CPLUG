@@ -20,8 +20,10 @@ extern "C" {
 #include <stdlib.h>
 
 #ifndef CPLUG_FOURCC
-#define CPLUG_FOURCC(a, b, c, d) \
-    ((((uint32_t)(uint8_t)(a)) << 24) | (((uint32_t)(uint8_t)(b)) << 16) | (((uint32_t)(uint8_t)(c)) << 8) | ((uint32_t)(uint8_t)(d)))
+// GCC will blow its lid if you use multi-character constants
+#define CPLUG_FOURCC(a, b, c, d)                                                                                       \
+    ((((uint32_t)(uint8_t)(a)) << 24) | (((uint32_t)(uint8_t)(b)) << 16) | (((uint32_t)(uint8_t)(c)) << 8) |           \
+     ((uint32_t)(uint8_t)(d)))
 #endif
 
 #ifdef CPLUG_SHARED

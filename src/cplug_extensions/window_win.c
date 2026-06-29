@@ -557,8 +557,10 @@ void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
         cursor = LoadCursorW(NULL, (LPCWSTR)IDC_HAND);
         break;
     case PW_CURSOR_HAND_DRAGGABLE:
-        ;// clang-format off
-        static const uint8_t OPEN_HAND_AND_MASK[] = {
+    {
+        // GCC blows its lid if you delcare a variable right before a case label
+        // clang-format off
+        ; static const uint8_t OPEN_HAND_AND_MASK[] = {
             0xFE, 0x7F, 0xE4, 0x0F, 0xC0, 0x07, 0xC0, 0x05,
             0xE0, 0x00, 0xE0, 0x00, 0x90, 0x00, 0x00, 0x00,
             0x00, 0x01, 0x80, 0x01, 0xC0, 0x01, 0xC0, 0x03,
@@ -573,12 +575,15 @@ void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
         _Static_assert(sizeof(OPEN_HAND_AND_MASK) == 32, "");
         _Static_assert(sizeof(OPEN_HAND_XOR_MASK) == 32, "");
         // clang-format on
+
         if (pw->hCursorOpenHand == NULL)
             pw->hCursorOpenHand = CreateCursor(NULL, 8, 8, 16, 16, OPEN_HAND_AND_MASK, OPEN_HAND_XOR_MASK);
         cursor = pw->hCursorOpenHand;
         break;
+    }
     case PW_CURSOR_HAND_DRAGGING:
-        ;// clang-format off
+    {
+        ; // clang-format off
         static const uint8_t CLOSED_HAND_AND_MASK[] = {
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF2, 0x4F,
             0xE0, 0x03, 0xE0, 0x01, 0xF0, 0x01, 0xE0, 0x01,
@@ -594,10 +599,12 @@ void pw_set_mouse_cursor(void* _pw, enum PWCursorType type)
         _Static_assert(sizeof(CLOSED_HAND_AND_MASK) == 32, "");
         _Static_assert(sizeof(CLOSED_HAND_XOR_MASK) == 32, "");
         // clang-format on
+
         if (pw->hCursorClosedHand == NULL)
             pw->hCursorClosedHand = CreateCursor(NULL, 8, 8, 16, 16, CLOSED_HAND_AND_MASK, CLOSED_HAND_XOR_MASK);
         cursor = pw->hCursorClosedHand;
         break;
+    }
 
     case PW_CURSOR_RESIZE_WE:
         cursor = LoadCursorW(NULL, (LPCWSTR)IDC_SIZEWE);
