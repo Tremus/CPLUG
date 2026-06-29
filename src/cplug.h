@@ -19,6 +19,11 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
+#ifndef CPLUG_FOURCC
+#define CPLUG_FOURCC(a, b, c, d) \
+    ((((uint32_t)(uint8_t)(a)) << 24) | (((uint32_t)(uint8_t)(b)) << 16) | (((uint32_t)(uint8_t)(c)) << 8) | ((uint32_t)(uint8_t)(d)))
+#endif
+
 #ifdef CPLUG_SHARED
 #ifdef _WIN32
 #define CPLUG_API __declspec(dllexport)
@@ -226,7 +231,7 @@ CPLUG_API void cplug_loadState(void* userPlugin, const void* stateCtx, cplug_rea
 // AUv2 hacks. Unfortunately Apple's API designs are offensive leaky abstractions.
 enum
 {
-    kAudioUnitProperty_AUV2Wrapper    = 'plug',
+    kAudioUnitProperty_AUV2Wrapper    = CPLUG_FOURCC('p', 'l', 'u', 'g'),
     CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT = 64,
     CPLUG_AUV2_OFFSET_PLUGIN          = CPLUG_AUV2_OFFSET_WRAPPER_CONTEXT + sizeof(CplugHostContext),
     CPLUG_AUV2_OFFSET_NSVIEW          = CPLUG_AUV2_OFFSET_PLUGIN + sizeof(size_t),
