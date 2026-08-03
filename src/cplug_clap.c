@@ -858,7 +858,7 @@ static const clap_plugin_descriptor_t s_clap_desc = {
     .manual_url   = CPLUG_PLUGIN_URI,
     .support_url  = CPLUG_PLUGIN_URI,
     .version      = CPLUG_PLUGIN_VERSION,
-    .description  = CPLUG_CLAP_DESCRIPTION,
+    .description  = CPLUG_PLUGIN_DESCRIPTION,
     .features     = s_clap_desc_features};
 
 static uint32_t CLAPFactory_get_plugin_count(const struct clap_plugin_factory* factory)
