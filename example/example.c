@@ -100,6 +100,7 @@ void cplug_libraryUnload() {};
 
 void* cplug_createPlugin(CplugHostContext* ctx)
 {
+    CPLUG_LOG_ASSERT(ctx != NULL);
     MyPlugin* plugin    = (MyPlugin*)calloc(1, sizeof(MyPlugin));
     plugin->hostContext = ctx;
 
@@ -139,6 +140,7 @@ void* cplug_createPlugin(CplugHostContext* ctx)
 }
 void cplug_destroyPlugin(void* ptr)
 {
+    CPLUG_LOG_ASSERT(ptr != NULL);
     // Free any allocated resources in your plugin here
     free(ptr);
 }
@@ -320,6 +322,7 @@ uint32_t cplug_getTailInSamples(void* ptr) { return 0; }
 
 void cplug_setSampleRateAndBlockSize(void* ptr, double sampleRate, uint32_t maxBlockSize)
 {
+    CPLUG_LOG_ASSERT(ptr != NULL);
     MyPlugin* plugin      = (MyPlugin*)ptr;
     plugin->sampleRate    = (float)sampleRate;
     plugin->maxBufferSize = maxBlockSize;
@@ -328,6 +331,9 @@ void cplug_setSampleRateAndBlockSize(void* ptr, double sampleRate, uint32_t maxB
 void cplug_process(void* ptr, CplugProcessContext* ctx)
 {
     DISABLE_DENORMALS
+
+    CPLUG_LOG_ASSERT(ptr != NULL);
+    CPLUG_LOG_ASSERT(ctx != NULL);
 
     MyPlugin* plugin = (MyPlugin*)ptr;
 
