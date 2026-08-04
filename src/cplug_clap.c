@@ -470,6 +470,11 @@ static void _cplug_clap_rescan(CplugHostContext* ctx, uint32_t flags)
     if (param_flags != 0 && clap->host_params)
         clap->host_params->rescan(clap->host, param_flags);
 
+    // TODO: bug - per the CLAP spec (clap.h, CLAP_EXT_LATENCY), latency is only allowed to change while the
+    // plugin is deactivated. If the plugin is currently active, we must call host->request_restart() instead
+    // and defer calling host_latency->changed() until the host deactivates us (then call it, then the host
+    // will reactivate us and pull the new latency). Calling changed() unconditionally while active violates
+    // the spec, even if some hosts tolerate it in practice (see the CLAP_PARAM_RESCAN_ALL note above).
     if ((flags & CPLUG_FLAG_RESCAN_LATENCY) && clap->host_latency)
         clap->host_latency->changed(clap->host);
     if ((flags & CPLUG_FLAG_RESCAN_TAIL_TIME) && clap->host_tail)
