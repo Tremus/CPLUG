@@ -694,7 +694,7 @@ LRESULT CALLBACK MyWinProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcA(hwnd, uMsg, wParam, lParam);
 }
 
-void* cplug_createGUI(void* userPlugin)
+void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin)
 {
     MyPlugin* plugin = (MyPlugin*)userPlugin;
     MyGUI*    gui    = (MyGUI*)malloc(sizeof(MyGUI));
