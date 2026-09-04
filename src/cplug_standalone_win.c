@@ -615,7 +615,6 @@ void Cplug_MIDI_DisconnectInput()
         // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinreset
         // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinstop
         // https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinunprepareheader
-        UINT result;
         midiInReset(g_MIDI.hInput);
         midiInStop(g_MIDI.hInput);
 
@@ -733,15 +732,17 @@ typedef struct CplugAudioDeviceID
     WCHAR Buffer[64];
 } CplugAudioDeviceID;
 
+struct CplugAudioDevice
+{
+    WCHAR              Name[128];
+    CplugAudioDeviceID DeviceID;
+    BOOL               SupportedSampleRates[CPLUG_SAMPLE_RATES_COUNT];
+};
+
 struct
 {
-    UINT NumDevices;
-    struct CplugAudioDevice
-    {
-        WCHAR              Name[128];
-        CplugAudioDeviceID DeviceID;
-        BOOL               SupportedSampleRates[CPLUG_SAMPLE_RATES_COUNT];
-    } Devices[16];
+    UINT                    NumDevices;
+    struct CplugAudioDevice Devices[16];
 
     // Devices
     IMMDeviceEnumerator* pIMMDeviceEnumerator;
@@ -836,15 +837,17 @@ void Cplug_Audio_ScanDevices()
         for (; i < DeviceCount; i++)
         {
             struct CplugAudioDevice* pDevice = &g_Audio.Devices[g_Audio.NumDevices];
-            memset(pDevice, 0, sizeof(*pDevice));
+            memset(pDevice, 0, sizeof(g_Audio.Devices[0]));
 
-            IMMDevice*      pIMMDevice         = NULL;
-            WCHAR*          deviceID           = NULL;
-            IPropertyStore* pProperties        = NULL;
-            PROPVARIANT     varName            = {0};
+            IMMDevice*      pIMMDevice  = NULL;
+            WCHAR*          deviceID    = NULL;
+            IPropertyStore* pProperties = NULL;
+            PROPVARIANT     varName;
             int             len                = 0;
             IAudioClient*   pIAudioClient      = NULL;
             BOOL            HasSupportedFormat = FALSE;
+
+            ZeroMemory(&varName, sizeof(varName));
 
             hr = pCollection->lpVtbl->Item(pCollection, i, &pIMMDevice);
             cplug_assert(hr == S_OK);
@@ -1772,8 +1775,8 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     case WM_DPICHANGED:
     {
         int Yaxis = HIWORD(wParam);
-        int Xaxis = LOWORD(wParam);
-        g_dpi     = (float)Yaxis / USER_DEFAULT_SCREEN_DPI;
+        // int Xaxis = LOWORD(wParam);
+        g_dpi = (float)Yaxis / USER_DEFAULT_SCREEN_DPI;
         g_plugin.setScaleFactor(g_plugin.UserGUI, g_dpi);
 
         RECT* const prcNewWindow = (RECT*)lParam;

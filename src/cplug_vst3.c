@@ -744,7 +744,7 @@ VST3ViewContentScale_setContentScaleFactor(void* const self, const float factor)
     // rather than every time its opened.
     if (view->frame != NULL)
     {
-        struct Steinberg_ViewRect rect = {0, 0, view->desired_width, view->desired_height};
+        struct Steinberg_ViewRect rect = {0, 0, (int)view->desired_width, (int)view->desired_height};
         view->frame->lpVtbl->resizeView(view->frame, (Steinberg_IPlugView*)view, &rect);
     }
 
