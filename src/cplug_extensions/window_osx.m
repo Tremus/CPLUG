@@ -18,6 +18,8 @@
 #define PW_SUFFIX CLAP
 #elif defined(CPLUG_BUILD_VST3)
 #define PW_SUFFIX VST3
+#elif defined(CPLUG_BUILD_AAX)
+#define PW_SUFFIX AAX
 #elif defined(CPLUG_BUILD_STANDALONE)
 #define PW_SUFFIX STANDALONE
 #else
