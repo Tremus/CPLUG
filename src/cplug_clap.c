@@ -53,8 +53,8 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         info->id = index;
         cplug_getInputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getInputBusChannelCount(clap->userPlugin, index);
-        // Maybe we will support 64bit one day (probably not)
-        info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE;
+        info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
+                      CLAP_AUDIO_PORT_PREFERS_64BITS;
         if (index == 0)
             info->flags |= CLAP_AUDIO_PORT_IS_MAIN;
 
@@ -77,8 +77,8 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         info->id = numInputBusses + index;
         cplug_getOutputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getOutputBusChannelCount(clap->userPlugin, index);
-        // Maybe we will support 64bit one day (probably not)
-        info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE;
+        info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
+                      CLAP_AUDIO_PORT_PREFERS_64BITS;
         if (index == 0)
             info->flags |= CLAP_AUDIO_PORT_IS_MAIN;
 
@@ -738,17 +738,21 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
     return true;
 }
 
-float** ClapProcessContext_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx)
+void* ClapProcessContext_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx)
 {
     const ClapProcessContextTranslator* translator = (const ClapProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT_RETURN(busIdx < translator->process->audio_inputs_count, NULL);
+    if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
+        return translator->process->audio_inputs[busIdx].data64;
     return translator->process->audio_inputs[busIdx].data32;
 }
 
-float** ClapProcessContext_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
+void* ClapProcessContext_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
 {
     const ClapProcessContextTranslator* translator = (const ClapProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT_RETURN(busIdx < translator->process->audio_outputs_count, NULL);
+    if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
+        return translator->process->audio_outputs[busIdx].data64;
     return translator->process->audio_outputs[busIdx].data32;
 }
 
@@ -762,6 +766,14 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
     translator.cplugContext.numFrames       = process->frames_count;
     translator.cplugContext.numInputBusses  = process->audio_inputs_count;
     translator.cplugContext.numOutputBusses = process->audio_outputs_count;
+
+    // Prefer the host's double-precision buffers and fall back to single precision
+    if ((process->audio_outputs_count > 0 && process->audio_outputs[0].data64 != NULL) ||
+        (process->audio_outputs_count == 0 && process->audio_inputs_count > 0 &&
+         process->audio_inputs[0].data64 != NULL))
+        translator.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT64;
+    else
+        translator.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
 
     if (process->transport)
     {

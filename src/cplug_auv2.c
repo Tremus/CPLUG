@@ -201,7 +201,10 @@ typedef struct AUv2Plugin
     AudioUnitPropertyListenerProc maxFramesListenerProc;
     void*                         maxFramesListenerData;
     // auval doesn't ask for this property, but pluginval does, so we have to set it.
-    double sampleRate;
+    double   sampleRate;
+    uint32_t audioSampleType;
+    uint32_t streamFormatSetMask;
+    bool     isInitialized;
 
     // Store events here because AUv2 won't simply pass us all events in a single process callback
     UInt32     numEvents;
@@ -229,6 +232,42 @@ void AUv2ReleaseStringArray(CFStringRef* arr, size_t arrlen)
             CFRelease(arr[i]);
         arr[i] = NULL;
     }
+}
+
+static OSStatus AUv2GetBusChannelCount(
+    AUv2Plugin*      auv2,
+    AudioUnitScope   scope,
+    AudioUnitElement element,
+    UInt32*          channelCount)
+{
+    UInt32 numBusses = 0;
+
+    if (scope == kAudioUnitScope_Input)
+        numBusses = cplug_getNumInputBusses(auv2->userPlugin);
+    else if (scope == kAudioUnitScope_Output)
+        numBusses = cplug_getNumOutputBusses(auv2->userPlugin);
+    else
+        return kAudioUnitErr_InvalidScope;
+
+    if (element >= numBusses)
+        return kAudioUnitErr_InvalidElement;
+
+    if (scope == kAudioUnitScope_Input)
+        *channelCount = cplug_getInputBusChannelCount(auv2->userPlugin, element);
+    else
+        *channelCount = cplug_getOutputBusChannelCount(auv2->userPlugin, element);
+
+    return *channelCount != 0 ? noErr : kAudioUnitErr_InvalidProperty;
+}
+
+static AudioChannelLayoutTag AUv2GetChannelLayoutTag(UInt32 channelCount)
+{
+    if (channelCount == 1)
+        return kAudioChannelLayoutTag_Mono;
+    if (channelCount == 2)
+        return kAudioChannelLayoutTag_Stereo;
+
+    return (AudioChannelLayoutTag)(kAudioChannelLayoutTag_DiscreteInOrder | channelCount);
 }
 
 static OSStatus AUv2SendParamEvent(AUv2Plugin* auv2, const CplugEvent* event)
@@ -441,29 +480,14 @@ OSStatus AUMethodGetPropertyInfo(
 
     case kAudioUnitProperty_SupportedChannelLayoutTags:
     {
-        CPLUG_LOG_ASSERT_RETURN(inScope != kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
-        UInt32 num = 0;
-        if (inScope == kAudioUnitScope_Input)
-        {
-            num = cplug_getNumInputBusses(auv2->userPlugin);
-            if (num != auv2->numInputBusNames)
-            {
-                AUv2ReleaseStringArray(auv2->inputBusNames, auv2->numInputBusNames);
-                auv2->inputBusNames = (CFStringRef*)realloc(auv2->inputBusNames, num * sizeof(*auv2->inputBusNames));
-            }
-        }
-        else if (inScope == kAudioUnitScope_Output)
-        {
-            num = cplug_getNumOutputBusses(auv2->userPlugin);
-            if (num != auv2->numOutputBusNames)
-            {
-                AUv2ReleaseStringArray(auv2->outputBusNames, auv2->numOutputBusNames);
-                auv2->outputBusNames = (CFStringRef*)realloc(auv2->outputBusNames, num * sizeof(*auv2->outputBusNames));
-            }
-        }
+        UInt32 channelCount = 0;
+        result = AUv2GetBusChannelCount(auv2, inScope, inElement, &channelCount);
+        if (result != noErr)
+            return result;
 
-        CPLUG_LOG_ASSERT_RETURN(num != 0, kAudioUnitErr_InvalidProperty);
-        CPLUG_SAFE_SET_PTR(outDataSize, (UInt32)sizeof(AudioChannelLayoutTag) * num);
+        // CPLUG currently declares one fixed channel count for each bus, so each
+        // bus has exactly one corresponding layout tag.
+        CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioChannelLayoutTag));
         break;
     }
 
@@ -483,7 +507,7 @@ OSStatus AUMethodGetPropertyInfo(
 
     case kAudioUnitProperty_CocoaUI:
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitCocoaViewInfo));
-        CPLUG_SAFE_SET_PTR(outWritable, true);
+        CPLUG_SAFE_SET_PTR(outWritable, false);
         break;
 
     case kAudioUnitProperty_ParameterClumpName:
@@ -681,14 +705,16 @@ static OSStatus AUMethodGetProperty(
         if (inScope == kAudioUnitScope_Output)
             nChannels = cplug_getOutputBusChannelCount(auv2->userPlugin, inElement);
 
+        // Report the currently negotiated precision, starting with float64 by default
+        UInt32 sampleBytes      = auv2->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64 ? sizeof(double) : sizeof(float);
         desc->mSampleRate       = auv2->sampleRate;
         desc->mFormatID         = kAudioFormatLinearPCM;
         desc->mFormatFlags      = kAudioFormatFlagsNativeFloatPacked | kAudioFormatFlagIsNonInterleaved;
-        desc->mBytesPerPacket   = sizeof(float);
+        desc->mBytesPerPacket   = sampleBytes;
         desc->mFramesPerPacket  = 1;
-        desc->mBytesPerFrame    = sizeof(float);
+        desc->mBytesPerFrame    = sampleBytes;
         desc->mChannelsPerFrame = nChannels;
-        desc->mBitsPerChannel   = 32;
+        desc->mBitsPerChannel   = sampleBytes * 8;
         desc->mReserved         = 0;
         break;
     }
@@ -750,6 +776,20 @@ static OSStatus AUMethodGetProperty(
         *(UInt32*)outData = auv2->supportsInPlaceProcessing;
         *ioDataSize       = sizeof(UInt32);
         break;
+
+    case kAudioUnitProperty_SupportedChannelLayoutTags:
+    {
+        UInt32 channelCount = 0;
+        result = AUv2GetBusChannelCount(auv2, inScope, inElement, &channelCount);
+        if (result != noErr)
+            return result;
+
+        CPLUG_LOG_ASSERT_RETURN(
+            *ioDataSize >= sizeof(AudioChannelLayoutTag), kAudioUnitErr_InvalidPropertyValue);
+        *(AudioChannelLayoutTag*)outData = AUv2GetChannelLayoutTag(channelCount);
+        *ioDataSize                     = sizeof(AudioChannelLayoutTag);
+        break;
+    }
 
     case kAudioUnitProperty_ElementName:
     {
@@ -921,23 +961,44 @@ static OSStatus AUMethodSetProperty(
     case kAudioUnitProperty_StreamFormat:
     {
         AudioStreamBasicDescription* desc = (AudioStreamBasicDescription*)inData;
+        uint32_t                      audioSampleType;
+        uint32_t                      scopeMask;
 
         int nChannels = 0;
         switch (inScope)
         {
-        case kAudioUnitScope_Global:
-            nChannels = 1;
-            break;
         case kAudioUnitScope_Input:
             nChannels = cplug_getInputBusChannelCount(auv2->userPlugin, inElement);
+            scopeMask = 1u;
             break;
         case kAudioUnitScope_Output:
             nChannels = cplug_getOutputBusChannelCount(auv2->userPlugin, inElement);
+            scopeMask = 2u;
             break;
         default:
-            break;
+            return kAudioUnitErr_InvalidScope;
         }
+        CPLUG_LOG_ASSERT_RETURN(!auv2->isInitialized, kAudioUnitErr_Initialized);
         CPLUG_LOG_ASSERT_RETURN(desc->mChannelsPerFrame <= nChannels, kAudioUnitErr_FormatNotSupported);
+
+        // Accept non-interleaved native float32 or float64 and retain the host's fallback choice
+        CPLUG_LOG_ASSERT_RETURN(desc->mFormatID == kAudioFormatLinearPCM, kAudioUnitErr_FormatNotSupported);
+        CPLUG_LOG_ASSERT_RETURN((desc->mFormatFlags & kAudioFormatFlagIsFloat) != 0, kAudioUnitErr_FormatNotSupported);
+        CPLUG_LOG_ASSERT_RETURN(
+            (desc->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0,
+            kAudioUnitErr_FormatNotSupported);
+        if (desc->mBitsPerChannel == 64 && desc->mBytesPerFrame == sizeof(double))
+            audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT64;
+        else if (desc->mBitsPerChannel == 32 && desc->mBytesPerFrame == sizeof(float))
+            audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
+        else
+            return kAudioUnitErr_FormatNotSupported;
+
+        // Select a common precision on the first scope and reject mixed input and output precision
+        if (auv2->streamFormatSetMask != 0 && audioSampleType != auv2->audioSampleType)
+            return kAudioUnitErr_FormatNotSupported;
+        auv2->audioSampleType = audioSampleType;
+        auv2->streamFormatSetMask |= scopeMask;
         // Logic expects to set the sample rate using kAudioUnitProperty_StreamFormat not kAudioUnitProperty_SampleRate
         auv2->sampleRate = desc->mSampleRate;
         cplug_setSampleRateAndBlockSize(auv2->userPlugin, auv2->sampleRate, auv2->mMaxFramesPerSlice);
@@ -1178,6 +1239,7 @@ static OSStatus AUMethodInitializeProcessing(AUv2Plugin* auv2)
     // Despite this 'initialize' naming convention, the bahaviour of this method is more closely aligned with VST3
     // IComponent::setActive. We don't currently support this feature.
     // https://developer.apple.com/documentation/audiotoolbox/1439851-audiounitinitialize?language=objc
+    auv2->isInitialized = true;
     return noErr;
 }
 
@@ -1185,6 +1247,8 @@ static OSStatus AUMethodUninitializeProcessing(AUv2Plugin* auv2)
 {
     cplug_log("AUMethodUninitializeProcessing");
     // Read comments in AUMethodInitialize
+    auv2->isInitialized = false;
+    auv2->streamFormatSetMask = 0;
     return noErr;
 }
 
@@ -1193,7 +1257,7 @@ typedef struct AUv2ProcessContextTranslator
     CplugProcessContext cplugContext;
     AUv2Plugin*         auv2;
     UInt32              midiIdx;
-    float*              channels[2];
+    void*               channels[2];
 } AUv2ProcessContextTranslator;
 
 bool AUv2ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const CplugEvent* event, uint32_t frameIdx)
@@ -1233,17 +1297,17 @@ bool AUv2ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
     return true;
 }
 
-float** AUv2ProcessContextTranslator_getAudioInput(const CplugProcessContext* ctx, uint32_t busIdx)
+void* AUv2ProcessContextTranslator_getAudioInput(const CplugProcessContext* ctx, uint32_t busIdx)
 {
     const AUv2ProcessContextTranslator* translator = (const AUv2ProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT(busIdx == 0); // TODO: support more busses
-    return (float**)translator->channels;
+    return translator->channels;
 }
-float** AUv2ProcessContextTranslator_getAudioOutput(const CplugProcessContext* ctx, uint32_t busIdx)
+void* AUv2ProcessContextTranslator_getAudioOutput(const CplugProcessContext* ctx, uint32_t busIdx)
 {
     const AUv2ProcessContextTranslator* translator = (const AUv2ProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT(busIdx == 0); // TODO: support more busses
-    return (float**)translator->channels;
+    return translator->channels;
 }
 
 static OSStatus AUMethodProcessAudio(
@@ -1275,6 +1339,7 @@ static OSStatus AUMethodProcessAudio(
         ctx->numFrames       = inNumFrames;
         ctx->numInputBusses  = ioData->mNumberBuffers;
         ctx->numOutputBusses = ioData->mNumberBuffers;
+        ctx->audioSampleType = auv2->audioSampleType;
 
         if (hostcb->beatAndTempoProc)
         {
@@ -1335,7 +1400,7 @@ static OSStatus AUMethodProcessAudio(
             CPLUG_LOG_ASSERT(numChannels == 1);
             // The very smart people at Apple test you on this. Yes you actually have to return noErr.
             CPLUG_LOG_ASSERT_RETURN(ioData->mBuffers[ch].mData != NULL, noErr);
-            translator.channels[ch] = (float*)ioData->mBuffers[ch].mData;
+            translator.channels[ch] = ioData->mBuffers[ch].mData;
         }
 
         if (auv2->renderCallback.inputProc && auv2->renderCallback.inputProcRefCon)
@@ -1628,5 +1693,6 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     auv2->supportsInPlaceProcessing = 1;
     auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;
     auv2->sampleRate                = kAUDefaultSampleRate;
+    auv2->audioSampleType           = CPLUG_AUDIO_SAMPLE_FLOAT64;
     return auv2;
 }

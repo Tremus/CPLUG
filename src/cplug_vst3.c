@@ -1654,8 +1654,10 @@ VST3Processor_canProcessSampleSize(void* self, const int32_t symbolic_sample_siz
 {
     // NOTE runs during RT
     // cplug_log("%s => %i", __FUNCTION__, symbolic_sample_size);
-    return symbolic_sample_size == Steinberg_Vst_SymbolicSampleSizes_kSample32 ? Steinberg_kResultTrue
-                                                                               : Steinberg_kResultFalse;
+    return symbolic_sample_size == Steinberg_Vst_SymbolicSampleSizes_kSample32 ||
+                   symbolic_sample_size == Steinberg_Vst_SymbolicSampleSizes_kSample64
+               ? Steinberg_kResultTrue
+               : Steinberg_kResultFalse;
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_getLatencySamples(void* const self)
@@ -1675,7 +1677,8 @@ VST3Processor_setupProcessing(void* const self, struct Steinberg_Vst_ProcessSetu
     cplug_log("%s => %p %p | %d %f", __FUNCTION__, self, setup, setup->maxSamplesPerBlock, setup->sampleRate);
 
     CPLUG_LOG_ASSERT_RETURN(
-        setup->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32,
+        setup->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32 ||
+            setup->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample64,
         Steinberg_kInvalidArgument);
 
     // TODO processMode can be:
@@ -1816,27 +1819,39 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
     return true;
 }
 
-float** VST3ProcessContextTranslator_getAudioInput(const CplugProcessContext* ctx, uint32_t busIdx)
+void* VST3ProcessContextTranslator_getAudioInput(const CplugProcessContext* ctx, uint32_t busIdx)
 {
     // cplug_log("%s => %p %u", __FUNCTION__, ctx, busIdx);
     VST3ProcessContextTranslator* vst3ctx = (VST3ProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT(busIdx < vst3ctx->data->numInputs);
 
-    float** ptr = NULL;
+    void* ptr = NULL;
     if (vst3ctx->data->inputs && busIdx < vst3ctx->data->numInputs)
-        ptr = vst3ctx->data->inputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
+    {
+        // Return channels matching the precision selected by the host
+        if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
+            ptr = vst3ctx->data->inputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers64;
+        else
+            ptr = vst3ctx->data->inputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
+    }
     return ptr;
 }
 
-float** VST3ProcessContextTranslator_getAudioOutput(const CplugProcessContext* ctx, uint32_t busIdx)
+void* VST3ProcessContextTranslator_getAudioOutput(const CplugProcessContext* ctx, uint32_t busIdx)
 {
     // cplug_log("%s => %p %u", __FUNCTION__, ctx, busIdx);
     VST3ProcessContextTranslator* vst3ctx = (VST3ProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT_RETURN(busIdx < vst3ctx->data->numOutputs, NULL);
 
-    float** ptr = NULL;
+    void* ptr = NULL;
     if (vst3ctx->data->outputs && busIdx < vst3ctx->data->numOutputs)
-        ptr = vst3ctx->data->outputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
+    {
+        // Return channels matching the precision selected by the host
+        if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
+            ptr = vst3ctx->data->outputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers64;
+        else
+            ptr = vst3ctx->data->outputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
+    }
 
     return ptr;
 }
@@ -1848,7 +1863,8 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
     VST3Plugin* const vst3 = _cplug_pointerShiftProcessor(self);
 
     CPLUG_LOG_ASSERT_RETURN(
-        data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32,
+        data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32 ||
+            data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample64,
         Steinberg_kInvalidArgument);
 
     VST3ProcessContextTranslator translator;
@@ -1856,6 +1872,9 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
     translator.cplugContext.numFrames       = data->numSamples;
     translator.cplugContext.numInputBusses  = data->numInputs;
     translator.cplugContext.numOutputBusses = data->numOutputs;
+    translator.cplugContext.audioSampleType =
+        data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample64 ? CPLUG_AUDIO_SAMPLE_FLOAT64
+                                                                               : CPLUG_AUDIO_SAMPLE_FLOAT32;
 
     if (data->processContext != NULL)
     {

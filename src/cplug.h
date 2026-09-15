@@ -164,11 +164,18 @@ enum
     CPLUG_FLAG_TRANSPORT_HAS_PLAYHEAD_BEATS = 1 << 5,
 };
 
+enum
+{
+    CPLUG_AUDIO_SAMPLE_FLOAT32,
+    CPLUG_AUDIO_SAMPLE_FLOAT64,
+};
+
 struct CplugProcessContext
 {
     uint32_t numFrames;
     uint32_t numInputBusses;
     uint32_t numOutputBusses;
+    uint32_t audioSampleType; // CPLUG_AUDIO_SAMPLE_XXX
 
     uint32_t flags; // CPLUG_FLAG_TRANSPORT_XXX
     double   bpm;
@@ -181,8 +188,9 @@ struct CplugProcessContext
     bool (*enqueueEvent)(CplugProcessContext* ctx, const CplugEvent*, uint32_t frameIdx);
     bool (*dequeueEvent)(CplugProcessContext* ctx, CplugEvent*, uint32_t frameIdx);
 
-    float** (*getAudioInput)(const CplugProcessContext* ctx, uint32_t busIdx);
-    float** (*getAudioOutput)(const CplugProcessContext* ctx, uint32_t busIdx);
+    // Cast each returned channel-pointer array according to audioSampleType
+    void* (*getAudioInput)(const CplugProcessContext* ctx, uint32_t busIdx);
+    void* (*getAudioOutput)(const CplugProcessContext* ctx, uint32_t busIdx);
 };
 
 CPLUG_API void cplug_process(void* userPlugin, CplugProcessContext* ctx);
