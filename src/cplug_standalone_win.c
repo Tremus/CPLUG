@@ -981,10 +981,10 @@ bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
 }
 
 // [Audio Thread]
-float** Cplug_Audio_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx) { return NULL; }
+void* Cplug_Audio_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx) { return NULL; }
 
 // [Audio Thread]
-float** Cplug_Audio_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
+void* Cplug_Audio_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
 {
     const WindowsProcessContext* winctx = (const WindowsProcessContext*)ctx;
     if (busIdx == 0)
@@ -1022,6 +1022,7 @@ void Cplug_Audio_Process(const UINT32 blockSize)
     ctx.cplugContext.numFrames       = g_Audio.BlockSize;
     ctx.cplugContext.numInputBusses  = 0;
     ctx.cplugContext.numOutputBusses = 1;
+    ctx.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
     ctx.cplugContext.enqueueEvent    = Cplug_Audio_enqueueEvent;
     ctx.cplugContext.dequeueEvent    = Cplug_Audio_dequeueEvent;
     ctx.cplugContext.getAudioInput   = Cplug_Audio_getAudioInput;
