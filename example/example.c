@@ -395,16 +395,28 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
             // If your plugin does not require sample accurate processing, use this line below to break the loop
             // frame = event.processAudio.endFrame;
 
-            float** output = ctx->getAudioOutput(ctx, 0);
+            void* output = ctx->getAudioOutput(ctx, 0);
             CPLUG_LOG_ASSERT(output != NULL)
-            CPLUG_LOG_ASSERT(output[0] != NULL);
-            CPLUG_LOG_ASSERT(output[1] != NULL);
 
             if (plugin->midiNote == -1)
             {
                 // Silence
-                memset(&output[0][frame], 0, sizeof(float) * (event.processAudio.endFrame - frame));
-                memset(&output[1][frame], 0, sizeof(float) * (event.processAudio.endFrame - frame));
+                if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
+                {
+                    double** output64 = (double**)output;
+                    CPLUG_LOG_ASSERT(output64[0] != NULL);
+                    CPLUG_LOG_ASSERT(output64[1] != NULL);
+                    memset(&output64[0][frame], 0, sizeof(double) * (event.processAudio.endFrame - frame));
+                    memset(&output64[1][frame], 0, sizeof(double) * (event.processAudio.endFrame - frame));
+                }
+                else
+                {
+                    float** output32 = (float**)output;
+                    CPLUG_LOG_ASSERT(output32[0] != NULL);
+                    CPLUG_LOG_ASSERT(output32[1] != NULL);
+                    memset(&output32[0][frame], 0, sizeof(float) * (event.processAudio.endFrame - frame));
+                    memset(&output32[1][frame], 0, sizeof(float) * (event.processAudio.endFrame - frame));
+                }
                 frame = event.processAudio.endFrame;
             }
             else
@@ -422,8 +434,19 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
 
                     float sample = vol * sinf(2 * mypi * phase);
 
-                    for (int ch = 0; ch < 2; ch++)
-                        output[ch][frame] = sample;
+                    // Write the oscillator sample in the precision selected by the host
+                    if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
+                    {
+                        double** output64 = (double**)output;
+                        for (int ch = 0; ch < 2; ch++)
+                            output64[ch][frame] = sample;
+                    }
+                    else
+                    {
+                        float** output32 = (float**)output;
+                        for (int ch = 0; ch < 2; ch++)
+                            output32[ch][frame] = sample;
+                    }
 
                     phase += inc;
                     phase -= (int)phase;
@@ -696,6 +719,8 @@ LRESULT CALLBACK MyWinProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin)
 {
+    // Ignore the host context in this native example window
+    (void)ctx;
     MyPlugin* plugin = (MyPlugin*)userPlugin;
     MyGUI*    gui    = (MyGUI*)malloc(sizeof(MyGUI));
     memset(gui, 0, sizeof(*gui));

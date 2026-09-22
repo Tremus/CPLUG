@@ -927,8 +927,8 @@ bool OSXProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent*
     return true;
 }
 
-float** OSXProcessContext_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx) { return NULL; }
-float** OSXProcessContext_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
+void* OSXProcessContext_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx) { return NULL; }
+void* OSXProcessContext_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
 {
     const OSXProcessContextTranlator* translator = (const OSXProcessContextTranlator*)ctx;
     if (busIdx == 0)
@@ -956,6 +956,7 @@ OSStatus STAND_audioIOProc(
     translator.cplugContext.numFrames       = g_audioBlockSize;
     translator.cplugContext.numInputBusses  = 0;
     translator.cplugContext.numOutputBusses = 1;
+    translator.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
     translator.cplugContext.enqueueEvent    = OSXProcessContext_enqueueEvent;
     translator.cplugContext.dequeueEvent    = OSXProcessContext_dequeueEvent;
     translator.cplugContext.getAudioInput   = OSXProcessContext_getAudioInput;
