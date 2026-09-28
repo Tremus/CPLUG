@@ -108,6 +108,10 @@ typedef struct CplugWindow
     BOOL   VBlankThreadShouldExit;
     HANDLE hVBlankThread;
 
+    volatile LONG   TickPending;   // Set by vblank thread when posting WM_VBLANK, cleared by main thread
+    volatile LONG64 TickPostedQPC; // Written by vblank thread
+    volatile LONG64 TickCostQPC;   // Written by main thread. Time from WM_VBLANK being posted to Present returning
+
     D3D_DRIVER_TYPE   DriverType;
     D3D_FEATURE_LEVEL FeatureLevel;
 
@@ -1051,9 +1055,30 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
 {
     CplugWindow* pw = lpParameter;
 
+    // https://learn.microsoft.com/en-us/windows/win32/procthread/scheduling-priorities
+    // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadpriority
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+
     HMONITOR hMonitor = MonitorFromWindow(pw->hwnd, MONITOR_DEFAULTTONEAREST);
 
     IDXGIOutput* pOutput = NULL;
+
+    // Ticking immediately after the vblank is the worst time to sample input. DWM has just latched its frame, so
+    // whatever we present now waits ~1 refresh for the next composition, and input arriving during that refresh waits
+    // for the frame after. Instead we sleep until just before the next vblank, leaving enough time for the main thread
+    // to receive WM_VBLANK, tick and present.
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+    // https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createwaitabletimerexw
+    // High resolution timers require Windows 10 1803. Without one we don't delay (post straight after the vblank)
+    HANDLE hTimer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+
+    LARGE_INTEGER QPF;
+    QueryPerformanceFrequency(&QPF);
+    const LONG64 MarginQPC        = QPF.QuadPart * 2 / 1000; // Slack for GPU work & DWM latching. Tune to taste
+    LONG64       LastVBlankQPC    = 0;
+    LONG64       RefreshPeriodQPC = 0;
 
     while (pw->VBlankThreadShouldExit == FALSE)
     {
@@ -1065,11 +1090,77 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
                 PW_DX11_RELEASE(pOutput)
             }
             pOutput = _pw_find_dxgioutput(hMonitor, pw->pFactory2);
+
+            LastVBlankQPC    = 0;
+            RefreshPeriodQPC = 0;
         }
 
         if (pOutput)
         {
             pOutput->lpVtbl->WaitForVBlank(pOutput);
+
+            LARGE_INTEGER Now;
+            QueryPerformanceCounter(&Now);
+
+            // WARNING: Mostly AI documentation, with a few of my own notes added
+            // All times here are in QPC ticks. QPF.QuadPart = ticks per second, so QPF.QuadPart / N = 1/N seconds.
+            //
+            // 1. Estimate the refresh period
+            //
+            // Delta is the time between this vblank and the previous one. Usually that's one refresh period, plus a
+            // little jitter from thread wakeup. Sometimes it isn't:
+            //   - We may have missed a vblank (thread not scheduled in time, or we overslept), making Delta 2x, 3x...
+            //     Note that oversleeping is out of our control, as it's closely tied to how the OS manages power usage,
+            //     and it can change between OS updates
+            //   - Our first estimate may itself have been one of those long gaps, or the monitor's refresh rate changed
+            //
+            // So we sort each Delta into one of these bands (E = current estimate of the refresh period):
+            //
+            //   Delta <= 2ms or >= 50ms   Outside any real display's range (500Hz - 20Hz). Ignore
+            //   No estimate yet (E = 0)   Use Delta as the first estimate
+            //   Delta < 3/4 E             Our estimate must be too long, since vblanks can't come early. Replace it
+            //   3/4 E <= Delta < 5/4 E    Normal jitter. Nudge the estimate 1/8 of the way towards Delta. This is an
+            //                             exponential moving average, which settles within ~8-16 frames
+            //   Delta >= 5/4 E            Probably a missed vblank. Ignore
+            //
+            // Any constant delay between the real vblank and our thread waking cancels out in the subtraction, so it
+            // doesn't affect the period (it does shift the post time slightly later, which MarginQPC absorbs).
+            LONG64 Delta = Now.QuadPart - LastVBlankQPC;
+            if ((LastVBlankQPC != 0) && (Delta > (QPF.QuadPart / 500)) && (Delta < (QPF.QuadPart / 20)))
+            {
+                if ((RefreshPeriodQPC == 0) || (Delta < ((RefreshPeriodQPC * 3) / 4)))
+                    RefreshPeriodQPC = Delta;
+                else if (Delta < ((RefreshPeriodQPC * 5) / 4))
+                    RefreshPeriodQPC += ((Delta - RefreshPeriodQPC) / 8);
+            }
+            LastVBlankQPC = Now.QuadPart;
+
+            // 2. Sleep until just before the next vblank
+            //
+            // Now is (roughly) vblank N, so vblank N+1 is at Now + RefreshPeriodQPC. We want the main thread's Present
+            // to finish MarginQPC before N+1, and TickCostQPC is how long it takes from posting WM_VBLANK until Present
+            // returns. Working backwards from N+1 gives the time to post:
+            //
+            //   Now                                  post                                    N+1
+            //    |------------- WaitQPC --------------|------ TickCostQPC ------|- MarginQPC -|
+            //    |<------------------------------- RefreshPeriodQPC ------------------------->|
+            //
+            //   WaitQPC = RefreshPeriodQPC - TickCostQPC - MarginQPC
+            //
+            // If WaitQPC is under 0.5ms (QPF / 2000), including negative when the tick takes longer than a frame, we
+            // post immediately. A sleep that short isn't worth it, and oversleeping would miss vblank N+1.
+            //
+            // SetWaitableTimer takes 100ns units (10,000,000 per second), so ticks -> 100ns = ticks * 10^7 / QPF.
+            // A negative due time means "relative to now" instead of an absolute time.
+            LONG64 WaitQPC = RefreshPeriodQPC - pw->TickCostQPC - MarginQPC;
+            if (hTimer && RefreshPeriodQPC != 0 && WaitQPC > QPF.QuadPart / 2000)
+            {
+                // https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-setwaitabletimer
+                LARGE_INTEGER DueTime;
+                DueTime.QuadPart = -(WaitQPC * 10000000 / QPF.QuadPart);
+                if (SetWaitableTimer(hTimer, &DueTime, 0, NULL, NULL, FALSE))
+                    WaitForSingleObject(hTimer, INFINITE);
+            }
         }
         else
         {
@@ -1085,9 +1176,19 @@ DWORD pw_vblank_thread2(_In_ LPVOID lpParameter)
             Sleep(dwMilliseconds);
         }
 
-        PostMessageW(pw->hwnd, WM_VBLANK, 0, 0); // Always tick
+        // Only allow one WM_VBLANK in the queue. If the main thread is busy, a backlog of posted messages would be
+        // handled ahead of the input messages behind them, adding a frame of latency each.
+        if (InterlockedExchange(&pw->TickPending, 1) == 0)
+        {
+            LARGE_INTEGER Now;
+            QueryPerformanceCounter(&Now);
+            pw->TickPostedQPC = Now.QuadPart;
+            PostMessageW(pw->hwnd, WM_VBLANK, 0, 0);
+        }
     }
 
+    if (hTimer)
+        CloseHandle(hTimer);
     PW_DX11_RELEASE(pOutput)
 
     return 0;
@@ -1342,6 +1443,16 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (pw->gui == NULL)
             return 0;
 #ifdef PW_DX11
+        InterlockedExchange(&pw->TickPending, 0);
+#endif
+        // Process penging mouse messages, so we get up to date mouse positions this frame
+        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-peekmessagew
+        {
+            MSG Msg;
+            while (PeekMessageW(&Msg, hwnd, WM_MOUSEFIRST, WM_MOUSELAST, PM_REMOVE))
+                DispatchMessageW(&Msg);
+        }
+#ifdef PW_DX11
         BOOL ShouldResizeBuffers = FALSE;
         BOOL ShouldResizeTarget  = FALSE;
 
@@ -1421,6 +1532,19 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             // HRESULT                 hr     = pw->pSwapchain1->lpVtbl->Present1(pw->pSwapchain1, 0, Flags, &params);
             // PW_ASSERT(SUCCEEDED(hr) || hr )
             PW_ASSERT(hr == S_OK || hr == DXGI_STATUS_OCCLUDED || hr == DXGI_ERROR_WAS_STILL_DRAWING);
+
+            // Tell the vblank thread how early it needs to post WM_VBLANK. This includes time spent waiting in the
+            // message queue, which depends on how busy the host keeps the main thread.
+            // Tracks recent peaks, decaying slowly so a single slow frame doesn't leave us rendering early for long
+            if (pw->TickPostedQPC != 0)
+            {
+                LONG64        CostDecay = 4;
+                LARGE_INTEGER Now;
+                QueryPerformanceCounter(&Now);
+                LONG64 Cost     = Now.QuadPart - pw->TickPostedQPC;
+                LONG64 Prev     = pw->TickCostQPC - (pw->TickCostQPC / CostDecay);
+                pw->TickCostQPC = Cost > Prev ? Cost : Prev;
+            }
         }
 #endif
         return 0;
@@ -2278,6 +2402,7 @@ void cplug_setParent(void* userGUI, void* newParent)
 
 #ifdef PW_DX11
         pw->WindowMoved = TRUE;
+        pw->TickPending = 0;
         if (pw->hVBlankThread == NULL)
             pw->hVBlankThread = CreateThread(0, 0, pw_vblank_thread2, pw, 0, 0);
 #else
