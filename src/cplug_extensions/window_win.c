@@ -26,6 +26,8 @@
 #include <Shlobj_core.h>
 #include <Shlwapi.h>
 
+#include <directmanipulation.h>
+
 #ifdef PW_DX11
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -60,6 +62,40 @@
 // This is required by a hack to tag our window within a Hook Proc
 static UINT_PTR PW_UNIQUE_INT_ID = 0;
 
+// clang-format off
+static const GUID PW_CLSID_DirectManipulationManager             = {0x54e211b6, 0x3650, 0x4f75, {0x83, 0x34, 0xfa, 0x35, 0x95, 0x98, 0xe1, 0xc5}};
+static const GUID PW_IID_IDirectManipulationManager              = {0xfbf5d3b4, 0x70c7, 0x4163, {0x93, 0x22, 0x5a, 0x6f, 0x66, 0x0d, 0x6f, 0xbc}};
+static const GUID PW_IID_IDirectManipulationUpdateManager        = {0xb0ae62fd, 0xbe34, 0x46e7, {0x9c, 0xaa, 0xd3, 0x61, 0xfa, 0xcb, 0xb9, 0xcc}};
+static const GUID PW_IID_IDirectManipulationViewport             = {0x28b85a3d, 0x60a0, 0x48bd, {0x9b, 0xa1, 0x5c, 0xe8, 0xd9, 0xea, 0x3a, 0x6d}};
+static const GUID PW_IID_IDirectManipulationViewportEventHandler = {0x952121da, 0xd69f, 0x45f9, {0xb0, 0xf9, 0xf2, 0x39, 0x44, 0x32, 0x1a, 0x6d}};
+// clang-format on
+
+// https://learn.microsoft.com/en-us/previous-versions/windows/desktop/inputmsg/dm-pointerhittest
+#ifndef DM_POINTERHITTEST
+#define DM_POINTERHITTEST 0x0250
+#endif
+#ifndef GET_POINTERID_WPARAM
+#define GET_POINTERID_WPARAM(wParam) (LOWORD(wParam))
+#endif
+// PT_TOUCHPAD, Windows 8.1+
+// https://learn.microsoft.com/en-us/windows/win32/api/winuser/ne-winuser-tagpointer_input_type
+#define PW_PT_TOUCHPAD 5
+
+// Arbitrary. Content transforms are measured in viewport units, which we treat as pixels
+#define PW_DM_VIEWPORT_SIZE 1000
+
+// Windows 8+. Loaded at runtime so we can still load on older versions
+// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getpointertype
+static BOOL(WINAPI* PW_GetPointerType)(UINT32 pointerId, DWORD* pointerType) = NULL;
+
+// Direct Manipulation reports pans & pinches as a single transform. Each gesture is sent as one or the other
+enum PWDMGesture
+{
+    PW_DM_GESTURE_NONE,
+    PW_DM_GESTURE_PAN,
+    PW_DM_GESTURE_PINCH,
+};
+
 typedef struct CplugWindow
 {
     void* gui;
@@ -84,6 +120,8 @@ typedef struct CplugWindow
 
     float content_scale_factor;
 
+    OSVERSIONINFOEXW OsVersionInfo;
+
     struct
     {
         IDropTargetVtbl* lpVtbl;
@@ -100,6 +138,27 @@ typedef struct CplugWindow
         IDropSourceVtbl  Vtbl;
         volatile LONG    RefCount;
     } DropSource;
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/_directmanipulation/
+    struct
+    {
+        IDirectManipulationViewportEventHandlerVtbl* lpVtbl;
+        IDirectManipulationViewportEventHandlerVtbl  Vtbl;
+        volatile LONG                                RefCount;
+
+        IDirectManipulationManager*       pManager;
+        IDirectManipulationUpdateManager* pUpdateManager;
+        IDirectManipulationViewport*      pViewport;
+        DWORD                             HandlerCookie;
+
+        enum PWDMGesture Gesture;
+        // Set while ZoomToRect() returns the content to identity after a gesture. Updates it causes aren't sent
+        BOOL Resetting;
+        // Last content transform
+        float LastScale;
+        float LastX;
+        float LastY;
+    } DirectManipulation;
 
 #ifdef PW_DX11
     BOOL IsWindows10OrGreater;
@@ -679,6 +738,285 @@ uint32_t PWGetKeyModifiers()
     return modifiers;
 }
 
+// Direct Manipulation
+// Once a touchpad contact is handed to Direct Manipulation, Windows stops sending WM_MOUSEWHEEL for it, so two finger
+// pans are handled here too and sent as PW_EVENT_MOUSE_TOUCHPAD_XXX events, like macOS.
+// Based on Chromium's DirectManipulationHelper
+// https://learn.microsoft.com/en-us/windows/win32/directmanipulation/direct-manipulation-portal
+
+static inline CplugWindow* PWDMShiftPtr(IDirectManipulationViewportEventHandler* pHandler)
+{
+    CplugWindow* pw = (CplugWindow*)((char*)pHandler - offsetof(CplugWindow, DirectManipulation));
+    return pw;
+}
+
+static BOOL PWDMIsIdentity(float Scale, float X, float Y)
+{
+    const float Epsilon = 1e-3f;
+    return Scale > 1 - Epsilon && Scale < 1 + Epsilon && X > -Epsilon && X < Epsilon && Y > -Epsilon && Y < Epsilon;
+}
+
+// For magnify events, x & y are the cursor position. For touchpad events, they are deltas
+static void PWDMSendEvent(CplugWindow* pw, enum PWEventType Type, float X, float Y, float Magnification)
+{
+    PWEvent e = {
+        .type                           = Type,
+        .gui                            = pw->gui,
+        .mouse.x                        = X,
+        .mouse.y                        = Y,
+        .mouse.modifiers                = PWGetKeyModifiers(),
+        .mouse.time_ms                  = GetMessageTime(),
+        .mouse.double_click_interval_ms = GetDoubleClickTime(),
+        .mouse.magnification            = Magnification,
+    };
+    PWSendEvent(&e);
+}
+
+static void PWDMSendMagnifyEvent(CplugWindow* pw, enum PWEventType Type, float Magnification)
+{
+    POINT Cursor = {0};
+    GetCursorPos(&Cursor);
+    ScreenToClient(pw->hwnd, &Cursor);
+    PWDMSendEvent(pw, Type, Cursor.x, Cursor.y, Magnification);
+}
+
+static void PWDMEndGesture(CplugWindow* pw)
+{
+    if (pw->DirectManipulation.Gesture == PW_DM_GESTURE_PAN)
+        PWDMSendEvent(pw, PW_EVENT_MOUSE_TOUCHPAD_END, 0, 0, 0);
+    if (pw->DirectManipulation.Gesture == PW_DM_GESTURE_PINCH)
+        PWDMSendMagnifyEvent(pw, PW_EVENT_MOUSE_MAGNIFY_END, 0);
+    pw->DirectManipulation.Gesture = PW_DM_GESTURE_NONE;
+}
+
+HRESULT STDMETHODCALLTYPE
+PWDM_QueryInterface(IDirectManipulationViewportEventHandler* This, REFIID riid, void** ppvObject)
+{
+    if (0 == memcmp(riid, &PW_IID_IDirectManipulationViewportEventHandler, sizeof(*riid)) ||
+        0 == memcmp(riid, &IID_IUnknown, sizeof(*riid)))
+    {
+        This->lpVtbl->AddRef(This);
+        *ppvObject = This;
+        return S_OK;
+    }
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
+}
+
+ULONG STDMETHODCALLTYPE PWDM_AddRef(IDirectManipulationViewportEventHandler* This)
+{
+    CplugWindow* pw = PWDMShiftPtr(This);
+    return _InlineInterlockedAdd(&pw->DirectManipulation.RefCount, 1);
+}
+
+ULONG STDMETHODCALLTYPE PWDM_Release(IDirectManipulationViewportEventHandler* This)
+{
+    CplugWindow* pw = PWDMShiftPtr(This);
+    return _InlineInterlockedAdd(&pw->DirectManipulation.RefCount, -1);
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationviewporteventhandler-onviewportstatuschanged
+HRESULT STDMETHODCALLTYPE PWDM_OnViewportStatusChanged(
+    IDirectManipulationViewportEventHandler* This,
+    IDirectManipulationViewport*             viewport,
+    DIRECTMANIPULATION_STATUS                current,
+    DIRECTMANIPULATION_STATUS                previous)
+{
+    CplugWindow* pw = PWDMShiftPtr(This);
+    if (current == previous || current == DIRECTMANIPULATION_RUNNING || current == DIRECTMANIPULATION_INERTIA)
+        return S_OK;
+
+    // Fingers lifted & any inertia has finished, or the viewport was disabled
+    PWDMEndGesture(pw);
+
+    // Return the content to identity, so the transform doesn't drift or hit zoom limits over many gestures.
+    // Updates this causes are ignored until the content reaches identity. See PWDM_OnContentUpdated()
+    const BOOL IsIdentity =
+        PWDMIsIdentity(pw->DirectManipulation.LastScale, pw->DirectManipulation.LastX, pw->DirectManipulation.LastY);
+    if (current == DIRECTMANIPULATION_READY && !IsIdentity && !pw->DirectManipulation.Resetting)
+    {
+        pw->DirectManipulation.Resetting = TRUE;
+        // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationviewport-zoomtorect
+        HRESULT hr = viewport->lpVtbl->ZoomToRect(viewport, 0, 0, PW_DM_VIEWPORT_SIZE, PW_DM_VIEWPORT_SIZE, FALSE);
+        PW_ASSERT(SUCCEEDED(hr));
+        if (FAILED(hr))
+            pw->DirectManipulation.Resetting = FALSE;
+    }
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE
+PWDM_OnViewportUpdated(IDirectManipulationViewportEventHandler* This, IDirectManipulationViewport* viewport)
+{
+    return S_OK;
+}
+
+// https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationviewporteventhandler-oncontentupdated
+HRESULT STDMETHODCALLTYPE PWDM_OnContentUpdated(
+    IDirectManipulationViewportEventHandler* This,
+    IDirectManipulationViewport*             viewport,
+    IDirectManipulationContent*              content)
+{
+    CplugWindow* pw = PWDMShiftPtr(This);
+
+    // [scale x, rotation, rotation, scale y, translation x, translation y]
+    // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationcontent-getcontenttransform
+    float   Matrix[6] = {0};
+    HRESULT hr        = content->lpVtbl->GetContentTransform(content, Matrix, ARRAYSIZE(Matrix));
+    PW_ASSERT(SUCCEEDED(hr));
+    if (FAILED(hr))
+        return hr;
+
+    const float Scale = Matrix[0];
+    const float X     = Matrix[4];
+    const float Y     = Matrix[5];
+
+    // Same as macOS: scale *= 1 + magnification
+    const float Magnification = Scale / pw->DirectManipulation.LastScale - 1;
+    const float DeltaX        = X - pw->DirectManipulation.LastX;
+    const float DeltaY        = Y - pw->DirectManipulation.LastY;
+
+    pw->DirectManipulation.LastScale = Scale;
+    pw->DirectManipulation.LastX     = X;
+    pw->DirectManipulation.LastY     = Y;
+
+    if (pw->DirectManipulation.Resetting)
+    {
+        if (PWDMIsIdentity(Scale, X, Y))
+            pw->DirectManipulation.Resetting = FALSE;
+        return S_OK;
+    }
+
+    // A pan may turn into a pinch, but not the other way around. A pinch also translates the content to keep it
+    // centred between the fingers, which we ignore
+    const BOOL IsScaling = Magnification > 1e-4f || Magnification < -1e-4f;
+    if (IsScaling && pw->DirectManipulation.Gesture != PW_DM_GESTURE_PINCH)
+    {
+        PWDMEndGesture(pw);
+        pw->DirectManipulation.Gesture = PW_DM_GESTURE_PINCH;
+        PWDMSendMagnifyEvent(pw, PW_EVENT_MOUSE_MAGNIFY_BEGIN, Magnification);
+    }
+    else if (IsScaling)
+    {
+        PWDMSendMagnifyEvent(pw, PW_EVENT_MOUSE_MAGNIFY_UPDATE, Magnification);
+    }
+    else if (pw->DirectManipulation.Gesture != PW_DM_GESTURE_PINCH && (DeltaX != 0 || DeltaY != 0))
+    {
+        enum PWEventType Type = PW_EVENT_MOUSE_TOUCHPAD_MOVE;
+        if (pw->DirectManipulation.Gesture == PW_DM_GESTURE_NONE)
+            Type = PW_EVENT_MOUSE_TOUCHPAD_BEGIN;
+        pw->DirectManipulation.Gesture = PW_DM_GESTURE_PAN;
+        PWDMSendEvent(pw, Type, DeltaX, DeltaY, 0);
+    }
+    return S_OK;
+}
+
+void PWDMUninit(CplugWindow* pw, HWND hwnd)
+{
+    if (pw->DirectManipulation.pViewport)
+    {
+        IDirectManipulationViewport* pViewport = pw->DirectManipulation.pViewport;
+        pViewport->lpVtbl->Stop(pViewport);
+        if (pw->DirectManipulation.HandlerCookie)
+            pViewport->lpVtbl->RemoveEventHandler(pViewport, pw->DirectManipulation.HandlerCookie);
+        pViewport->lpVtbl->Abandon(pViewport);
+        pViewport->lpVtbl->Release(pViewport);
+        pw->DirectManipulation.pViewport     = NULL;
+        pw->DirectManipulation.HandlerCookie = 0;
+    }
+    if (pw->DirectManipulation.pUpdateManager)
+    {
+        pw->DirectManipulation.pUpdateManager->lpVtbl->Release(pw->DirectManipulation.pUpdateManager);
+        pw->DirectManipulation.pUpdateManager = NULL;
+    }
+    if (pw->DirectManipulation.pManager)
+    {
+        pw->DirectManipulation.pManager->lpVtbl->Deactivate(pw->DirectManipulation.pManager, hwnd);
+        pw->DirectManipulation.pManager->lpVtbl->Release(pw->DirectManipulation.pManager);
+        pw->DirectManipulation.pManager = NULL;
+    }
+}
+
+// Requires COM to be initialised on this thread
+void PWDMInit(CplugWindow* pw)
+{
+    pw->DirectManipulation.lpVtbl                       = &pw->DirectManipulation.Vtbl;
+    pw->DirectManipulation.Vtbl.QueryInterface          = PWDM_QueryInterface;
+    pw->DirectManipulation.Vtbl.AddRef                  = PWDM_AddRef;
+    pw->DirectManipulation.Vtbl.Release                 = PWDM_Release;
+    pw->DirectManipulation.Vtbl.OnViewportStatusChanged = PWDM_OnViewportStatusChanged;
+    pw->DirectManipulation.Vtbl.OnViewportUpdated       = PWDM_OnViewportUpdated;
+    pw->DirectManipulation.Vtbl.OnContentUpdated        = PWDM_OnContentUpdated;
+    pw->DirectManipulation.RefCount                     = 1;
+    pw->DirectManipulation.LastScale                    = 1;
+
+    const BOOL             IsWindows8OrGreater =
+        pw->OsVersionInfo.dwMajorVersion > 6 || (pw->OsVersionInfo.dwMajorVersion == 6 && pw->OsVersionInfo.dwMinorVersion >= 2);
+    if (!IsWindows8OrGreater)
+        return;
+
+    if (PW_GetPointerType == NULL)
+        *(FARPROC*)&PW_GetPointerType = GetProcAddress(GetModuleHandleW(L"user32"), "GetPointerType");
+    if (PW_GetPointerType == NULL)
+        return;
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nn-directmanipulation-idirectmanipulationmanager
+    HRESULT hr = CoCreateInstance(
+        &PW_CLSID_DirectManipulationManager,
+        NULL,
+        CLSCTX_INPROC_SERVER,
+        &PW_IID_IDirectManipulationManager,
+        (void**)&pw->DirectManipulation.pManager);
+    IDirectManipulationManager* pManager = pw->DirectManipulation.pManager;
+
+    if (SUCCEEDED(hr))
+        hr = pManager->lpVtbl->GetUpdateManager(
+            pManager,
+            &PW_IID_IDirectManipulationUpdateManager,
+            (void**)&pw->DirectManipulation.pUpdateManager);
+    if (SUCCEEDED(hr))
+        hr = pManager->lpVtbl->CreateViewport(
+            pManager,
+            NULL,
+            pw->hwnd,
+            &PW_IID_IDirectManipulationViewport,
+            (void**)&pw->DirectManipulation.pViewport);
+
+    IDirectManipulationViewport* pViewport = pw->DirectManipulation.pViewport;
+    if (SUCCEEDED(hr))
+    {
+        // Pinch is configured without inertia, so the zoom stops as soon as your fingers do, like macOS
+        // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/ne-directmanipulation-directmanipulation_configuration
+        const DIRECTMANIPULATION_CONFIGURATION Config =
+            DIRECTMANIPULATION_CONFIGURATION_INTERACTION | DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_X |
+            DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_Y | DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA |
+            DIRECTMANIPULATION_CONFIGURATION_SCALING;
+        hr = pViewport->lpVtbl->ActivateConfiguration(pViewport, Config);
+    }
+    // We call Update() ourselves every tick. See WM_TIMER
+    if (SUCCEEDED(hr))
+        hr = pViewport->lpVtbl->SetViewportOptions(pViewport, DIRECTMANIPULATION_VIEWPORT_OPTIONS_MANUALUPDATE);
+    if (SUCCEEDED(hr))
+        hr = pViewport->lpVtbl->AddEventHandler(
+            pViewport,
+            pw->hwnd,
+            (IDirectManipulationViewportEventHandler*)&pw->DirectManipulation,
+            &pw->DirectManipulation.HandlerCookie);
+    if (SUCCEEDED(hr))
+    {
+        RECT Rect = {0, 0, PW_DM_VIEWPORT_SIZE, PW_DM_VIEWPORT_SIZE};
+        hr        = pViewport->lpVtbl->SetViewportRect(pViewport, &Rect);
+    }
+    if (SUCCEEDED(hr))
+        hr = pManager->lpVtbl->Activate(pManager, pw->hwnd);
+    if (SUCCEEDED(hr))
+        hr = pViewport->lpVtbl->Enable(pViewport);
+
+    PW_ASSERT(SUCCEEDED(hr));
+    if (FAILED(hr))
+        PWDMUninit(pw, pw->hwnd);
+}
+
 void pw_set_clipboard_text(void* _pw, const char* text)
 {
     // cplug_log("pw_set_clipboard_text => %p %p %p", _pw, text);
@@ -1219,6 +1557,9 @@ void pw_uninit(CplugWindow* pw, HWND hwnd)
         pw->hCallWndHook = NULL;
     }
 
+    // Before destroying the GUI. Stopping the viewport may end a gesture & send events
+    PWDMUninit(pw, hwnd);
+
     HWND PrevValue = pw->hwnd;
     pw->hwnd       = hwnd; // just in case this is needed within pw_destroy_gui()
     pw_destroy_gui(pw->gui);
@@ -1356,6 +1697,23 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         PWSendEvent(&e);
         return 0;
     }
+    // Sent when a touch screen or touchpad contact first lands on our window, while Direct Manipulation is active
+    // https://learn.microsoft.com/en-us/previous-versions/windows/desktop/inputmsg/dm-pointerhittest
+    case DM_POINTERHITTEST:
+    {
+        // Only take precision touchpad contacts. Touch screens & pens keep their default behaviour
+        const UINT32 PointerId   = GET_POINTERID_WPARAM(wParam);
+        DWORD        PointerType = 0;
+        if (pw && pw->DirectManipulation.pViewport && PW_GetPointerType(PointerId, &PointerType) &&
+            PointerType == PW_PT_TOUCHPAD)
+        {
+            IDirectManipulationViewport* pViewport = pw->DirectManipulation.pViewport;
+            HRESULT                      hr        = pViewport->lpVtbl->SetContact(pViewport, PointerId);
+            PW_ASSERT(SUCCEEDED(hr));
+            return 0;
+        }
+        break;
+    }
     // https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mouseleave
     case WM_MOUSELEAVE:
     {
@@ -1451,6 +1809,15 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             MSG Msg;
             while (PeekMessageW(&Msg, hwnd, WM_MOUSEFIRST, WM_MOUSELAST, PM_REMOVE))
                 DispatchMessageW(&Msg);
+        }
+        // Runs Direct Manipulation's callbacks, which send touchpad & magnify events
+        // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationupdatemanager-update
+        if (pw->DirectManipulation.pUpdateManager)
+        {
+            HRESULT hr = pw->DirectManipulation.pUpdateManager->lpVtbl->Update(
+                pw->DirectManipulation.pUpdateManager,
+                NULL);
+            PW_ASSERT(SUCCEEDED(hr));
         }
 #ifdef PW_DX11
         BOOL ShouldResizeBuffers = FALSE;
@@ -2088,6 +2455,16 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     pw->DropSource.Vtbl.GiveFeedback      = PWDropSource_GiveFeedback;
     pw->DropSource.RefCount               = 1;
 
+    // https://stackoverflow.com/questions/29944745/get-osversion-in-windows-using-c
+    // https://stackoverflow.com/questions/71250924/how-to-get-osversioninfo-for-windows-11
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_osversioninfoexw
+    pw->OsVersionInfo.dwOSVersionInfoSize = sizeof(osInfo);
+
+    static HRESULT(__stdcall * RtlGetVersion)(OSVERSIONINFOEXW*);
+    *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlGetVersion");
+    if (RtlGetVersion != NULL)
+        RtlGetVersion(&pw->OsVersionInfo);
+
     // https://stackoverflow.com/questions/1695288/getting-the-current-time-in-milliseconds-from-the-system-clock-in-windows#1695332
     UINT64   EpochTimeMs = 0;
     FILETIME filetime;
@@ -2153,6 +2530,8 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     hr = RegisterDragDrop(pw->hwnd, (IDropTarget*)&pw->DropTarget);
     PW_ASSERT(SUCCEEDED(hr));
 
+    PWDMInit(pw);
+
 #ifdef PW_DX11
     pw->NextWidth  = Info.init_size.width;
     pw->NextHeight = Info.init_size.height;
@@ -2163,20 +2542,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
 
     DWORD DisplayFrequency = pw_get_monitor_display_frequency(pw->LastMonitor);
 
-    // https://stackoverflow.com/questions/29944745/get-osversion-in-windows-using-c
-    // https://stackoverflow.com/questions/71250924/how-to-get-osversioninfo-for-windows-11
-    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_osversioninfoexw
-    HRESULT(__stdcall * RtlGetVersion)(OSVERSIONINFOEXW*);
-    *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlGetVersion");
-
-    if (RtlGetVersion != NULL)
-    {
-        OSVERSIONINFOEXW osInfo;
-        osInfo.dwOSVersionInfoSize = sizeof(osInfo);
-        RtlGetVersion(&osInfo);
-
-        pw->IsWindows10OrGreater = osInfo.dwMajorVersion >= 10;
-    }
+    pw->IsWindows10OrGreater = pw->OsVersionInfo.dwMajorVersion >= 10;
     // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/ns-dxgi1_2-dxgi_swap_chain_desc1
     // https://learn.microsoft.com/en-us/windows/win32/api/dxgi/ne-dxgi-dxgi_swap_chain_flag
     DXGI_SWAP_CHAIN_DESC1* pSwapDesc = &pw->SwapChainDesc1;
