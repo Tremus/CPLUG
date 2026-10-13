@@ -744,6 +744,33 @@ uint32_t PWGetKeyModifiers()
 // Based on Chromium's DirectManipulationHelper
 // https://learn.microsoft.com/en-us/windows/win32/directmanipulation/direct-manipulation-portal
 
+// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getrawinputdevicelist
+// Plenty of old budget laptops won't actually support DirectManipulation, even though many of the DirectManipulation
+// APIs will return S_OK on init. Old drivers like Elan or Synaptics (I've only tested this on a laptop with Synaptics
+// dirvers) turn gestures into WM_MOUSEWHEEL events. Two finger scrolling changes the wParam y offset, and pinch zoom
+// will sneakily set the ctrl modifer, which in most apps is the convention for zoom with a mouse wheel. It's janky.
+static BOOL PWHasPrecisionTouchpad()
+{
+    RAWINPUTDEVICELIST List[64] = {0};
+    UINT               Num = ARRAYSIZE(List);
+    UINT               Count = GetRawInputDeviceList(List, &Num, sizeof(RAWINPUTDEVICELIST));
+    if (Count == (UINT)-1)
+        return FALSE;
+
+    for (UINT i = 0; i < Count; i++)
+    {
+        if (List[i].dwType != RIM_TYPEHID)
+            continue;
+        RID_DEVICE_INFO Info = {.cbSize = sizeof(Info)};
+        UINT            Size = sizeof(Info);
+        if (GetRawInputDeviceInfoW(List[i].hDevice, RIDI_DEVICEINFO, &Info, &Size) == (UINT)-1)
+            continue;
+        if (Info.hid.usUsagePage == 0x0D && Info.hid.usUsage == 0x05)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static inline CplugWindow* PWDMShiftPtr(IDirectManipulationViewportEventHandler* pHandler)
 {
     CplugWindow* pw = (CplugWindow*)((char*)pHandler - offsetof(CplugWindow, DirectManipulation));
@@ -790,7 +817,7 @@ static void PWDMEndGesture(CplugWindow* pw)
 }
 
 HRESULT STDMETHODCALLTYPE
-PWDM_QueryInterface(IDirectManipulationViewportEventHandler* This, REFIID riid, void** ppvObject)
+PWDirectManipulation_QueryInterface(IDirectManipulationViewportEventHandler* This, REFIID riid, void** ppvObject)
 {
     if (0 == memcmp(riid, &PW_IID_IDirectManipulationViewportEventHandler, sizeof(*riid)) ||
         0 == memcmp(riid, &IID_IUnknown, sizeof(*riid)))
@@ -803,20 +830,20 @@ PWDM_QueryInterface(IDirectManipulationViewportEventHandler* This, REFIID riid, 
     return E_NOINTERFACE;
 }
 
-ULONG STDMETHODCALLTYPE PWDM_AddRef(IDirectManipulationViewportEventHandler* This)
+ULONG STDMETHODCALLTYPE PWDirectManipulation_AddRef(IDirectManipulationViewportEventHandler* This)
 {
     CplugWindow* pw = PWDMShiftPtr(This);
     return _InlineInterlockedAdd(&pw->DirectManipulation.RefCount, 1);
 }
 
-ULONG STDMETHODCALLTYPE PWDM_Release(IDirectManipulationViewportEventHandler* This)
+ULONG STDMETHODCALLTYPE PWDirectManipulation_Release(IDirectManipulationViewportEventHandler* This)
 {
     CplugWindow* pw = PWDMShiftPtr(This);
     return _InlineInterlockedAdd(&pw->DirectManipulation.RefCount, -1);
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationviewporteventhandler-onviewportstatuschanged
-HRESULT STDMETHODCALLTYPE PWDM_OnViewportStatusChanged(
+HRESULT STDMETHODCALLTYPE PWDirectManipulation_OnViewportStatusChanged(
     IDirectManipulationViewportEventHandler* This,
     IDirectManipulationViewport*             viewport,
     DIRECTMANIPULATION_STATUS                current,
@@ -830,7 +857,7 @@ HRESULT STDMETHODCALLTYPE PWDM_OnViewportStatusChanged(
     PWDMEndGesture(pw);
 
     // Return the content to identity, so the transform doesn't drift or hit zoom limits over many gestures.
-    // Updates this causes are ignored until the content reaches identity. See PWDM_OnContentUpdated()
+    // Updates this causes are ignored until the content reaches identity. See PWDirectManipulation_OnContentUpdated()
     const BOOL IsIdentity =
         PWDMIsIdentity(pw->DirectManipulation.LastScale, pw->DirectManipulation.LastX, pw->DirectManipulation.LastY);
     if (current == DIRECTMANIPULATION_READY && !IsIdentity && !pw->DirectManipulation.Resetting)
@@ -846,13 +873,13 @@ HRESULT STDMETHODCALLTYPE PWDM_OnViewportStatusChanged(
 }
 
 HRESULT STDMETHODCALLTYPE
-PWDM_OnViewportUpdated(IDirectManipulationViewportEventHandler* This, IDirectManipulationViewport* viewport)
+PWDirectManipulation_OnViewportUpdated(IDirectManipulationViewportEventHandler* This, IDirectManipulationViewport* viewport)
 {
     return S_OK;
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationviewporteventhandler-oncontentupdated
-HRESULT STDMETHODCALLTYPE PWDM_OnContentUpdated(
+HRESULT STDMETHODCALLTYPE PWDirectManipulation_OnContentUpdated(
     IDirectManipulationViewportEventHandler* This,
     IDirectManipulationViewport*             viewport,
     IDirectManipulationContent*              content)
@@ -940,13 +967,15 @@ void PWDMUninit(CplugWindow* pw, HWND hwnd)
 // Requires COM to be initialised on this thread
 void PWDMInit(CplugWindow* pw)
 {
+    cplug_log("DM: precision touchpad present = %s", PWHasPrecisionTouchpad() ? "TRUE" : "FALSE");
+
     pw->DirectManipulation.lpVtbl                       = &pw->DirectManipulation.Vtbl;
-    pw->DirectManipulation.Vtbl.QueryInterface          = PWDM_QueryInterface;
-    pw->DirectManipulation.Vtbl.AddRef                  = PWDM_AddRef;
-    pw->DirectManipulation.Vtbl.Release                 = PWDM_Release;
-    pw->DirectManipulation.Vtbl.OnViewportStatusChanged = PWDM_OnViewportStatusChanged;
-    pw->DirectManipulation.Vtbl.OnViewportUpdated       = PWDM_OnViewportUpdated;
-    pw->DirectManipulation.Vtbl.OnContentUpdated        = PWDM_OnContentUpdated;
+    pw->DirectManipulation.Vtbl.QueryInterface          = PWDirectManipulation_QueryInterface;
+    pw->DirectManipulation.Vtbl.AddRef                  = PWDirectManipulation_AddRef;
+    pw->DirectManipulation.Vtbl.Release                 = PWDirectManipulation_Release;
+    pw->DirectManipulation.Vtbl.OnViewportStatusChanged = PWDirectManipulation_OnViewportStatusChanged;
+    pw->DirectManipulation.Vtbl.OnViewportUpdated       = PWDirectManipulation_OnViewportUpdated;
+    pw->DirectManipulation.Vtbl.OnContentUpdated        = PWDirectManipulation_OnContentUpdated;
     pw->DirectManipulation.RefCount                     = 1;
     pw->DirectManipulation.LastScale                    = 1;
 
@@ -1691,10 +1720,11 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEWHEEL:
     {
         PWEvent e = PWTranslateMouseEvent(pw, wParam, lParam);
-        e.type    = PW_EVENT_MOUSE_SCROLL_WHEEL;
+        e.type    = PW_EVENT_MOUSE_WHEEL;
         e.mouse.x = 0;
         e.mouse.y = GET_WHEEL_DELTA_WPARAM(wParam);
         PWSendEvent(&e);
+        cplug_log("WM_MOUSEWHEEL: %f %f 0x%x", e.mouse.x, e.mouse.y, e.mouse.modifiers);
         return 0;
     }
     // Sent when a touch screen or touchpad contact first lands on our window, while Direct Manipulation is active
@@ -2458,7 +2488,7 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     // https://stackoverflow.com/questions/29944745/get-osversion-in-windows-using-c
     // https://stackoverflow.com/questions/71250924/how-to-get-osversioninfo-for-windows-11
     // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_osversioninfoexw
-    pw->OsVersionInfo.dwOSVersionInfoSize = sizeof(osInfo);
+    pw->OsVersionInfo.dwOSVersionInfoSize = sizeof(pw->OsVersionInfo);
 
     static HRESULT(__stdcall * RtlGetVersion)(OSVERSIONINFOEXW*);
     *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleW(L"ntdll"), "RtlGetVersion");
