@@ -656,10 +656,11 @@ enum PWEventType
     PW_EVENT_MOUSE_ENTER,
     PW_EVENT_MOUSE_MOVE,
     PW_EVENT_MOUSE_WHEEL,
-    PW_EVENT_MOUSE_TOUCHPAD_BEGIN, // NOTE: touchpad not yet implemented on Windows
+    // NOTE: Windows requires 8+ & a precision touchpad for touchpad scrolling and magnifying
+    PW_EVENT_MOUSE_TOUCHPAD_BEGIN,
     PW_EVENT_MOUSE_TOUCHPAD_MOVE,
     PW_EVENT_MOUSE_TOUCHPAD_END,
-    PW_EVENT_MOUSE_MAGNIFY_BEGIN, // Trackpad pinch. NOTE: magnify not yet implemented on Windows
+    PW_EVENT_MOUSE_MAGNIFY_BEGIN, // Trackpad pinch
     PW_EVENT_MOUSE_MAGNIFY_UPDATE,
     PW_EVENT_MOUSE_MAGNIFY_END,
     PW_EVENT_MOUSE_LEFT_DOWN,
