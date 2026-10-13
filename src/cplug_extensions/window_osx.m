@@ -625,7 +625,7 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
         e.type             = PW_EVENT_MOUSE_TOUCHPAD_MOVE;
         if (phase & NSEventPhaseBegan)
             e.type = PW_EVENT_MOUSE_TOUCHPAD_BEGIN;
-        else if (phase & NSEventPhaseEnded)
+        else if (phase & (NSEventPhaseEnded | NSEventPhaseCancelled))
             e.type = PW_EVENT_MOUSE_TOUCHPAD_END;
         e.mouse.x = [event scrollingDeltaX];
         e.mouse.y = [event scrollingDeltaY];
@@ -640,6 +640,21 @@ PWEvent pwTranslateMouseEvent(PW_CLASS* pw, NSEvent* event)
         e.mouse.x = CGEventGetIntegerValueField(cgevent, kCGScrollWheelEventDeltaAxis2) * 120;
         e.mouse.y = CGEventGetIntegerValueField(cgevent, kCGScrollWheelEventDeltaAxis1) * 120;
     }
+    pwSendEvent(&e);
+}
+
+- (void)magnifyWithEvent:(NSEvent*)event
+{
+    PWEvent e = pwTranslateMouseEvent(self, event);
+
+    NSEventPhase phase = [event phase];
+    e.type             = PW_EVENT_MOUSE_MAGNIFY_UPDATE;
+    if (phase & NSEventPhaseBegan)
+        e.type = PW_EVENT_MOUSE_MAGNIFY_BEGIN;
+    else if (phase & (NSEventPhaseEnded | NSEventPhaseCancelled))
+        e.type = PW_EVENT_MOUSE_MAGNIFY_END;
+    e.mouse.magnification = [event magnification];
+
     pwSendEvent(&e);
 }
 

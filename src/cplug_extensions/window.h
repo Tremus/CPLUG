@@ -659,6 +659,9 @@ enum PWEventType
     PW_EVENT_MOUSE_TOUCHPAD_BEGIN, // NOTE: touchpad not yet implemented on Windows
     PW_EVENT_MOUSE_TOUCHPAD_MOVE,
     PW_EVENT_MOUSE_TOUCHPAD_END,
+    PW_EVENT_MOUSE_MAGNIFY_BEGIN, // Trackpad pinch. NOTE: magnify not yet implemented on Windows
+    PW_EVENT_MOUSE_MAGNIFY_UPDATE,
+    PW_EVENT_MOUSE_MAGNIFY_END,
     PW_EVENT_MOUSE_LEFT_DOWN,
     PW_EVENT_MOUSE_RIGHT_DOWN,
     PW_EVENT_MOUSE_MIDDLE_DOWN,
@@ -710,6 +713,9 @@ typedef struct PWEvent
         // PW_EVENT_MOUSE_RIGHT_UP
         // PW_EVENT_MOUSE_MIDDLE_DOWN
         // PW_EVENT_MOUSE_MIDDLE_UP
+        // PW_EVENT_MOUSE_MAGNIFY_BEGIN
+        // PW_EVENT_MOUSE_MAGNIFY_UPDATE
+        // PW_EVENT_MOUSE_MAGNIFY_END
         struct
         {
             float    x;
@@ -717,6 +723,9 @@ typedef struct PWEvent
             uint32_t modifiers; // Flags. See PW_MOD_XXX
             uint32_t time_ms;
             uint32_t double_click_interval_ms;
+            // PW_EVENT_MOUSE_MAGNIFY_XXX only. x & y are the mouse position (zoom anchor).
+            // Delta since last event, apply as: scale *= 1 + magnification
+            float magnification;
         } mouse;
 
         // PW_EVENT_KEY_DOWN
