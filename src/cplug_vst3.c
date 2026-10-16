@@ -362,6 +362,7 @@ typedef struct VST3Plugin
         Steinberg_Vst_IEditControllerVtbl  base;
         cplug_atomic_i32                   refcounter;
         Steinberg_Vst_IComponentHandler*   componentHandler;
+        Steinberg_Vst_IComponentHandler2*  componentHandler2;
     } controller;
 
     // NOTE: You're not allowed to simply receive MIDI data
@@ -582,9 +583,18 @@ static void _cplug_vst3_rescan(CplugHostContext* ctx, uint32_t flags)
 
     Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
     CPLUG_LOG_ASSERT(handler != NULL);
-    if (handler)
+    if (vst_flags && handler)
     {
         handler->lpVtbl->restartComponent(handler, vst_flags);
+    }
+
+    if (flags & CPLUG_FLAG_RESCAN_MARK_DIRTY)
+    {
+        Steinberg_Vst_IComponentHandler2* handler2 = vst3->controller.componentHandler2;
+        if (handler2)
+        {
+            handler2->lpVtbl->setDirty(handler2, true);
+        }
     }
 }
 
@@ -1456,6 +1466,7 @@ VST3Controller_setComponentHandler(void* self, Steinberg_Vst_IComponentHandler* 
     // NOTE: Ableton 10, FL Studio & Cubase have been spotted trying to pass NULL here.
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
     _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->controller.componentHandler, (Steinberg_FUnknown*)handler);
+    handler->lpVtbl->queryInterface(handler, Steinberg_Vst_IComponentHandler2_iid, (void **)&vst3->controller.componentHandler2);
     return Steinberg_kResultOk;
 }
 
