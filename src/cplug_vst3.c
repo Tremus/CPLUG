@@ -1466,7 +1466,12 @@ VST3Controller_setComponentHandler(void* self, Steinberg_Vst_IComponentHandler* 
     // NOTE: Ableton 10, FL Studio & Cubase have been spotted trying to pass NULL here.
     VST3Plugin* const vst3 = _cplug_pointerShiftController(self);
     _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->controller.componentHandler, (Steinberg_FUnknown*)handler);
-    handler->lpVtbl->queryInterface(handler, Steinberg_Vst_IComponentHandler2_iid, (void **)&vst3->controller.componentHandler2);
+
+    // Currently Bitwig 5, Ableton Live 11 and Reaper are confirmed to support this.
+    // FL Studio (or at least FL20) doesn't seem to have it though.
+    vst3->controller.componentHandler2 = NULL;
+    if (handler)
+        handler->lpVtbl->queryInterface(handler, Steinberg_Vst_IComponentHandler2_iid, (void **)&vst3->controller.componentHandler2);
     return Steinberg_kResultOk;
 }
 
