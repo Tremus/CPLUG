@@ -796,7 +796,7 @@ struct
     IMMDevice*           pIMMDevice;
     CplugAudioDeviceID   CurrentDeviceID;
     // TRUE unless the user picked a specific device. Audio then moves to the new default whenever it changes
-    BOOL                 FollowDefaultDevice;
+    BOOL FollowDefaultDevice;
     // Process
     IAudioClient*       pIAudioClient;
     IAudioRenderClient* pIAudioRenderClient;
@@ -1508,22 +1508,22 @@ void Cplug_Audio_SetDevice(int deviceIdx)
     CPLUG_COM_RELEASE(g_Audio.pIMMDevice);
     g_Audio.CurrentDeviceID = (CplugAudioDeviceID){0};
 
-    if (deviceIdx >= 0)
+    if (deviceIdx >= 0 && (UINT)deviceIdx < g_Audio.NumDevices)
     {
-        IMMDeviceCollection* pCollection = NULL;
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdevice
+        hr = g_Audio.pIMMDeviceEnumerator->lpVtbl->GetDevice(
+            g_Audio.pIMMDeviceEnumerator,
+            g_Audio.Devices[deviceIdx].DeviceID.Buffer,
+            &g_Audio.pIMMDevice);
 
-        hr = g_Audio.pIMMDeviceEnumerator->lpVtbl
-                 ->EnumAudioEndpoints(g_Audio.pIMMDeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &pCollection);
-        cplug_assert(hr == S_OK);
-        cplug_assert(pCollection != NULL);
-
-        UINT numDevices = 0;
-        pCollection->lpVtbl->GetCount(pCollection, &numDevices);
-
-        if ((UINT)deviceIdx < numDevices)
-            pCollection->lpVtbl->Item(pCollection, (UINT)deviceIdx, &g_Audio.pIMMDevice);
-
-        CPLUG_COM_RELEASE(pCollection);
+        // GetDevice also returns unplugged/disabled devices. Fall back to the default if it's gone since the scan
+        DWORD State = 0;
+        if (hr == S_OK && g_Audio.pIMMDevice)
+            hr = g_Audio.pIMMDevice->lpVtbl->GetState(g_Audio.pIMMDevice, &State);
+        if (hr != S_OK || State != DEVICE_STATE_ACTIVE)
+        {
+            CPLUG_COM_RELEASE(g_Audio.pIMMDevice);
+        }
     }
 
     g_Audio.FollowDefaultDevice = g_Audio.pIMMDevice == NULL;
