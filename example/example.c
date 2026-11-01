@@ -542,6 +542,7 @@ typedef struct MyGUI
     xcb_window_t      xcbParent; // 0 while unparented. The fd and timer are registered while parented
     xcb_gcontext_t    xcbGC;
     uint32_t          timerId;
+    bool              resizing; // Dragging the resize corner
 #endif
 
     uint32_t* img;
@@ -578,7 +579,7 @@ static void drawGUI(MyGUI* gui)
     drawRect(gui, 0, gui->width, 0, gui->height, bg_col, bg_col);
     drawRect(gui, 10, 40, 10, 40, param_col, bg_col);
 
-    double v = cplug_getParameterValue(gui->plugin, 'pf32');
+    double v = gui->plugin->paramValuesMain[get_param_index(gui->plugin, 'pf32')];
     v        = cplug_normaliseParameterValue(gui->plugin, 'pf32', v);
 
     drawRect(gui, 10, 40, 10 + (uint32_t)(30.0 * (1.0 - v)), 40, param_col, param_col);
@@ -593,7 +594,7 @@ static void handleMouseDown(MyGUI* gui, int x, int y)
         gui->dragStartX    = x;
         gui->dragStartY    = y;
 
-        double v                        = cplug_getParameterValue(gui->plugin, 'pf32');
+        double v                        = gui->plugin->paramValuesMain[get_param_index(gui->plugin, 'pf32')];
         gui->dragStartParamNormalised   = cplug_normaliseParameterValue(gui->plugin, 'pf32', v);
         gui->dragCurrentParamNormalised = gui->dragStartParamNormalised;
 
@@ -844,14 +845,12 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 #elif defined(__linux__)
 #include <stdlib.h>
 
-#define MY_TIMER_PERIOD_MS 10
+#define MY_TIMER_PERIOD_MS     10
+#define RESIZE_CORNER_SIZE     16
 // Size of an xcb_put_image request without its pixels
 #define PUT_IMAGE_HEADER_BYTES 24
 
-static xcb_screen_t* getScreen(MyGUI* gui)
-{
-    return xcb_setup_roots_iterator(xcb_get_setup(gui->xcbConnection)).data;
-}
+static xcb_screen_t* getScreen(MyGUI* gui) { return xcb_setup_roots_iterator(xcb_get_setup(gui->xcbConnection)).data; }
 
 static void presentGUI(MyGUI* gui)
 {
@@ -884,7 +883,9 @@ static void presentGUI(MyGUI* gui)
 
 static void pumpEvents(MyGUI* gui)
 {
-    bool                 needRedraw = false;
+    bool                 needRedraw  = false;
+    bool                 needResize  = false;
+    uint32_t             resizeWidth = 0, resizeHeight = 0;
     xcb_generic_event_t* event;
     while ((event = xcb_poll_for_event(gui->xcbConnection)))
     {
@@ -893,10 +894,61 @@ static void pumpEvents(MyGUI* gui)
         case XCB_EXPOSE:
             needRedraw = true;
             break;
+        // The server grabs the pointer between a press and its release, so a drag keeps reporting outside the window
+        case XCB_BUTTON_PRESS:
+        {
+            xcb_button_press_event_t* press = (xcb_button_press_event_t*)event;
+            if (press->detail != XCB_BUTTON_INDEX_1)
+                break;
+            // Hosts on Linux leave resizing to the plugin, so an invisible corner in the bottom right asks for new
+            // sizes
+            if (press->event_x >= (int)gui->width - RESIZE_CORNER_SIZE &&
+                press->event_y >= (int)gui->height - RESIZE_CORNER_SIZE)
+                gui->resizing = true;
+            else
+                handleMouseDown(gui, press->event_x, press->event_y);
+            break;
+        }
+        case XCB_BUTTON_RELEASE:
+        {
+            xcb_button_release_event_t* release = (xcb_button_release_event_t*)event;
+            if (release->detail == XCB_BUTTON_INDEX_1)
+            {
+                gui->resizing = false;
+                handleMouseUp(gui);
+            }
+            break;
+        }
+        case XCB_MOTION_NOTIFY:
+        {
+            xcb_motion_notify_event_t* motion = (xcb_motion_notify_event_t*)event;
+            if (gui->resizing)
+            {
+                // The window's top left doesn't move, so the pointer's position is the size it wants
+                needResize   = true;
+                resizeWidth  = motion->event_x > 0 ? motion->event_x : 0;
+                resizeHeight = motion->event_y > 0 ? motion->event_y : 0;
+                break;
+            }
+            handleMouseMove(gui, motion->event_x, motion->event_y);
+            if (gui->mouseDragging)
+                needRedraw = true;
+            break;
+        }
         default:
             break;
         }
         free(event);
+    }
+    // Each request is a round trip through the host, so only the last motion in a batch asks for a size
+    if (needResize)
+    {
+        cplug_checkSize(gui, &resizeWidth, &resizeHeight);
+        if (resizeWidth != gui->width || resizeHeight != gui->height)
+        {
+            CplugHostContext* host = gui->plugin->hostContext;
+            host->requestResize(host, resizeWidth, resizeHeight);
+        }
     }
     if (needRedraw)
         presentGUI(gui);
@@ -926,9 +978,11 @@ void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin)
 
     // Created under the root window and reparented in cplug_setParent, like the Windows example uses the desktop
     // The visual is explicit because the host's window may not use the root's, which means a colormap and border too
-    xcb_screen_t*  screen      = getScreen(gui);
-    const uint32_t valueMask   = XCB_CW_BORDER_PIXEL | XCB_CW_EVENT_MASK | XCB_CW_COLORMAP;
-    const uint32_t valueList[] = {0, XCB_EVENT_MASK_EXPOSURE, screen->default_colormap};
+    xcb_screen_t*  screen    = getScreen(gui);
+    const uint32_t valueMask = XCB_CW_BORDER_PIXEL | XCB_CW_EVENT_MASK | XCB_CW_COLORMAP;
+    const uint32_t eventMask = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE |
+                               XCB_EVENT_MASK_POINTER_MOTION;
+    const uint32_t valueList[] = {0, eventMask, screen->default_colormap};
 
     gui->xcbWindow = xcb_generate_id(gui->xcbConnection);
     xcb_create_window(
@@ -1020,8 +1074,19 @@ void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
     *width     = gui->width;
     *height    = gui->height;
 }
-// TODO: resize the window and pixel buffer
-bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height) { return false; }
+bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
+{
+    MyGUI* gui  = (MyGUI*)userGUI;
+    gui->width  = width;
+    gui->height = height;
+    gui->img    = (uint32_t*)realloc(gui->img, width * height * sizeof(*gui->img));
+
+    const uint32_t size[] = {width, height};
+    xcb_configure_window(gui->xcbConnection, gui->xcbWindow, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, size);
+    // A resize discards the window's contents, so draw now instead of showing garbage until the Expose arrives
+    presentGUI(gui);
+    return true;
+}
 
 void cplug_onTimer(void* userPlugin, uint32_t timerId)
 {
