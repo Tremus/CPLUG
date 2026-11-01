@@ -59,6 +59,11 @@
 #define CPLUG_MAX_NUM_CHANNELS 2
 _STATIC_ASSERT(CPLUG_DEFAULT_BLOCK_SIZE <= CPLUG_MAX_BLOCK_SIZE);
 
+// Posted by the audio thread when the device is invalidated or stops firing events. The main thread restarts audio
+#define CPLUG_WM_RESTART_AUDIO (WM_APP + 1)
+// How long the audio thread waits for a device event before giving up on the device
+#define CPLUG_AUDIO_EVENT_TIMEOUT_MS 2000
+
 #ifdef __cplusplus
 // In cpp, this should be a "reference"
 #define CPLUG_WTF_IS_A_REFERENCE(obj) obj
@@ -1088,6 +1093,9 @@ void* Cplug_Audio_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t
 // [Audio Thread]
 DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
 {
+    // https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex
+    HRESULT hrCoInit = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
     // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avsetmmthreadcharacteristicsw
     DWORD  TaskIndex             = 0;
     HANDLE ThreadCharacteristics = AvSetMmThreadCharacteristicsW(L"Pro Audio", &TaskIndex);
@@ -1133,16 +1141,29 @@ DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
 
     // The first pass pre-fills the whole buffer before the client is started
     BOOL started = FALSE;
+    // Set when the device is lost (eg. unplugged, or its format changed in Windows settings) or stalls
+    BOOL needsRestart = FALSE;
     while (!g_Audio.FlagExitAudioThread)
     {
         UINT32 blockSize = g_Audio.ProcessBufferMaxFrames;
         UINT32 padding   = 0;
         if (started)
         {
-            WaitForSingleObject(g_Audio.hAudioEvent, INFINITE);
+            DWORD waitResult = WaitForSingleObject(g_Audio.hAudioEvent, CPLUG_AUDIO_EVENT_TIMEOUT_MS);
+            if (waitResult != WAIT_OBJECT_0)
+            {
+                fprintf(stderr, "[WARNING] Audio device stopped responding\n");
+                needsRestart = TRUE;
+                break;
+            }
 
             HRESULT hr = g_Audio.pIAudioClient->lpVtbl->GetCurrentPadding(g_Audio.pIAudioClient, &padding);
-
+            // https://learn.microsoft.com/en-us/windows/win32/coreaudio/recovering-from-an-invalid-device-error
+            if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+            {
+                needsRestart = TRUE;
+                break;
+            }
             if (FAILED(hr))
                 continue;
 
@@ -1156,6 +1177,11 @@ DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
             BYTE*   outBuffer = NULL;
             HRESULT hr =
                 g_Audio.pIAudioRenderClient->lpVtbl->GetBuffer(g_Audio.pIAudioRenderClient, blockSize, &outBuffer);
+            if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+            {
+                needsRestart = TRUE;
+                break;
+            }
             cplug_assert(outBuffer != NULL);
             if (SUCCEEDED(hr))
             {
@@ -1254,25 +1280,24 @@ DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
     BOOL ok = AvRevertMmThreadCharacteristics(ThreadCharacteristics);
     cplug_assert(ok);
 
+    if (SUCCEEDED(hrCoInit))
+        CoUninitialize();
+
+    // The main thread's restart begins with Cplug_Audio_Stop(), which waits for this thread to exit
+    if (needsRestart)
+        PostMessageW(g_hwnd, CPLUG_WM_RESTART_AUDIO, 0, 0);
+
     return 0;
 }
 // [Main Thread]
+// Safe to call when audio isn't running, or was only partly started (Cplug_Audio_Start fail path)
 void Cplug_Audio_Stop()
 {
-    cplug_assert(g_Audio.FlagExitAudioThread == 0);
-    cplug_assert(g_Audio.pIAudioRenderClient != NULL);
-    cplug_assert(g_Audio.pIAudioClient != NULL);
-    cplug_assert(g_Audio.hAudioProcessThread != NULL);
-
-    if (g_Audio.hAudioProcessThread == NULL)
-    {
-        fprintf(stderr, "[WARNING] Called Cplug_Audio_Stop() when audio is not running\n");
-    }
-    else
+    if (g_Audio.hAudioProcessThread)
     {
         g_Audio.FlagExitAudioThread = 1;
-        cplug_assert(g_Audio.hAudioEvent);
-        SetEvent(g_Audio.hAudioEvent);
+        if (g_Audio.hAudioEvent)
+            SetEvent(g_Audio.hAudioEvent);
 
         WaitForSingleObject(g_Audio.hAudioProcessThread, INFINITE);
         CloseHandle(g_Audio.hAudioProcessThread);
@@ -1998,6 +2023,24 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             prcNewWindow->right - prcNewWindow->left,
             prcNewWindow->bottom - prcNewWindow->top,
             SWP_NOZORDER | SWP_NOACTIVATE);
+        break;
+    }
+    case CPLUG_WM_RESTART_AUDIO:
+    {
+        // Audio may have been stopped on purpose since the audio thread posted this (eg. hot reload)
+        if (g_Audio.hAudioProcessThread == NULL)
+            break;
+
+        Cplug_Audio_Stop();
+        Cplug_Audio_ScanDevices();
+        // Keep the current device if it still exists (eg. its format was changed in Windows settings),
+        // otherwise fall back to the default device
+        if (Cplug_Audio_GetActiveDeviceIndex() == -1)
+            Cplug_Audio_SetDevice(-1);
+        Cplug_Audio_Start();
+        Cplug_Menu_RebuildAudioOutputsSubmenu();
+        Cplug_Menu_RebuildSampleRateSubmenu();
+        DrawMenuBar(hWnd);
         break;
     }
     case WM_COMMAND: // clicking nav menu items triggers commands. You can also send commands for other things
