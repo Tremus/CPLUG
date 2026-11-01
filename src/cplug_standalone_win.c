@@ -46,7 +46,7 @@
 #if !defined(CPLUG_MIDI_BUFFER_COUNT) || !defined(CPLUG_MIDI_BUFFER_SIZE) || !defined(CPLUG_MIDI_RINGBUFFER_SIZE)
 #define CPLUG_MIDI_BUFFER_COUNT    4
 #define CPLUG_MIDI_BUFFER_SIZE     1024
-#define CPLUG_MIDI_RINGBUFFER_SIZE 128
+#define CPLUG_MIDI_RINGBUFFER_SIZE 1024
 #endif
 
 #if !defined(CPLUG_DEFAULT_BLOCK_SIZE) || !defined(CPLUG_DEFAULT_SAMPLE_RATE)
@@ -619,6 +619,11 @@ void CALLBACK Cplug_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
         LONG          writePos, nextPos, readPos;
         LARGE_INTEGER now;
 
+        // Drop timing clock (0xF8) and active sensing (0xFE). They arrive constantly and would fill the ring buffer
+        BYTE status = dwParam1 & 0xff;
+        if (status == 0xF8 || status == 0xFE)
+            return;
+
         // dwParam2/dwTimestamp, is in "milliseconds, beginning at zero when the midiInStart function was called".
         // This doesn't really help us though, because we need to synchronise with the audio thread...
         // Using QPC, we share our clock with the audio thread, and get better resolution
@@ -628,8 +633,9 @@ void CALLBACK Cplug_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
         midi.bytesAsInt   = dwParam1 & 0xffffff;
         midi.timestampQPC = now.QuadPart;
 
-        writePos = _InterlockedCompareExchange(&g_MIDI.RingBuffer.writePos, 0, 0);
-        readPos  = _InterlockedCompareExchange(&g_MIDI.RingBuffer.readPos, 0, 0);
+        // Only this thread writes writePos. Acquire readPos so the reader is done with the slot before it's reused
+        writePos = ReadNoFence(&g_MIDI.RingBuffer.writePos);
+        readPos  = ReadAcquire(&g_MIDI.RingBuffer.readPos);
 
         nextPos = writePos + 1;
         if (nextPos == ARRAYSIZE(g_MIDI.RingBuffer.buffer))
@@ -639,7 +645,7 @@ void CALLBACK Cplug_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
             return;
 
         g_MIDI.RingBuffer.buffer[writePos] = midi;
-        _InterlockedExchange(&g_MIDI.RingBuffer.writePos, nextPos);
+        WriteRelease(&g_MIDI.RingBuffer.writePos, nextPos);
     }
     // handle sysex?
     // https://www.midi.org/specifications-old/item/table-4-universal-system-exclusive-messages */
@@ -1031,8 +1037,9 @@ bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
     if (frameIdx >= ctx->numFrames)
         return false;
 
-    LONG head = _InterlockedCompareExchange(&g_MIDI.RingBuffer.writePos, 0, 0);
-    LONG tail = _InterlockedCompareExchange(&g_MIDI.RingBuffer.readPos, 0, 0);
+    // Only this thread writes readPos. Acquire writePos so the message it publishes is visible
+    LONG head = ReadAcquire(&g_MIDI.RingBuffer.writePos);
+    LONG tail = ReadNoFence(&g_MIDI.RingBuffer.readPos);
     if (head != tail)
     {
         MIDIMessage* msg = &g_MIDI.RingBuffer.buffer[tail];
@@ -1069,7 +1076,7 @@ bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
             if (tail == CPLUG_MIDI_RINGBUFFER_SIZE)
                 tail = 0;
 
-            g_MIDI.RingBuffer.readPos = tail;
+            WriteRelease(&g_MIDI.RingBuffer.readPos, tail);
             return true;
         }
     }
