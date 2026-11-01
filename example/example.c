@@ -9,7 +9,7 @@
 #define my_assert(cond) (cond) ? (void)0 : __builtin_debugtrap()
 #endif
 
-#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
+#if (defined(_WIN32) || defined(__linux__)) && (defined(__x86_64__) || defined(_M_X64))
 // https://softwareengineering.stackexchange.com/a/337251
 #include <immintrin.h>
 #define DISABLE_DENORMALS                                                                                              \
@@ -828,6 +828,20 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
     const UINT uFlags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOMOVE;
     return SetWindowPos((HWND)gui->window, HWND_TOP, 0, 0, width, height, uFlags);
 }
+
+#elif defined(__linux__)
+// TODO: X11 GUI. These are stubs so the plugin links
+void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin) { return NULL; }
+void  cplug_destroyGUI(void* userGUI) {}
+void  cplug_setParent(void* userGUI, void* newParent) {}
+void  cplug_setVisible(void* userGUI, bool visible) {}
+void  cplug_setScaleFactor(void* userGUI, float scale) {}
+void  cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
+{
+    *width  = GUI_DEFAULT_WIDTH;
+    *height = GUI_DEFAULT_HEIGHT;
+}
+bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height) { return false; }
 
 #endif // _WIN32
 

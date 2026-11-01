@@ -48,6 +48,15 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+if (UNIX AND NOT APPLE)
+    # An ELF .so exports everything by default, and our symbols could interpose another plugin's in the same host
+    add_compile_options(-fvisibility=hidden)
+    # Fail at link time instead of when the host dlopens the plugin
+    add_link_options(-static-libgcc)
+    # NAMES libxcb.so.1 finds the runtime library when the dev package (libxcb.so symlink) isn't installed
+    find_library(XCB_LIBRARY NAMES xcb libxcb.so.1 REQUIRED)
+endif()
+
 # settings used across all formats
 include_directories(src)
 
@@ -164,6 +173,32 @@ elseif(WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}\\${CMAKE_BUILD_TYPE}\\${PROJECT_NAME}_plugin.dll" "%LOCALAPPDATA%\\Programs\\Common\\CLAP\\${PROJECT_NAME}.clap"
             )
     endif() # MSVC
+elseif(UNIX)
+    add_library(${PROJECT_NAME}_plugin MODULE
+        example/example.c
+        src/cplug_clap.c
+        src/cplug_vst3.c
+        )
+    set_target_properties(${PROJECT_NAME}_plugin PROPERTIES PREFIX "")
+    target_link_libraries(${PROJECT_NAME}_plugin PRIVATE ${XCB_LIBRARY} m)
+    target_link_options(${PROJECT_NAME}_plugin PRIVATE -Wl,--no-undefined)
+
+    # https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical+Documentation/Locations+Format/Plugin+Format.html
+    set(PLUGIN_SO_PATH "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}_plugin.so")
+    set(VST3_BUILD_PATH "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.vst3")
+    add_custom_command(TARGET ${PROJECT_NAME}_plugin POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${VST3_BUILD_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_BUILD_PATH}/Contents/x86_64-linux"
+        COMMAND ${CMAKE_COMMAND} -E copy "${PLUGIN_SO_PATH}" "${VST3_BUILD_PATH}/Contents/x86_64-linux/${PROJECT_NAME}.so"
+
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${VST3_BUILD_PATH} to $ENV{HOME}/.vst3/"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "$ENV{HOME}/.vst3/${PROJECT_NAME}.vst3"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${VST3_BUILD_PATH}" "$ENV{HOME}/.vst3/${PROJECT_NAME}.vst3"
+
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing ${PLUGIN_SO_PATH} to $ENV{HOME}/.clap/"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{HOME}/.clap"
+        COMMAND ${CMAKE_COMMAND} -E copy "${PLUGIN_SO_PATH}" "$ENV{HOME}/.clap/${PROJECT_NAME}.clap"
+    )
 endif()
 
 
@@ -183,6 +218,9 @@ elseif (APPLE)
 
     file(TOUCH_NOCREATE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.app/Contents/PkgInfo")
     file(WRITE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.app/Contents/PkgInfo" "APPL????")
+elseif (UNIX)
+    add_executable(${PROJECT_NAME}_app src/cplug_standalone_linux.c example/example.c)
+    target_link_libraries(${PROJECT_NAME}_app PRIVATE ${XCB_LIBRARY} m)
 endif()
 
 
@@ -243,6 +281,11 @@ if (APPLE)
         CPLUG_AUV2_VERSION_INT=${MACOSX_BUNDLE_VERSION_INT}
         CPLUG_AUV2_BUNDLE_ID="${PLUGIN_BUNDLE_ID}"
     )
-else()
+elseif (WIN32)
     add_executable(test_compile_cpp WIN32 test_compile.cpp)
+else()
+    # Compile only: on Linux test_compile.cpp has no example.c to link against
+    add_library(test_compile_cpp OBJECT test_compile.cpp)
+    # char16_t in the VST3 code needs C++11
+    set_target_properties(test_compile_cpp PROPERTIES CXX_STANDARD 11)
 endif()
