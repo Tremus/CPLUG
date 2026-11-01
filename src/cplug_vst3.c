@@ -1,5 +1,4 @@
-/* This file is subject to the terms of the VST3 SDK License. See here https://www.steinberg.net/sdklicenses
- * Originally authored by Filipe Coelho as a part of DPF https://github.com/DISTRHO/DPF
+/* Originally authored by Filipe Coelho as a part of DPF https://github.com/DISTRHO/DPF
  * A special thanks goes to him for allowing the use of his code here.
  * Edited and ported to CPLUG by Tré Dudman */
 #include <cplug.h>
