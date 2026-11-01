@@ -758,6 +758,7 @@ struct
     // Process
     IAudioClient*       pIAudioClient;
     IAudioRenderClient* pIAudioRenderClient;
+    IAudioClock*        pIAudioClock;
     HANDLE              hAudioEvent;
     HANDLE              hAudioProcessThread;
     volatile UINT32     FlagExitAudioThread;
@@ -781,6 +782,7 @@ static const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT =
     {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
 static const IID _IID_IAudioRenderClient =
     {0xf294acfc, 0x3146, 0x4483, {0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2}};
+static const IID  _IID_IAudioClock = {0xcd63314f, 0x3fba, 0x4a1b, {0x81, 0x2c, 0xef, 0x96, 0x35, 0x87, 0x28, 0xe7}};
 static const GUID _CLSID_MMDeviceEnumerator =
     {0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e}};
 static const GUID _IID_IMMDeviceEnumerator =
@@ -793,9 +795,10 @@ typedef struct WindowsProcessContext
 
     // MIDI scheduling. A message's frame within the current block is:
     // midiFrameOffset + (timestampQPC - midiAnchorQPC) * SampleRate / qpcFrequency
-    INT64 midiAnchorQPC;
-    INT64 qpcFrequency;
-    INT64 midiFrameOffset;
+    // midiAnchorQPC is when IAudioClock last read the device position, so wake-up jitter cancels out
+    LARGE_INTEGER midiAnchorQPC;
+    LARGE_INTEGER qpcFrequency;
+    INT64         midiFrameOffset;
 } WindowsProcessContext;
 
 WAVEFORMATEXTENSIBLE Cplug_Audio_CreateWaveFormat(DWORD NumChannels, DWORD SampleRate)
@@ -980,8 +983,8 @@ bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
     {
         MIDIMessage* msg = &g_MIDI.RingBuffer.buffer[tail];
 
-        INT64 elapsedQPC = msg->timestampQPC - winctx->midiAnchorQPC;
-        INT64 frame      = winctx->midiFrameOffset + elapsedQPC * g_Audio.SampleRate / winctx->qpcFrequency;
+        INT64 elapsedQPC = msg->timestampQPC - winctx->midiAnchorQPC.QuadPart;
+        INT64 frame      = winctx->midiFrameOffset + elapsedQPC * g_Audio.SampleRate / winctx->qpcFrequency.QuadPart;
         // Arrived too late to keep the constant latency. Play it as soon as possible
         if (frame < frameIdx)
             frame = frameIdx;
@@ -1028,18 +1031,12 @@ void* Cplug_Audio_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t
 }
 
 // [Audio Thread]
-void Cplug_Audio_Process(const UINT32 blockSize)
+DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
 {
-    BYTE*   outBuffer            = NULL;
-    UINT32  remainingBlockFrames = blockSize;
-    HRESULT hr = g_Audio.pIAudioRenderClient->lpVtbl->GetBuffer(g_Audio.pIAudioRenderClient, blockSize, &outBuffer);
-    cplug_assert(outBuffer != NULL);
-    if (FAILED(hr))
-        return;
-
-    LARGE_INTEGER nowQPC, qpcFrequency;
-    QueryPerformanceCounter(&nowQPC);
-    QueryPerformanceFrequency(&qpcFrequency);
+    // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avsetmmthreadcharacteristicsw
+    DWORD  TaskIndex             = 0;
+    HANDLE ThreadCharacteristics = AvSetMmThreadCharacteristicsW(L"Pro Audio", &TaskIndex);
+    cplug_assert(ThreadCharacteristics);
 
     WindowsProcessContext ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -1054,60 +1051,102 @@ void Cplug_Audio_Process(const UINT32 blockSize)
     ctx.output[0] = g_Audio.ProcessOutput[0];
     ctx.output[1] = g_Audio.ProcessOutput[1];
 
-    ctx.midiAnchorQPC   = nowQPC.QuadPart;
-    ctx.qpcFrequency    = qpcFrequency.QuadPart;
-    ctx.midiFrameOffset = g_Audio.ProcessBufferMaxFrames;
+    QueryPerformanceFrequency(&ctx.qpcFrequency);
 
-    while (remainingBlockFrames > 0)
-    {
-        UINT32 numFrames = remainingBlockFrames < g_Audio.BlockSize ? remainingBlockFrames : g_Audio.BlockSize;
-        ctx.cplugContext.numFrames = numFrames;
+    // A message stamped at QPC time t plays at stream frame devicePosition(t) + midiLatencyFrames.
+    // GetStreamLatency under-reports in shared mode, so the latency is measured instead: it grows to the
+    // largest gap seen between frames written and the device position, so every message that arrives
+    // before a block is rendered lands inside that block
+    UINT64 clockFrequency = 0;
+    g_Audio.pIAudioClock->lpVtbl->GetFrequency(g_Audio.pIAudioClock, &clockFrequency);
+    INT64 midiLatencyFrames = g_Audio.ProcessBufferMaxFrames;
+    // Frames handed to WASAPI so far. IAudioClock positions count from the same origin
+    INT64 framesWritten = 0;
 
-        g_plugin.process(g_plugin.UserPlugin, &ctx.cplugContext);
-        ctx.midiFrameOffset -= numFrames;
-
-        float* outputInterleaved = (float*)outBuffer;
-        for (UINT32 i = 0; i < numFrames; i++)
-            for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
-                *outputInterleaved++ = ctx.output[ch][i];
-
-        remainingBlockFrames -= numFrames;
-        outBuffer            += sizeof(float) * g_Audio.NumChannels * numFrames;
-    }
-
-    // This has a scary name 'Release', however I don't think any resources are deallocated,
-    // rather space within a preallocated block is marked reserved/unreserved
-    // This is just how you hand the buffer back to windows
-    g_Audio.pIAudioRenderClient->lpVtbl->ReleaseBuffer(g_Audio.pIAudioRenderClient, blockSize, 0);
-}
-// [Audio Thread]
-DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
-{
-    // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avsetmmthreadcharacteristicsw
-    DWORD  TaskIndex             = 0;
-    HANDLE ThreadCharacteristics = AvSetMmThreadCharacteristicsW(L"Pro Audio", &TaskIndex);
-    cplug_assert(ThreadCharacteristics);
-
-    Cplug_Audio_Process(g_Audio.ProcessBufferMaxFrames);
-
-    g_Audio.pIAudioClient->lpVtbl->Start(g_Audio.pIAudioClient);
-
+    // The first pass pre-fills the whole buffer before the client is started
+    BOOL started = FALSE;
     while (!g_Audio.FlagExitAudioThread)
     {
-        WaitForSingleObject(g_Audio.hAudioEvent, INFINITE);
+        UINT32 blockSize = g_Audio.ProcessBufferMaxFrames;
+        UINT32 padding   = 0;
+        if (started)
+        {
+            WaitForSingleObject(g_Audio.hAudioEvent, INFINITE);
 
-        UINT32  padding = 0;
-        HRESULT hr      = g_Audio.pIAudioClient->lpVtbl->GetCurrentPadding(g_Audio.pIAudioClient, &padding);
+            HRESULT hr = g_Audio.pIAudioClient->lpVtbl->GetCurrentPadding(g_Audio.pIAudioClient, &padding);
 
-        if (FAILED(hr))
-            continue;
+            if (FAILED(hr))
+                continue;
 
-        cplug_assert(g_Audio.ProcessBufferMaxFrames >= padding);
-        UINT32 blockSize = g_Audio.ProcessBufferMaxFrames - padding;
-        if (blockSize == 0)
-            continue;
+            cplug_assert(g_Audio.ProcessBufferMaxFrames >= padding);
+            blockSize -= padding;
+            if (blockSize == 0)
+                continue;
+        }
 
-        Cplug_Audio_Process(blockSize);
+        {
+            BYTE*   outBuffer = NULL;
+            HRESULT hr =
+                g_Audio.pIAudioRenderClient->lpVtbl->GetBuffer(g_Audio.pIAudioRenderClient, blockSize, &outBuffer);
+            cplug_assert(outBuffer != NULL);
+            if (SUCCEEDED(hr))
+            {
+                UINT64  position = 0, positionQPC = 0;
+                HRESULT hrClock =
+                    g_Audio.pIAudioClock->lpVtbl->GetPosition(g_Audio.pIAudioClock, &position, &positionQPC);
+                BOOL  hasPosition    = SUCCEEDED(hrClock) && clockFrequency != 0;
+                INT64 positionFrames = 0;
+                if (hasPosition)
+                {
+                    // GetPosition reports QPC time in 100ns units. Convert back to ticks, split to avoid overflow
+                    INT64 qpcFreq = ctx.qpcFrequency.QuadPart;
+                    ctx.midiAnchorQPC.QuadPart =
+                        (positionQPC / 10000000) * qpcFreq + (positionQPC % 10000000) * qpcFreq / 10000000;
+
+                    positionFrames      = (INT64)(position * g_Audio.SampleRate / clockFrequency);
+                    ctx.midiFrameOffset = positionFrames + midiLatencyFrames - framesWritten;
+                }
+                else
+                {
+                    // Estimate the playing position from the padding instead. Same latency, but jittery
+                    QueryPerformanceCounter(&ctx.midiAnchorQPC);
+                    ctx.midiFrameOffset = midiLatencyFrames - padding;
+                }
+
+                UINT32 remainingBlockFrames = blockSize;
+                while (remainingBlockFrames > 0)
+                {
+                    UINT32 numFrames =
+                        remainingBlockFrames < g_Audio.BlockSize ? remainingBlockFrames : g_Audio.BlockSize;
+                    ctx.cplugContext.numFrames = numFrames;
+
+                    g_plugin.process(g_plugin.UserPlugin, &ctx.cplugContext);
+                    ctx.midiFrameOffset -= numFrames;
+
+                    float* outputInterleaved = (float*)outBuffer;
+                    for (UINT32 i = 0; i < numFrames; i++)
+                        for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
+                            *outputInterleaved++ = ctx.output[ch][i];
+
+                    remainingBlockFrames -= numFrames;
+                    outBuffer            += sizeof(float) * g_Audio.NumChannels * numFrames;
+                }
+
+                // Poorly named 'Release'. I don't think any resources are deallocated,
+                // This is just how you hand the buffer back to windows
+                g_Audio.pIAudioRenderClient->lpVtbl->ReleaseBuffer(g_Audio.pIAudioRenderClient, blockSize, 0);
+                framesWritten += blockSize;
+
+                if (hasPosition && framesWritten - positionFrames > midiLatencyFrames)
+                    midiLatencyFrames = framesWritten - positionFrames;
+            }
+        }
+
+        if (!started)
+        {
+            g_Audio.pIAudioClient->lpVtbl->Start(g_Audio.pIAudioClient);
+            started = TRUE;
+        }
     }
 
     // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avrevertmmthreadcharacteristics
@@ -1142,6 +1181,7 @@ void Cplug_Audio_Stop()
     if (g_Audio.pIAudioClient)
         g_Audio.pIAudioClient->lpVtbl->Stop(g_Audio.pIAudioClient);
 
+    CPLUG_COM_RELEASE(g_Audio.pIAudioClock);
     CPLUG_COM_RELEASE(g_Audio.pIAudioRenderClient);
     CPLUG_COM_RELEASE(g_Audio.pIAudioClient);
 
@@ -1209,6 +1249,15 @@ void Cplug_Audio_Start()
     cplug_assert(hr == S_OK);
     cplug_assert(g_Audio.pIAudioRenderClient != NULL);
     if (hr != S_OK || g_Audio.pIAudioRenderClient == NULL)
+        goto fail;
+
+    hr = g_Audio.pIAudioClient->lpVtbl->GetService(
+        g_Audio.pIAudioClient,
+        CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClock),
+        (void**)&g_Audio.pIAudioClock);
+    cplug_assert(hr == S_OK);
+    cplug_assert(g_Audio.pIAudioClock != NULL);
+    if (hr != S_OK || g_Audio.pIAudioClock == NULL)
         goto fail;
 
     cplug_assert(g_Audio.hAudioEvent == NULL);
