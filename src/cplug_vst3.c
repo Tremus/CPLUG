@@ -9,8 +9,6 @@
 #include <vst3_c_api.h>
 #include <wchar.h>
 
-#define CPLUG_ARRLEN(a) (sizeof(a) / sizeof(a[0]))
-
 // VST3 Param IDs are 32bit unsigned integers, but some DAWs such as FL Studio are suspect of misinterpreting them as
 // signed integers and reject any negative integer.
 enum
@@ -339,6 +337,23 @@ typedef struct VST3Factory
     cplug_atomic_i32               refcounter;
 } VST3Factory;
 
+#if defined(__linux__)
+// A slot is unused while its vst3 is NULL
+typedef struct VST3TimerHandler
+{
+    Steinberg_Linux_ITimerHandlerVtbl* lpVtbl;
+    struct VST3Plugin*                 vst3;
+    uint32_t                           periodMs;
+} VST3TimerHandler;
+
+typedef struct VST3EventHandler
+{
+    Steinberg_Linux_IEventHandlerVtbl* lpVtbl;
+    struct VST3Plugin*                 vst3;
+    int                                fd;
+} VST3EventHandler;
+#endif
+
 typedef struct VST3Plugin
 {
     CplugHostContext hostContext;
@@ -419,6 +434,16 @@ typedef struct VST3Plugin
     // and sort them in the ::process() callback.
     size_t     num_events;
     CplugEvent events[CPLUG_EVENT_QUEUE_SIZE];
+
+#if defined(__linux__)
+    // See _cplug_vst3_getRunLoop()
+    Steinberg_Linux_IRunLoop* hostRunLoop;
+    Steinberg_Linux_IRunLoop* frameRunLoop;
+
+    // Each registration needs its own handler object
+    VST3TimerHandler timers[CPLUG_MAX_TIMERS];
+    VST3EventHandler fds[CPLUG_MAX_FDS];
+#endif
 } VST3Plugin;
 
 void _cplug_vst3_push_event(VST3Plugin* vst3, CplugEvent event, uint32_t frameIdx)
@@ -604,7 +629,197 @@ static bool _cplug_vst3_getHostName(CplugHostContext* ctx, char* buf, size_t buf
     return ok;
 }
 
-static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+#if defined(__linux__)
+// Not in the VST3 spec, but some hosts offer IRunLoop on their IHostApplication, which keeps working while the editor
+// is closed. Otherwise we use the IPlugFrame's, which only exists while the editor is open
+static Steinberg_Linux_IRunLoop* _cplug_vst3_getRunLoop(VST3Plugin* vst3)
+{
+    return vst3->hostRunLoop ? vst3->hostRunLoop : vst3->frameRunLoop;
+}
+
+static void _cplug_vst3_attachRunLoop(VST3Plugin* vst3, Steinberg_Linux_IRunLoop* runLoop, bool attach)
+{
+    for (size_t i = 0; i < CPLUG_ARRLEN(vst3->timers); i++)
+    {
+        Steinberg_Linux_ITimerHandler* handler = (Steinberg_Linux_ITimerHandler*)&vst3->timers[i];
+        if (vst3->timers[i].vst3 == NULL)
+            continue;
+        if (attach)
+            runLoop->lpVtbl->registerTimer(runLoop, handler, vst3->timers[i].periodMs);
+        else
+            runLoop->lpVtbl->unregisterTimer(runLoop, handler);
+    }
+    for (size_t i = 0; i < CPLUG_ARRLEN(vst3->fds); i++)
+    {
+        Steinberg_Linux_IEventHandler* handler = (Steinberg_Linux_IEventHandler*)&vst3->fds[i];
+        if (vst3->fds[i].vst3 == NULL)
+            continue;
+        if (attach)
+            runLoop->lpVtbl->registerEventHandler(runLoop, handler, vst3->fds[i].fd);
+        else
+            runLoop->lpVtbl->unregisterEventHandler(runLoop, handler);
+    }
+}
+
+// Called from IPlugView::setFrame() and when the view is destroyed
+static void _cplug_vst3_setFrameRunLoop(VST3Plugin* vst3, Steinberg_IPlugFrame* frame)
+{
+    if (vst3->hostRunLoop)
+        return;
+    if (vst3->frameRunLoop)
+    {
+        _cplug_vst3_attachRunLoop(vst3, vst3->frameRunLoop, false);
+        vst3->frameRunLoop->lpVtbl->release(vst3->frameRunLoop);
+        vst3->frameRunLoop = NULL;
+    }
+    if (frame &&
+        frame->lpVtbl->queryInterface(frame, Steinberg_Linux_IRunLoop_iid, (void**)&vst3->frameRunLoop) ==
+            Steinberg_kResultOk)
+        _cplug_vst3_attachRunLoop(vst3, vst3->frameRunLoop, true);
+    else
+        vst3->frameRunLoop = NULL;
+}
+
+static Steinberg_tresult SMTG_STDMETHODCALLTYPE
+VST3RunLoopHandler_queryInterface(void* const self, const Steinberg_TUID iid, void** const iface)
+{
+    if (cplug_tuid_match(iid, Steinberg_FUnknown_iid) || cplug_tuid_match(iid, Steinberg_Linux_ITimerHandler_iid) ||
+        cplug_tuid_match(iid, Steinberg_Linux_IEventHandler_iid))
+    {
+        *iface = self;
+        return Steinberg_kResultOk;
+    }
+    *iface = NULL;
+    return Steinberg_kNoInterface;
+}
+// Handlers live inside VST3Plugin, so there's nothing to count
+static uint32_t SMTG_STDMETHODCALLTYPE VST3RunLoopHandler_addRef(void* const self) { return 1; }
+static uint32_t SMTG_STDMETHODCALLTYPE VST3RunLoopHandler_release(void* const self) { return 1; }
+
+static void SMTG_STDMETHODCALLTYPE VST3TimerHandler_onTimer(void* const self)
+{
+    VST3TimerHandler* timer = (VST3TimerHandler*)self;
+    cplug_onTimer(timer->vst3->userPlugin, (uint32_t)(timer - timer->vst3->timers));
+}
+
+static void SMTG_STDMETHODCALLTYPE VST3EventHandler_onFDIsSet(void* const self, Steinberg_Linux_FileDescriptor fd)
+{
+    VST3EventHandler* handler = (VST3EventHandler*)self;
+    cplug_onFd(handler->vst3->userPlugin, fd, CPLUG_FD_READ);
+}
+
+static Steinberg_Linux_ITimerHandlerVtbl s_vst3_timer_handler = {
+    .queryInterface = VST3RunLoopHandler_queryInterface,
+    .addRef         = VST3RunLoopHandler_addRef,
+    .release        = VST3RunLoopHandler_release,
+    .onTimer        = VST3TimerHandler_onTimer,
+};
+
+static Steinberg_Linux_IEventHandlerVtbl s_vst3_event_handler = {
+    .queryInterface = VST3RunLoopHandler_queryInterface,
+    .addRef         = VST3RunLoopHandler_addRef,
+    .release        = VST3RunLoopHandler_release,
+    .onFDIsSet      = VST3EventHandler_onFDIsSet,
+};
+
+static bool _cplug_vst3_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
+{
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+    for (size_t i = 0; i < CPLUG_ARRLEN(vst3->timers); i++)
+    {
+        VST3TimerHandler* timer = &vst3->timers[i];
+        if (timer->vst3 != NULL)
+            continue;
+
+        Steinberg_Linux_IRunLoop* runLoop = _cplug_vst3_getRunLoop(vst3);
+        timer->lpVtbl                     = &s_vst3_timer_handler;
+        if (runLoop && runLoop->lpVtbl->registerTimer(runLoop, (Steinberg_Linux_ITimerHandler*)timer, periodMs) !=
+                           Steinberg_kResultOk)
+            return false;
+
+        timer->vst3     = vst3;
+        timer->periodMs = periodMs;
+        *timerId        = (uint32_t)i;
+        return true;
+    }
+    CPLUG_LOG_ASSERT(false && "Out of timer slots. Increase CPLUG_MAX_TIMERS");
+    return false;
+}
+
+static void _cplug_vst3_unregisterTimer(CplugHostContext* ctx, uint32_t timerId)
+{
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+    CPLUG_LOG_ASSERT_RETURN(timerId < CPLUG_ARRLEN(vst3->timers) && vst3->timers[timerId].vst3 != NULL, );
+
+    Steinberg_Linux_IRunLoop* runLoop = _cplug_vst3_getRunLoop(vst3);
+    if (runLoop)
+        runLoop->lpVtbl->unregisterTimer(runLoop, (Steinberg_Linux_ITimerHandler*)&vst3->timers[timerId]);
+    vst3->timers[timerId].vst3 = NULL;
+}
+
+static bool _cplug_vst3_registerFd(CplugHostContext* ctx, int fd, uint32_t flags)
+{
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+    // IRunLoop only tells you when an fd is readable
+    CPLUG_LOG_ASSERT_RETURN(flags == CPLUG_FD_READ, false);
+    for (size_t i = 0; i < CPLUG_ARRLEN(vst3->fds); i++)
+    {
+        VST3EventHandler* handler = &vst3->fds[i];
+        if (handler->vst3 != NULL)
+            continue;
+
+        Steinberg_Linux_IRunLoop* runLoop = _cplug_vst3_getRunLoop(vst3);
+        handler->lpVtbl                   = &s_vst3_event_handler;
+        if (runLoop && runLoop->lpVtbl->registerEventHandler(runLoop, (Steinberg_Linux_IEventHandler*)handler, fd) !=
+                           Steinberg_kResultOk)
+            return false;
+
+        handler->vst3 = vst3;
+        handler->fd   = fd;
+        return true;
+    }
+    CPLUG_LOG_ASSERT(false && "Out of fd slots. Increase CPLUG_MAX_FDS");
+    return false;
+}
+
+static void _cplug_vst3_unregisterFd(CplugHostContext* ctx, int fd)
+{
+    VST3Plugin* vst3 = (VST3Plugin*)ctx;
+    for (size_t i = 0; i < CPLUG_ARRLEN(vst3->fds); i++)
+    {
+        VST3EventHandler* handler = &vst3->fds[i];
+        if (handler->vst3 == NULL || handler->fd != fd)
+            continue;
+
+        Steinberg_Linux_IRunLoop* runLoop = _cplug_vst3_getRunLoop(vst3);
+        if (runLoop)
+            runLoop->lpVtbl->unregisterEventHandler(runLoop, (Steinberg_Linux_IEventHandler*)handler);
+        handler->vst3 = NULL;
+        return;
+    }
+    CPLUG_LOG_ASSERT(false && "fd was never registered");
+}
+#else
+static bool _cplug_vst3_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
+{
+    CPLUG_LOG_ASSERT(false && "registerTimer() is Linux only");
+    return false;
+}
+static void _cplug_vst3_unregisterTimer(CplugHostContext* ctx, uint32_t timerId)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterTimer() is Linux only");
+}
+static bool _cplug_vst3_registerFd(CplugHostContext* ctx, int fd, uint32_t flags)
+{
+    CPLUG_LOG_ASSERT(false && "registerFd() is Linux only");
+    return false;
+}
+static void _cplug_vst3_unregisterFd(CplugHostContext* ctx, int fd)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterFd() is Linux only");
+}
+#endif // __linux__
+static_assert(sizeof(CplugHostContext) == 72, "You may need to add support for new methods");
 
 static void _cplug_tryDeleteVST3Plugin(VST3Plugin* vst3)
 {
@@ -672,6 +887,10 @@ static void _cplug_tryDeleteVST3View(VST3View* view)
         cplug_setParent(view->userGUI, NULL);
         cplug_destroyGUI(view->userGUI);
         view->userGUI = NULL;
+#if defined(__linux__)
+        // Some hosts don't call setFrame(NULL) before destroying your GUI
+        _cplug_vst3_setFrameRunLoop(vst3, NULL);
+#endif
 
         vst3->view = NULL;
         free(view);
@@ -912,6 +1131,9 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3View_setFrame(void* const se
     cplug_log("%s => %p %p", __FUNCTION__, self, frame);
     VST3View* const view = (VST3View*)self;
     view->frame          = frame;
+#if defined(__linux__)
+    _cplug_vst3_setFrameRunLoop(view->vst3, frame);
+#endif
     return Steinberg_kResultTrue;
 }
 
@@ -2188,6 +2410,12 @@ VST3Component_initialize(void* const self, Steinberg_FUnknown* const context)
 
     _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->host, context);
 
+#if defined(__linux__)
+    if (context->lpVtbl->queryInterface(context, Steinberg_Linux_IRunLoop_iid, (void**)&vst3->hostRunLoop) !=
+        Steinberg_kResultOk)
+        vst3->hostRunLoop = NULL;
+#endif
+
     vst3->userPlugin = cplug_createPlugin(&vst3->hostContext);
 
     return Steinberg_kResultOk;
@@ -2200,6 +2428,15 @@ static Steinberg_tresult SMTG_STDMETHODCALLTYPE VST3Component_terminate(void* co
 
     cplug_destroyPlugin(vst3->userPlugin);
     vst3->userPlugin = NULL;
+#if defined(__linux__)
+    if (vst3->hostRunLoop)
+    {
+        // Catch anything the user forgot to unregister
+        _cplug_vst3_attachRunLoop(vst3, vst3->hostRunLoop, false);
+        vst3->hostRunLoop->lpVtbl->release(vst3->hostRunLoop);
+        vst3->hostRunLoop = NULL;
+    }
+#endif
     _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->host, NULL);
     _cplug_IPtr_set((Steinberg_FUnknown**)&vst3->controller.componentHandler, NULL);
 
@@ -2518,6 +2755,10 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
         vst3->hostContext.rescan         = _cplug_vst3_rescan;
         vst3->hostContext.getHostName    = _cplug_vst3_getHostName;
         vst3->hostContext.requestResize  = _cplug_vst3_requestResize;
+        vst3->hostContext.registerTimer   = _cplug_vst3_registerTimer;
+        vst3->hostContext.unregisterTimer = _cplug_vst3_unregisterTimer;
+        vst3->hostContext.registerFd      = _cplug_vst3_registerFd;
+        vst3->hostContext.unregisterFd    = _cplug_vst3_unregisterFd;
         vst3->component.lpVtbl           = &vst3->component.base;
         vst3->component.refcounter       = 1;
         // Steinberg_FUnknown

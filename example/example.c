@@ -843,6 +843,10 @@ void  cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
 }
 bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height) { return false; }
 
+// TODO: XCB events & tickGUI()
+void cplug_onTimer(void* userPlugin, uint32_t timerId) {}
+void cplug_onFd(void* userPlugin, int fd, uint32_t flags) {}
+
 #endif // _WIN32
 
 void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height)

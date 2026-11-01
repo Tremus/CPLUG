@@ -26,6 +26,8 @@ extern "C" {
      ((uint32_t)(uint8_t)(d)))
 #endif
 
+#define CPLUG_ARRLEN(a) (sizeof(a) / sizeof(a[0]))
+
 #ifdef CPLUG_SHARED
 #ifdef _WIN32
 #define CPLUG_API __declspec(dllexport)
@@ -77,6 +79,13 @@ struct CplugHostContext
 
     // Ask permission from host to resize your area to specified w/h within their window
     bool (*requestResize)(CplugHostContext* ctx, uint32_t width, uint32_t height);
+
+    // Linux only zone. I'm still learning how this works myself...
+    // Stubbed on any other platform
+    bool (*registerTimer)(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId);
+    void (*unregisterTimer)(CplugHostContext* ctx, uint32_t timerId);
+    bool (*registerFd)(CplugHostContext* ctx, int fd, uint32_t flags /* CPLUG_FD_XXX */);
+    void (*unregisterFd)(CplugHostContext* ctx, int fd);
 };
 
 CPLUG_API void* cplug_createPlugin(CplugHostContext* ctx);
@@ -262,6 +271,26 @@ CPLUG_API void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height);
 CPLUG_API void cplug_checkSize(void* userGUI, uint32_t* width, uint32_t* height);
 // Host tells your plugin "this is your size"
 CPLUG_API bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height);
+
+// Linux zone
+#ifndef CPLUG_MAX_TIMERS
+#define CPLUG_MAX_TIMERS 16
+#endif
+#ifndef CPLUG_MAX_FDS
+#define CPLUG_MAX_FDS 16
+#endif
+
+enum
+{
+    CPLUG_FD_READ  = 1 << 0,
+    CPLUG_FD_WRITE = 1 << 1, // CLAP & standalone only. VST3 hosts only report readable fds
+    CPLUG_FD_ERROR = 1 << 2,
+};
+
+// Linux only, you don't need to implement these on other platforms. Main thread only.
+// timerId is the ID that registerTimer() returned
+CPLUG_API void cplug_onTimer(void* userPlugin, uint32_t timerId);
+CPLUG_API void cplug_onFd(void* userPlugin, int fd, uint32_t flags /* CPLUG_FD_XXX */);
 
 /*  ██╗   ██╗████████╗██╗██╗     ███████╗
     ██║   ██║╚══██╔══╝██║██║     ██╔════╝

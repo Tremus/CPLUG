@@ -234,11 +234,8 @@ void AUv2ReleaseStringArray(CFStringRef* arr, size_t arrlen)
     }
 }
 
-static OSStatus AUv2GetBusChannelCount(
-    AUv2Plugin*      auv2,
-    AudioUnitScope   scope,
-    AudioUnitElement element,
-    UInt32*          channelCount)
+static OSStatus
+AUv2GetBusChannelCount(AUv2Plugin* auv2, AudioUnitScope scope, AudioUnitElement element, UInt32* channelCount)
 {
     UInt32 numBusses = 0;
 
@@ -481,7 +478,7 @@ OSStatus AUMethodGetPropertyInfo(
     case kAudioUnitProperty_SupportedChannelLayoutTags:
     {
         UInt32 channelCount = 0;
-        result = AUv2GetBusChannelCount(auv2, inScope, inElement, &channelCount);
+        result              = AUv2GetBusChannelCount(auv2, inScope, inElement, &channelCount);
         if (result != noErr)
             return result;
 
@@ -780,14 +777,13 @@ static OSStatus AUMethodGetProperty(
     case kAudioUnitProperty_SupportedChannelLayoutTags:
     {
         UInt32 channelCount = 0;
-        result = AUv2GetBusChannelCount(auv2, inScope, inElement, &channelCount);
+        result              = AUv2GetBusChannelCount(auv2, inScope, inElement, &channelCount);
         if (result != noErr)
             return result;
 
-        CPLUG_LOG_ASSERT_RETURN(
-            *ioDataSize >= sizeof(AudioChannelLayoutTag), kAudioUnitErr_InvalidPropertyValue);
+        CPLUG_LOG_ASSERT_RETURN(*ioDataSize >= sizeof(AudioChannelLayoutTag), kAudioUnitErr_InvalidPropertyValue);
         *(AudioChannelLayoutTag*)outData = AUv2GetChannelLayoutTag(channelCount);
-        *ioDataSize                     = sizeof(AudioChannelLayoutTag);
+        *ioDataSize                      = sizeof(AudioChannelLayoutTag);
         break;
     }
 
@@ -961,8 +957,8 @@ static OSStatus AUMethodSetProperty(
     case kAudioUnitProperty_StreamFormat:
     {
         AudioStreamBasicDescription* desc = (AudioStreamBasicDescription*)inData;
-        uint32_t                      audioSampleType;
-        uint32_t                      scopeMask;
+        uint32_t                     audioSampleType;
+        uint32_t                     scopeMask;
 
         int nChannels = 0;
         switch (inScope)
@@ -997,7 +993,7 @@ static OSStatus AUMethodSetProperty(
         // Select a common precision on the first scope and reject mixed input and output precision
         if (auv2->streamFormatSetMask != 0 && audioSampleType != auv2->audioSampleType)
             return kAudioUnitErr_FormatNotSupported;
-        auv2->audioSampleType = audioSampleType;
+        auv2->audioSampleType      = audioSampleType;
         auv2->streamFormatSetMask |= scopeMask;
         // Logic expects to set the sample rate using kAudioUnitProperty_StreamFormat not kAudioUnitProperty_SampleRate
         auv2->sampleRate = desc->mSampleRate;
@@ -1247,7 +1243,7 @@ static OSStatus AUMethodUninitializeProcessing(AUv2Plugin* auv2)
 {
     cplug_log("AUMethodUninitializeProcessing");
     // Read comments in AUMethodInitialize
-    auv2->isInitialized = false;
+    auv2->isInitialized       = false;
     auv2->streamFormatSetMask = 0;
     return noErr;
 }
@@ -1632,11 +1628,30 @@ static bool AUv2HostContext_getHostName(CplugHostContext* ctx, char* buf, size_t
 }
 static bool AUv2HostContext_requestResize_stub(CplugHostContext* ctx, uint32_t w, uint32_t h)
 {
-    cplug_log("[WARNING] This implementation of requestResize() will not work. You need to replace this method in your "
-              "Cocoa code");
+    cplug_log(
+        "[WARNING] This implementation of requestResize() will not work. You need to replace this method in your "
+        "Cocoa code");
     return false;
 }
-_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+static bool AUv2HostContext_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
+{
+    CPLUG_LOG_ASSERT(false && "registerTimer() is Linux only");
+    return false;
+}
+static void AUv2HostContext_unregisterTimer(CplugHostContext* ctx, uint32_t timerId)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterTimer() is Linux only");
+}
+static bool AUv2HostContext_registerFd(CplugHostContext* ctx, int fd, uint32_t flags)
+{
+    CPLUG_LOG_ASSERT(false && "registerFd() is Linux only");
+    return false;
+}
+static void AUv2HostContext_unregisterFd(CplugHostContext* ctx, int fd)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterFd() is Linux only");
+}
+_Static_assert(sizeof(CplugHostContext) == 72, "You may need to add support for new methods");
 
 OSStatus ComponentBase_AP_Open(AUv2Plugin* auv2, AudioComponentInstance compInstance)
 {
@@ -1680,15 +1695,19 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     AUv2Plugin* auv2 = (AUv2Plugin*)(calloc(1, sizeof(AUv2Plugin)));
     _Static_assert(offsetof(AUv2Plugin, mPlugInInterface) == 0, "Required by the AU format to be first");
 
-    auv2->mPlugInInterface.Open      = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
-    auv2->mPlugInInterface.Close     = (OSStatus(*)(void*))ComponentBase_AP_Close;
-    auv2->mPlugInInterface.Lookup    = AULookup;
-    auv2->desc                       = *inDesc;
-    auv2->hostContext.type           = CPLUG_PLUGIN_IS_AUV2;
-    auv2->hostContext.sendParamEvent = AUv2HostContext_sendParamEvent;
-    auv2->hostContext.rescan         = AUv2HostContext_rescan;
-    auv2->hostContext.getHostName    = AUv2HostContext_getHostName;
-    auv2->hostContext.requestResize  = AUv2HostContext_requestResize_stub;
+    auv2->mPlugInInterface.Open       = (OSStatus (*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
+    auv2->mPlugInInterface.Close      = (OSStatus (*)(void*))ComponentBase_AP_Close;
+    auv2->mPlugInInterface.Lookup     = AULookup;
+    auv2->desc                        = *inDesc;
+    auv2->hostContext.type            = CPLUG_PLUGIN_IS_AUV2;
+    auv2->hostContext.sendParamEvent  = AUv2HostContext_sendParamEvent;
+    auv2->hostContext.rescan          = AUv2HostContext_rescan;
+    auv2->hostContext.getHostName     = AUv2HostContext_getHostName;
+    auv2->hostContext.requestResize   = AUv2HostContext_requestResize_stub;
+    auv2->hostContext.registerTimer   = AUv2HostContext_registerTimer;
+    auv2->hostContext.unregisterTimer = AUv2HostContext_unregisterTimer;
+    auv2->hostContext.registerFd      = AUv2HostContext_registerFd;
+    auv2->hostContext.unregisterFd    = AUv2HostContext_unregisterFd;
 
     auv2->supportsInPlaceProcessing = 1;
     auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;

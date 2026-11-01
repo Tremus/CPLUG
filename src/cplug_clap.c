@@ -25,6 +25,10 @@ typedef struct CLAPPlugin
     void* userGUI;
 #endif
 
+#if defined(__linux__)
+    const clap_host_timer_support_t*    host_timer;
+    const clap_host_posix_fd_support_t* host_fd;
+#endif
 } CLAPPlugin;
 
 /////////////////////////////
@@ -53,7 +57,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         info->id = index;
         cplug_getInputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getInputBusChannelCount(clap->userPlugin, index);
-        info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
+        info->flags         = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
                       CLAP_AUDIO_PORT_PREFERS_64BITS;
         if (index == 0)
             info->flags |= CLAP_AUDIO_PORT_IS_MAIN;
@@ -77,7 +81,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         info->id = numInputBusses + index;
         cplug_getOutputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getOutputBusChannelCount(clap->userPlugin, index);
-        info->flags = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
+        info->flags         = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
                       CLAP_AUDIO_PORT_PREFERS_64BITS;
         if (index == 0)
             info->flags |= CLAP_AUDIO_PORT_IS_MAIN;
@@ -498,12 +502,72 @@ static bool _cplug_clap_requestResize(CplugHostContext* ctx, uint32_t width, uin
     return false;
 }
 
-static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+#if defined(__linux__)
+static bool _cplug_clap_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+    if (clap->host_timer && clap->host_timer->register_timer)
+        return clap->host_timer->register_timer(clap->host, periodMs, timerId);
+    return false;
+}
+static void _cplug_clap_unregisterTimer(CplugHostContext* ctx, uint32_t timerId)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+    if (clap->host_timer && clap->host_timer->unregister_timer)
+        clap->host_timer->unregister_timer(clap->host, timerId);
+}
+static bool _cplug_clap_registerFd(CplugHostContext* ctx, int fd, uint32_t flags)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+    if (clap->host_fd && clap->host_fd->register_fd)
+        return clap->host_fd->register_fd(clap->host, fd, flags);
+    return false;
+}
+static void _cplug_clap_unregisterFd(CplugHostContext* ctx, int fd)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+    if (clap->host_fd && clap->host_fd->unregister_fd)
+        clap->host_fd->unregister_fd(clap->host, fd);
+}
+
+static_assert(CPLUG_FD_READ == CLAP_POSIX_FD_READ, "");
+static_assert(CPLUG_FD_WRITE == CLAP_POSIX_FD_WRITE, "");
+static_assert(CPLUG_FD_ERROR == CLAP_POSIX_FD_ERROR, "");
+#else
+static bool _cplug_clap_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
+{
+    CPLUG_LOG_ASSERT(false && "registerTimer() is Linux only");
+    return false;
+}
+static void _cplug_clap_unregisterTimer(CplugHostContext* ctx, uint32_t timerId)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterTimer() is Linux only");
+}
+static bool _cplug_clap_registerFd(CplugHostContext* ctx, int fd, uint32_t flags)
+{
+    CPLUG_LOG_ASSERT(false && "registerFd() is Linux only");
+    return false;
+}
+static void _cplug_clap_unregisterFd(CplugHostContext* ctx, int fd)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterFd() is Linux only");
+}
+#endif // __linux__
+static_assert(sizeof(CplugHostContext) == 72, "You may need to add support for new methods");
 
 static bool CLAPPlugin_init(const struct clap_plugin* plugin)
 {
     cplug_log("CLAPPlugin_init");
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+
+#if defined(__linux__)
+    // Fetched before cplug_createPlugin() so users can register timers & fds from there
+    clap->host_timer = (const clap_host_timer_support_t*)clap->host->get_extension(clap->host, CLAP_EXT_TIMER_SUPPORT);
+    clap->host_fd =
+        (const clap_host_posix_fd_support_t*)clap->host->get_extension(clap->host, CLAP_EXT_POSIX_FD_SUPPORT);
+    CPLUG_LOG_ASSERT(clap->host_timer != NULL);
+    CPLUG_LOG_ASSERT(clap->host_fd != NULL);
+#endif
 
     clap->userPlugin = cplug_createPlugin(&clap->hostContext);
 
@@ -823,6 +887,32 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
     return CLAP_PROCESS_CONTINUE;
 }
 
+#if defined(__linux__)
+////////////////////////////////////////////////
+// clap_timer_support & clap_posix_fd_support //
+////////////////////////////////////////////////
+
+static void CLAPExtTimerSupport_on_timer(const clap_plugin_t* plugin, clap_id timer_id)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    cplug_onTimer(clap->userPlugin, timer_id);
+}
+
+static const clap_plugin_timer_support_t s_clap_timer_support = {
+    .on_timer = CLAPExtTimerSupport_on_timer,
+};
+
+static void CLAPExtPosixFdSupport_on_fd(const clap_plugin_t* plugin, int fd, clap_posix_fd_flags_t flags)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+    cplug_onFd(clap->userPlugin, fd, flags);
+}
+
+static const clap_plugin_posix_fd_support_t s_clap_posix_fd_support = {
+    .on_fd = CLAPExtPosixFdSupport_on_fd,
+};
+#endif // __linux__
+
 static const void* CLAPPlugin_get_extension(const struct clap_plugin* plugin, const char* id)
 {
     cplug_log("CLAPPlugin_get_extension => %s", id);
@@ -849,6 +939,12 @@ static const void* CLAPPlugin_get_extension(const struct clap_plugin* plugin, co
 #if CPLUG_WANT_GUI
     if (!strcmp(id, CLAP_EXT_GUI))
         return &s_clap_gui;
+#endif
+#if defined(__linux__)
+    if (!strcmp(id, CLAP_EXT_TIMER_SUPPORT))
+        return &s_clap_timer_support;
+    if (!strcmp(id, CLAP_EXT_POSIX_FD_SUPPORT))
+        return &s_clap_posix_fd_support;
 #endif
     return NULL;
 }
@@ -913,6 +1009,10 @@ CLAPFactory_create_plugin(const struct clap_plugin_factory* factory, const clap_
     clap->hostContext.rescan          = _cplug_clap_rescan;
     clap->hostContext.getHostName     = _cplug_clap_getHostName;
     clap->hostContext.requestResize   = _cplug_clap_requestResize;
+    clap->hostContext.registerTimer   = _cplug_clap_registerTimer;
+    clap->hostContext.unregisterTimer = _cplug_clap_unregisterTimer;
+    clap->hostContext.registerFd      = _cplug_clap_registerFd;
+    clap->hostContext.unregisterFd    = _cplug_clap_unregisterFd;
 
     clap->host = host;
 
