@@ -220,7 +220,8 @@ elseif (APPLE)
     file(WRITE "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/${PROJECT_NAME}.app/Contents/PkgInfo" "APPL????")
 elseif (UNIX)
     add_executable(${PROJECT_NAME}_app src/cplug_standalone_linux.c example/example.c)
-    target_link_libraries(${PROJECT_NAME}_app PRIVATE ${XCB_LIBRARY} m)
+    # dl for libjack, which is loaded at runtime
+    target_link_libraries(${PROJECT_NAME}_app PRIVATE ${XCB_LIBRARY} m ${CMAKE_DL_LIBS})
 endif()
 
 

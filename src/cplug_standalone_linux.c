@@ -3,16 +3,17 @@
 
 // This is a stub so my builds compile. Piece by piece, things will be unstubbed. Wish me luck
 // TODO:
-// - Jack Audio
 // - Jack MIDI
 
 #include <cplug.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <xcb/xcb.h>
@@ -125,6 +126,295 @@ void Cplug_HostContext_UnregisterFd(CplugHostContext* ctx, int fd)
 }
 
 static_assert(sizeof(CplugHostContext) == 72, "You may need to add support for new methods");
+
+/*
+     ██╗ █████╗  ██████╗██╗  ██╗
+     ██║██╔══██╗██╔════╝██║ ██╔╝
+     ██║███████║██║     █████╔╝
+██   ██║██╔══██║██║     ██╔═██╗
+╚█████╔╝██║  ██║╚██████╗██║  ██╗
+ ╚════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
+*/
+
+// libjack is loaded at runtime so the app still starts without it, so these are declared here instead of jack.h
+typedef struct jack_client_t jack_client_t;
+typedef struct jack_port_t   jack_port_t;
+typedef uint32_t             jack_nframes_t;
+typedef int (*JackProcessCallback)(jack_nframes_t nframes, void* arg);
+typedef void (*JackShutdownCallback)(void* arg);
+
+enum
+{
+    JackNoStartServer = 0x01,
+
+    JackPortIsInput    = 0x1,
+    JackPortIsOutput   = 0x2,
+    JackPortIsPhysical = 0x4,
+};
+#define JACK_DEFAULT_AUDIO_TYPE "32 bit float mono audio"
+
+// Return type, name, arguments
+#define JACK_FUNCTIONS(X)                                                                                              \
+    X(jack_client_t*, jack_client_open, (const char* name, int options, int* status, ...))                             \
+    X(int, jack_client_close, (jack_client_t*))                                                                        \
+    X(int, jack_activate, (jack_client_t*))                                                                            \
+    X(int, jack_deactivate, (jack_client_t*))                                                                          \
+    X(int, jack_set_process_callback, (jack_client_t*, JackProcessCallback, void* arg))                                \
+    X(int, jack_set_buffer_size_callback, (jack_client_t*, JackProcessCallback, void* arg))                            \
+    X(int, jack_set_sample_rate_callback, (jack_client_t*, JackProcessCallback, void* arg))                            \
+    X(void, jack_on_shutdown, (jack_client_t*, JackShutdownCallback, void* arg))                                       \
+    X(jack_nframes_t, jack_get_sample_rate, (jack_client_t*))                                                          \
+    X(jack_nframes_t, jack_get_buffer_size, (jack_client_t*))                                                          \
+    X(jack_port_t*,                                                                                                    \
+      jack_port_register,                                                                                              \
+      (jack_client_t*, const char* name, const char* type, unsigned long flags, unsigned long bufferSize))             \
+    X(void*, jack_port_get_buffer, (jack_port_t*, jack_nframes_t))                                                     \
+    X(const char*, jack_port_name, (const jack_port_t*))                                                               \
+    X(const char**, jack_get_ports, (jack_client_t*, const char* namePattern, const char* typePattern, unsigned long)) \
+    X(int, jack_connect, (jack_client_t*, const char* sourcePort, const char* destinationPort))                        \
+    X(void, jack_free, (void*))
+
+static struct
+{
+    void*          lib;
+    jack_client_t* client;
+    jack_port_t*   outputs[2];
+
+    // The plugin's sample rate and block size can only change on the main thread while cplug_process isn't running.
+    // The notification thread stores the server's new settings and wakes the main thread through this eventfd. The
+    // main thread clears 'processing', waits for 'inProcess' to clear, applies them, then sets 'processing' again.
+    // Until then the process callback outputs silence
+    int              reconfigureFd;
+    cplug_atomic_i32 newSampleRate;
+    cplug_atomic_i32 newBufferSize;
+    cplug_atomic_i32 processing;
+    cplug_atomic_i32 inProcess;
+    // Written by the main thread only while 'processing' is clear
+    uint32_t sampleRate;
+    uint32_t bufferSize;
+
+#define X(ret, name, args) ret(*name) args;
+    JACK_FUNCTIONS(X)
+#undef X
+} g_jack;
+
+typedef struct JackProcessContext
+{
+    CplugProcessContext cplugContext;
+    float*              output[2];
+} JackProcessContext;
+
+static bool JackProcessContext_enqueueEvent(CplugProcessContext* ctx, const CplugEvent* e, uint32_t frameIdx)
+{
+    return true;
+}
+
+static bool JackProcessContext_dequeueEvent(CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
+{
+    if (frameIdx == ctx->numFrames)
+        return false;
+    event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
+    event->processAudio.endFrame = ctx->numFrames;
+    return true;
+}
+
+static void* JackProcessContext_getAudioInput(const CplugProcessContext* ctx, uint32_t busIdx) { return NULL; }
+static void* JackProcessContext_getAudioOutput(const CplugProcessContext* ctx, uint32_t busIdx)
+{
+    const JackProcessContext* jackCtx = (const JackProcessContext*)ctx;
+    return busIdx == 0 ? (void*)jackCtx->output : NULL;
+}
+
+// Real-time thread, owned by JACK
+static int jack_process(jack_nframes_t nframes, void* arg)
+{
+    float* output[CPLUG_ARRLEN(g_jack.outputs)];
+    for (size_t i = 0; i < CPLUG_ARRLEN(output); i++)
+        output[i] = (float*)g_jack.jack_port_get_buffer(g_jack.outputs[i], nframes);
+
+    // Set before reading 'processing', and the main thread clears 'processing' before reading this, so at least one of
+    // the two sees the other's write
+    cplug_atomic_exchange_i32(&g_jack.inProcess, 1);
+    // A bigger buffer can arrive before the main thread has reconfigured the plugin for it
+    if (!cplug_atomic_load_i32(&g_jack.processing) || nframes > g_jack.bufferSize)
+    {
+        cplug_atomic_exchange_i32(&g_jack.inProcess, 0);
+        for (size_t i = 0; i < CPLUG_ARRLEN(output); i++)
+            memset(output[i], 0, nframes * sizeof(float));
+        return 0;
+    }
+
+    JackProcessContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.cplugContext.numFrames       = nframes;
+    ctx.cplugContext.numInputBusses  = 0;
+    ctx.cplugContext.numOutputBusses = 1;
+    ctx.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
+    ctx.cplugContext.enqueueEvent    = JackProcessContext_enqueueEvent;
+    ctx.cplugContext.dequeueEvent    = JackProcessContext_dequeueEvent;
+    ctx.cplugContext.getAudioInput   = JackProcessContext_getAudioInput;
+    ctx.cplugContext.getAudioOutput  = JackProcessContext_getAudioOutput;
+    memcpy(ctx.output, output, sizeof(output));
+
+    cplug_process(g_app.plugin, &ctx.cplugContext);
+    cplug_atomic_exchange_i32(&g_jack.inProcess, 0);
+    return 0;
+}
+
+// Notification thread
+static void request_reconfigure()
+{
+    uint64_t one = 1;
+    write(g_jack.reconfigureFd, &one, sizeof(one));
+}
+
+static int jack_sample_rate_changed(jack_nframes_t sampleRate, void* arg)
+{
+    cplug_atomic_exchange_i32(&g_jack.newSampleRate, sampleRate);
+    request_reconfigure();
+    return 0;
+}
+
+static int jack_buffer_size_changed(jack_nframes_t bufferSize, void* arg)
+{
+    cplug_atomic_exchange_i32(&g_jack.newBufferSize, bufferSize);
+    request_reconfigure();
+    return 0;
+}
+
+// Main thread, when reconfigureFd is readable
+static void reconfigure_jack()
+{
+    uint64_t count;
+    read(g_jack.reconfigureFd, &count, sizeof(count));
+
+    uint32_t sampleRate = cplug_atomic_load_i32(&g_jack.newSampleRate);
+    uint32_t bufferSize = cplug_atomic_load_i32(&g_jack.newBufferSize);
+    // JACK also reports the settings the client started with
+    if (sampleRate == g_jack.sampleRate && bufferSize == g_jack.bufferSize)
+        return;
+
+    cplug_atomic_exchange_i32(&g_jack.processing, 0);
+    // At most one cplug_process call to wait for
+    while (cplug_atomic_load_i32(&g_jack.inProcess))
+        usleep(100);
+
+    cplug_log("JACK changed to %u Hz, %u frames", sampleRate, bufferSize);
+    g_jack.sampleRate = sampleRate;
+    g_jack.bufferSize = bufferSize;
+    cplug_setSampleRateAndBlockSize(g_app.plugin, sampleRate, bufferSize);
+    cplug_atomic_exchange_i32(&g_jack.processing, 1);
+}
+
+static void jack_shutdown(void* arg) { fprintf(stderr, "The JACK server shut down. Audio has stopped\n"); }
+
+static void close_jack()
+{
+    if (g_jack.client)
+        g_jack.jack_client_close(g_jack.client);
+    if (g_jack.reconfigureFd != -1)
+    {
+        Cplug_HostContext_UnregisterFd(NULL, g_jack.reconfigureFd);
+        close(g_jack.reconfigureFd);
+    }
+    if (g_jack.lib)
+        dlclose(g_jack.lib);
+    memset(&g_jack, 0, sizeof(g_jack));
+    g_jack.reconfigureFd = -1;
+}
+
+// Without JACK the app runs without audio
+static bool open_jack()
+{
+    g_jack.reconfigureFd = -1;
+    g_jack.lib           = dlopen("libjack.so.0", RTLD_NOW | RTLD_LOCAL);
+    if (g_jack.lib == NULL)
+    {
+        fprintf(stderr, "JACK not available. Install pipewire-jack (or jackd2) for audio\n");
+        return false;
+    }
+#define X(ret, name, args)                                                                                             \
+    *(void**)&g_jack.name = dlsym(g_jack.lib, #name);                                                                  \
+    if (g_jack.name == NULL)                                                                                           \
+    {                                                                                                                  \
+        fprintf(stderr, "libjack.so.0 is missing " #name "\n");                                                        \
+        close_jack();                                                                                                  \
+        return false;                                                                                                  \
+    }
+    JACK_FUNCTIONS(X)
+#undef X
+
+    // JackNoStartServer: when no server is running, don't spawn jackd behind the user's back
+    int status    = 0;
+    g_jack.client = g_jack.jack_client_open(CPLUG_PLUGIN_NAME, JackNoStartServer, &status);
+    if (g_jack.client == NULL)
+    {
+        fprintf(stderr, "Failed connecting to a JACK server (status 0x%x). Is one running?\n", status);
+        close_jack();
+        return false;
+    }
+
+    static const char* const OUTPUT_NAMES[] = {"out_L", "out_R"};
+    for (size_t i = 0; i < CPLUG_ARRLEN(g_jack.outputs); i++)
+    {
+        g_jack.outputs[i] =
+            g_jack.jack_port_register(g_jack.client, OUTPUT_NAMES[i], JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
+        if (g_jack.outputs[i] == NULL)
+        {
+            fprintf(stderr, "Failed registering JACK port %s\n", OUTPUT_NAMES[i]);
+            close_jack();
+            return false;
+        }
+    }
+
+    int reconfigureFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (reconfigureFd == -1 || !Cplug_HostContext_RegisterFd(NULL, reconfigureFd, CPLUG_FD_READ))
+    {
+        fprintf(stderr, "Failed creating an eventfd for JACK\n");
+        if (reconfigureFd != -1)
+            close(reconfigureFd);
+        close_jack();
+        return false;
+    }
+    g_jack.reconfigureFd = reconfigureFd;
+
+    // Set up before the first process callback, which can come as soon as the client is active
+    g_jack.sampleRate = g_jack.jack_get_sample_rate(g_jack.client);
+    g_jack.bufferSize = g_jack.jack_get_buffer_size(g_jack.client);
+    cplug_atomic_exchange_i32(&g_jack.newSampleRate, g_jack.sampleRate);
+    cplug_atomic_exchange_i32(&g_jack.newBufferSize, g_jack.bufferSize);
+    cplug_setSampleRateAndBlockSize(g_app.plugin, g_jack.sampleRate, g_jack.bufferSize);
+    cplug_atomic_exchange_i32(&g_jack.processing, 1);
+
+    g_jack.jack_set_process_callback(g_jack.client, jack_process, NULL);
+    g_jack.jack_set_sample_rate_callback(g_jack.client, jack_sample_rate_changed, NULL);
+    g_jack.jack_set_buffer_size_callback(g_jack.client, jack_buffer_size_changed, NULL);
+    g_jack.jack_on_shutdown(g_jack.client, jack_shutdown, NULL);
+    if (g_jack.jack_activate(g_jack.client) != 0)
+    {
+        fprintf(stderr, "Failed activating the JACK client\n");
+        close_jack();
+        return false;
+    }
+
+    // Ports can only be connected once active. Physical playback ports are inputs from JACK's point of view
+    const char** playback =
+        g_jack.jack_get_ports(g_jack.client, NULL, JACK_DEFAULT_AUDIO_TYPE, JackPortIsPhysical | JackPortIsInput);
+    if (playback == NULL || playback[0] == NULL)
+    {
+        fprintf(stderr, "No JACK playback ports to connect to\n");
+    }
+    else
+    {
+        // A mono device gets both channels
+        const char* right = playback[1] ? playback[1] : playback[0];
+        g_jack.jack_connect(g_jack.client, g_jack.jack_port_name(g_jack.outputs[0]), playback[0]);
+        g_jack.jack_connect(g_jack.client, g_jack.jack_port_name(g_jack.outputs[1]), right);
+    }
+    if (playback)
+        g_jack.jack_free(playback);
+    return true;
+}
 
 static void handle_signal(int sig) { g_app.quit = 1; }
 
@@ -328,6 +618,8 @@ static void run_loop()
                     flags |= CPLUG_FD_ERROR;
                 if (pfds[i].fd == xcb_get_file_descriptor(g_app.connection))
                     handle_window_events();
+                else if (pfds[i].fd == g_jack.reconfigureFd)
+                    reconfigure_jack();
                 else
                     cplug_onFd(g_app.plugin, pfds[i].fd, flags);
             }
@@ -394,6 +686,8 @@ int main(int argc, char** argv)
         xcb_map_window(g_app.connection, g_app.window);
         xcb_flush(g_app.connection);
 
+        open_jack();
+
         int windowFd = xcb_get_file_descriptor(g_app.connection);
         Cplug_HostContext_RegisterFd(&host, windowFd, CPLUG_FD_READ);
         // Atom replies may have queued events that poll() won't see
@@ -401,6 +695,10 @@ int main(int argc, char** argv)
         run_loop();
         Cplug_HostContext_UnregisterFd(&host, windowFd);
 
+        // Stops the process callback before the plugin goes
+        if (g_jack.client)
+            g_jack.jack_deactivate(g_jack.client);
+        close_jack();
         close_gui();
         xcb_destroy_window(g_app.connection, g_app.window);
         cplug_destroyPlugin(g_app.plugin);
