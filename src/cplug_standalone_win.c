@@ -23,7 +23,7 @@
 
 #include <audioclient.h>
 #include <avrt.h>
-#include <cfgmgr32.h>
+#include <dbt.h>
 #include <mmdeviceapi.h>
 #include <mmeapi.h>
 #include <synchapi.h>
@@ -36,7 +36,6 @@
 #include <dwmapi.h>
 
 #pragma comment(lib, "winmm.lib")
-#pragma comment(lib, "cfgmgr32.lib")
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Avrt.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -790,6 +789,8 @@ struct
     IMMDeviceEnumerator* pIMMDeviceEnumerator;
     IMMDevice*           pIMMDevice;
     CplugAudioDeviceID   CurrentDeviceID;
+    // TRUE unless the user picked a specific device. Audio then moves to the new default whenever it changes
+    BOOL                 FollowDefaultDevice;
     // Process
     IAudioClient*       pIAudioClient;
     IAudioRenderClient* pIAudioRenderClient;
@@ -1518,6 +1519,7 @@ void Cplug_Audio_SetDevice(int deviceIdx)
         CPLUG_COM_RELEASE(pCollection);
     }
 
+    g_Audio.FollowDefaultDevice = g_Audio.pIMMDevice == NULL;
     if (g_Audio.pIMMDevice == NULL)
     {
         // eConsole or eMultimedia? Microsoft say console is for games, multimedia for playing live music
@@ -1699,11 +1701,9 @@ enum
     IDM_BlockSize_1024,
     IDM_BlockSize_2048,
 
-    IDM_HandleRemovedMIDIDevice,
-    IDM_HandleAddedMIDIDevice,
-
-    IDM_HandleRemovedAudioDevice,
-    IDM_HandleAddedAudioDevice,
+    IDM_HandleAudioDevicesChanged,
+    IDM_HandleDefaultAudioDeviceChanged,
+    IDM_DefaultAudioDevice,
 
     IDM_OFFSET_AUDIO_DEVICES   = 50,
     IDM_RefreshAudioDeviceList = 99,
@@ -1780,13 +1780,29 @@ void Cplug_Menu_RebuildAudioOutputsSubmenu()
     {
     }
 
+    // Following the default device checks this item instead of the device itself
+    {
+        INT   ActiveIndex = Cplug_Audio_GetActiveDeviceIndex();
+        WCHAR Label[160];
+        if (g_Audio.FollowDefaultDevice && ActiveIndex >= 0)
+            _snwprintf(Label, ARRAYSIZE(Label), L"System default (%s)", g_Audio.Devices[ActiveIndex].Name);
+        else
+            _snwprintf(Label, ARRAYSIZE(Label), L"System default");
+        Label[ARRAYSIZE(Label) - 1] = 0;
+
+        UINT uFlags = g_Audio.FollowDefaultDevice ? (MF_STRING | MF_CHECKED) : MF_STRING;
+        AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_DefaultAudioDevice, Label);
+        AppendMenuW(g_Menus.hAudioOutputSubmenu, MF_SEPARATOR, 0, NULL);
+    }
+
     for (UINT i = 0; i < g_Audio.NumDevices; i++)
     {
         struct CplugAudioDevice* pDevice = &g_Audio.Devices[i];
 
         UINT uFlags = MF_STRING;
         _STATIC_ASSERT(sizeof(pDevice->DeviceID) == sizeof(g_Audio.CurrentDeviceID));
-        if (0 == memcmp(&pDevice->DeviceID, &g_Audio.CurrentDeviceID, sizeof(g_Audio.CurrentDeviceID)))
+        if (!g_Audio.FollowDefaultDevice &&
+            0 == memcmp(&pDevice->DeviceID, &g_Audio.CurrentDeviceID, sizeof(g_Audio.CurrentDeviceID)))
             uFlags |= MF_CHECKED;
 
         AppendMenuW(g_Menus.hAudioOutputSubmenu, uFlags, IDM_OFFSET_AUDIO_DEVICES + i, pDevice->Name);
@@ -1819,67 +1835,78 @@ void Cplug_Menu_RebuildMIDIInputSubmenu()
 
 #pragma region HOTPLUGGING
 
-// WARNING: Windows 8+ feature
-HCMNOTIFICATION g_hCMNotification;
+// Audio hotplugging uses IMMNotificationClient (Vista+). MIDI has no equivalent in WinMM, so it rescans after
+// WM_DEVICECHANGE / DBT_DEVNODES_CHANGED, which Windows sends to every top-level window when any device is added or
+// removed. That fires in bursts, so a timer debounces it and gives WinMM time to update its device list
+// https://learn.microsoft.com/en-us/windows/win32/devio/dbt-devnodes-changed
+#define CPLUG_MIDI_RESCAN_TIMER_ID 1
+#define CPLUG_MIDI_RESCAN_DELAY_MS 250
 
-BOOL Cplug_StartsWith(const WCHAR* str, const WCHAR* prefix)
+static const IID _IID_IUnknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const IID _IID_IMMNotificationClient =
+    {0x7991eec9, 0x7e89, 0x4d85, {0x83, 0x90, 0x6c, 0x70, 0x3c, 0xec, 0x60, 0xc0}};
+
+// [Unknown system thread] These only post messages. The main thread does the work
+// https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nn-mmdeviceapi-immnotificationclient
+HRESULT STDMETHODCALLTYPE Cplug_MMNotify_QueryInterface(IMMNotificationClient* This, REFIID riid, void** ppvObject)
 {
-    while (*str != 0 && *prefix != 0 && *str == *prefix)
+    if (0 == memcmp(riid, &_IID_IUnknown, sizeof(IID)) || 0 == memcmp(riid, &_IID_IMMNotificationClient, sizeof(IID)))
     {
-        str++;
-        prefix++;
+        *ppvObject = This;
+        return S_OK;
     }
-    return *prefix == 0;
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
+}
+// The client is a static object, so reference counting does nothing
+ULONG STDMETHODCALLTYPE Cplug_MMNotify_AddRef(IMMNotificationClient* This) { return 1; }
+ULONG STDMETHODCALLTYPE Cplug_MMNotify_Release(IMMNotificationClient* This) { return 1; }
+
+HRESULT STDMETHODCALLTYPE
+Cplug_MMNotify_OnDeviceStateChanged(IMMNotificationClient* This, LPCWSTR pwstrDeviceId, DWORD dwNewState)
+{
+    PostMessageW(g_hwnd, WM_COMMAND, IDM_HandleAudioDevicesChanged, 0);
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE Cplug_MMNotify_OnDeviceAdded(IMMNotificationClient* This, LPCWSTR pwstrDeviceId)
+{
+    PostMessageW(g_hwnd, WM_COMMAND, IDM_HandleAudioDevicesChanged, 0);
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE Cplug_MMNotify_OnDeviceRemoved(IMMNotificationClient* This, LPCWSTR pwstrDeviceId)
+{
+    PostMessageW(g_hwnd, WM_COMMAND, IDM_HandleAudioDevicesChanged, 0);
+    return S_OK;
+}
+HRESULT STDMETHODCALLTYPE Cplug_MMNotify_OnDefaultDeviceChanged(
+    IMMNotificationClient* This,
+    EDataFlow              flow,
+    ERole                  role,
+    LPCWSTR                pwstrDefaultDeviceId)
+{
+    // Windows sends one of these per role. Only listen for the role Cplug_Audio_SetDevice() uses
+    if (flow == eRender && role == eMultimedia)
+        PostMessageW(g_hwnd, WM_COMMAND, IDM_HandleDefaultAudioDeviceChanged, 0);
+    return S_OK;
+}
+// Format changes invalidate the stream, which the audio thread already handles with CPLUG_WM_RESTART_AUDIO
+HRESULT STDMETHODCALLTYPE
+Cplug_MMNotify_OnPropertyValueChanged(IMMNotificationClient* This, LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
+{
+    return S_OK;
 }
 
-// Unknown system thread. Notify Connected/disconnected devices. We only check Audio/MIDI
-DWORD CALLBACK Cplug_HandleDeviceChange(
-    HCMNOTIFICATION       hNotify,
-    PVOID                 hwnd,
-    CM_NOTIFY_ACTION      Action,
-    PCM_NOTIFY_EVENT_DATA EventData,
-    DWORD                 EventDataSize)
-{
-    if (!EventData)
-        return 0;
-    const WCHAR* Id = &EventData->u.DeviceInstance.InstanceId[0];
-    if (!Id)
-        return 0;
-
-    switch (Action)
-    {
-    case CM_NOTIFY_ACTION_DEVICEINSTANCEENUMERATED:
-        // I've found updating MIDI lists here less reliable than doing a full rescan every time a device is
-        // added/removed
-        break;
-    case CM_NOTIFY_ACTION_DEVICEINSTANCEREMOVED:
-        // MIDI input instance IDs come in this format:
-        // SWD\MMDEVAPI\MIDII_(4 byte hex).P_(2 byte hex)
-        // Software device - MMDevice API - MIDI Input
-        // Update 2026: Microsoft has been working on their MIDI APIs atm with the new "Windows MIDI Services".
-        // MIDI input devices now appear to begin with "SWD\\MIDISRV\\MIDIU_KSA_"
-        // Audio devices use the format: L"SWD\MMDEVAPI\{0.0.[0-9].00000000}.{(GUID)}"
-        // This appears to match the same device ID string as found with IMMDevice::GetId()
-        // Unfortunately the beginning of the audio IDs matches the beginning of the old MIDI IDs, so its critical to
-        // check for MIDI IDs before audio IDs
-        // MS have recently corrected this confusion, so this shouldn't be an issue in 2040...
-        // https://learn.microsoft.com/en-us/windows-hardware/drivers/install/device-instance-ids
-        if (Cplug_StartsWith(Id, L"SWD\\MIDISRV\\MIDIU_KSA_") || Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\MIDII_"))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedMIDIDevice, 0);
-        else if (Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\"))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleRemovedAudioDevice, 0);
-        break;
-    case CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED:
-        if (Cplug_StartsWith(Id, L"SWD\\MIDISRV\\MIDIU_KSA_") || Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\MIDII_"))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedMIDIDevice, 0);
-        else if (Cplug_StartsWith(Id, L"SWD\\MMDEVAPI\\"))
-            PostMessageW((HWND)hwnd, WM_COMMAND, IDM_HandleAddedAudioDevice, 0);
-        break;
-    default:
-        break;
-    }
-    return 0;
-}
+IMMNotificationClientVtbl g_MMNotificationClientVtbl = {
+    Cplug_MMNotify_QueryInterface,
+    Cplug_MMNotify_AddRef,
+    Cplug_MMNotify_Release,
+    Cplug_MMNotify_OnDeviceStateChanged,
+    Cplug_MMNotify_OnDeviceAdded,
+    Cplug_MMNotify_OnDeviceRemoved,
+    Cplug_MMNotify_OnDefaultDeviceChanged,
+    Cplug_MMNotify_OnPropertyValueChanged,
+};
+IMMNotificationClient g_MMNotificationClient = {&g_MMNotificationClientVtbl};
 #pragma endregion HOTPLUGGING
 
 LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -1893,7 +1920,11 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         return 0;
     case WM_CLOSE: // User pressed the window X/Close button
         // Shutdown device notifications
-        CM_Unregister_Notification(g_hCMNotification);
+        KillTimer(hWnd, CPLUG_MIDI_RESCAN_TIMER_ID);
+        if (g_Audio.pIMMDeviceEnumerator)
+            g_Audio.pIMMDeviceEnumerator->lpVtbl->UnregisterEndpointNotificationCallback(
+                g_Audio.pIMMDeviceEnumerator,
+                &g_MMNotificationClient);
 
         // Shutdown audio
         if (g_Audio.hAudioEvent)
@@ -2025,6 +2056,55 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     }
+    case WM_DEVICECHANGE:
+        // Restarts the timer if it's already pending
+        if (wParam == DBT_DEVNODES_CHANGED)
+            SetTimer(hWnd, CPLUG_MIDI_RESCAN_TIMER_ID, CPLUG_MIDI_RESCAN_DELAY_MS, NULL);
+        return TRUE;
+    case WM_TIMER:
+        if (wParam == CPLUG_MIDI_RESCAN_TIMER_ID)
+        {
+            KillTimer(hWnd, CPLUG_MIDI_RESCAN_TIMER_ID);
+            Cplug_MIDI_RescanInputs();
+
+            // Disconnect if our connected device was removed
+            if (g_MIDI.IsConnected)
+            {
+                UINT i = 0;
+                for (; i < g_MIDI.NumDevices; i++)
+                    if (Cplug_MIDI_MatchDevice(&g_MIDI.Devices[i], &g_MIDI.ConnectedDevice))
+                        break;
+                if (i == g_MIDI.NumDevices)
+                {
+                    fprintf(stderr, "Connected MIDI input device was removed\n");
+                    Cplug_MIDI_DisconnectInput();
+                }
+            }
+
+            // Reconnect to the last chosen device if it came back
+            BOOL HasHotplugDevice = g_MIDI.HotplugDevice.vDriverVersion != 0;
+            BOOL IsConnectedToHotplugDevice =
+                g_MIDI.IsConnected && Cplug_MIDI_MatchDevice(&g_MIDI.ConnectedDevice, &g_MIDI.HotplugDevice);
+            if (HasHotplugDevice && !IsConnectedToHotplugDevice)
+            {
+                for (UINT i = 0; i < g_MIDI.NumDevices; i++)
+                {
+                    if (Cplug_MIDI_MatchDevice(&g_MIDI.Devices[i], &g_MIDI.HotplugDevice))
+                    {
+                        Cplug_MIDI_ConnectInput(i);
+                        break;
+                    }
+                }
+            }
+
+            // At least connect to something...
+            if (g_MIDI.IsConnected == 0 && g_MIDI.NumDevices)
+                Cplug_MIDI_ConnectInput(0);
+
+            Cplug_Menu_RebuildMIDIInputSubmenu();
+            DrawMenuBar(hWnd);
+        }
+        break;
     case CPLUG_WM_RESTART_AUDIO:
     {
         // Audio may have been stopped on purpose since the audio thread posted this (eg. hot reload)
@@ -2084,77 +2164,7 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             Cplug_Audio_ScanDevices();
             Cplug_Menu_RebuildAudioOutputsSubmenu();
             break;
-        case IDM_HandleRemovedMIDIDevice:
-        {
-            fprintf(stderr, "Callback: Removed MIDI input device\n");
-            Cplug_MIDI_RescanInputs();
-            if (g_MIDI.IsConnected)
-            {
-                UINT num = midiInGetNumDevs();
-                if (num == 0)
-                {
-                    Cplug_MIDI_DisconnectInput();
-                    fprintf(stderr, "WARNING: Not connected to a MIDI input device\n");
-                }
-                else
-                {
-                    // Check it was the connected device which was removed
-                    UINT i = 0;
-                    for (; i < num; i++)
-                    {
-                        MIDIINCAPS2W* Caps    = &g_MIDI.Devices[i];
-                        BOOL          IsMatch = Cplug_MIDI_MatchDevice(Caps, &g_MIDI.ConnectedDevice);
-                        if (IsMatch)
-                            break;
-                    }
-                    // Failed to match our connected device
-                    if (i == num)
-                    {
-                        fprintf(
-                            stderr,
-                            "Connected MIDI input device was removed. Trying to connecting to the next available "
-                            "device\n");
-                        Cplug_MIDI_DisconnectInput();
-                        Cplug_MIDI_ConnectInput(0);
-                    }
-                }
-            }
-            Cplug_Menu_RebuildMIDIInputSubmenu();
-            break;
-        }
-        case IDM_HandleAddedMIDIDevice:
-        {
-            fprintf(stderr, "Callback: New MIDI input device\n");
-            Cplug_MIDI_RescanInputs();
-
-            BOOL HasHotplugDevice = g_MIDI.HotplugDevice.vDriverVersion != 0;
-            BOOL IsConnectedToHotplugDevice =
-                0 == memcmp(&g_MIDI.ConnectedDevice, &g_MIDI.HotplugDevice, sizeof(g_MIDI.HotplugDevice));
-            if (HasHotplugDevice && !IsConnectedToHotplugDevice)
-            {
-                // Check to see if our last device was just connected
-                for (UINT i = 0; i < g_MIDI.NumDevices; i++)
-                {
-                    MIDIINCAPS2W* Caps    = &g_MIDI.Devices[i];
-                    BOOL          IsMatch = Cplug_MIDI_MatchDevice(Caps, &g_MIDI.HotplugDevice);
-                    if (IsMatch)
-                    {
-                        Cplug_MIDI_ConnectInput(i);
-                        break;
-                    }
-                }
-            }
-            // At least connect to something...
-            if (g_MIDI.IsConnected == 0 && g_MIDI.NumDevices)
-            {
-                fprintf(stderr, "Trying to connect new device\n");
-                Cplug_MIDI_ConnectInput(0);
-            }
-
-            Cplug_Menu_RebuildMIDIInputSubmenu();
-            break;
-        }
-        case IDM_HandleRemovedAudioDevice:
+        case IDM_HandleAudioDevicesChanged:
         {
             Cplug_Audio_ScanDevices();
             INT ActiveIndex = Cplug_Audio_GetActiveDeviceIndex();
@@ -2168,11 +2178,45 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
             Cplug_Menu_RebuildSampleRateSubmenu();
             break;
         }
-        case IDM_HandleAddedAudioDevice:
+        case IDM_HandleDefaultAudioDeviceChanged:
         {
-            // The OS will determine the "preferred device". Other apps like Chrome automatically switch to the new
-            // default on the fly. We will copy that behaviour
+            // Like a DAW, only follow the new default if the user hasn't picked a specific device
             Cplug_Audio_ScanDevices();
+            if (g_Audio.FollowDefaultDevice)
+            {
+                // Skip the restart if the default is already the device we're playing on
+                BOOL       IsCurrent      = FALSE;
+                IMMDevice* pDefaultDevice = NULL;
+                HRESULT    hr             = g_Audio.pIMMDeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(
+                    g_Audio.pIMMDeviceEnumerator,
+                    eRender,
+                    eMultimedia,
+                    &pDefaultDevice);
+                if (SUCCEEDED(hr) && pDefaultDevice != NULL)
+                {
+                    WCHAR* DefaultDeviceID = NULL;
+                    hr                     = pDefaultDevice->lpVtbl->GetId(pDefaultDevice, &DefaultDeviceID);
+                    if (SUCCEEDED(hr) && DefaultDeviceID != NULL)
+                    {
+                        IsCurrent = 0 == wcscmp(DefaultDeviceID, g_Audio.CurrentDeviceID.Buffer);
+                        CoTaskMemFree(DefaultDeviceID);
+                    }
+                }
+                CPLUG_COM_RELEASE(pDefaultDevice);
+
+                if (!IsCurrent)
+                {
+                    Cplug_Audio_Stop();
+                    Cplug_Audio_SetDevice(-1);
+                    Cplug_Audio_Start();
+                }
+            }
+            Cplug_Menu_RebuildAudioOutputsSubmenu();
+            Cplug_Menu_RebuildSampleRateSubmenu();
+            break;
+        }
+        case IDM_DefaultAudioDevice:
+        {
             Cplug_Audio_Stop();
             Cplug_Audio_SetDevice(-1);
             Cplug_Audio_Start();
@@ -2190,6 +2234,7 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 Cplug_Audio_SetDevice(AudioDeviceIdx);
                 Cplug_Audio_Start();
                 Cplug_Menu_RebuildAudioOutputsSubmenu();
+                Cplug_Menu_RebuildSampleRateSubmenu();
             }
             if (MidiDeviceIdx < g_MIDI.NumDevices)
             {
@@ -2613,19 +2658,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
     // Hotplugging
     {
-        // Callback to detect connected/disconnected MIDI/Audio devices
+        // Callback to detect connected/disconnected audio devices. MIDI is handled by WM_DEVICECHANGE
         // Must be initialised afer the menu because the callback changes menu items based on new/removed devices
-        CM_NOTIFY_FILTER notifyFilter;
-        memset(&notifyFilter, 0, sizeof(notifyFilter));
-        notifyFilter.cbSize     = sizeof(notifyFilter);
-        notifyFilter.Flags      = CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES;
-        notifyFilter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE;
-
-        // Warning: CM_Register_Notification is Windows 8+
-        // https://learn.microsoft.com/en-us/windows/win32/api/cfgmgr32/nf-cfgmgr32-cm_register_notification
-        HRESULT result = CM_Register_Notification(&notifyFilter, g_hwnd, Cplug_HandleDeviceChange, &g_hCMNotification);
-        cplug_assert(result == CR_SUCCESS);
-        cplug_assert(g_hCMNotification != NULL);
+        // https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-registerendpointnotificationcallback
+        HRESULT hr = g_Audio.pIMMDeviceEnumerator->lpVtbl->RegisterEndpointNotificationCallback(
+            g_Audio.pIMMDeviceEnumerator,
+            &g_MMNotificationClient);
+        cplug_assert(hr == S_OK);
     }
 
     // Populate submenu items
