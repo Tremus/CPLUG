@@ -58,7 +58,6 @@ Most plugins don't support these features, & most users don't ask for them or kn
 -   CPLUG 2.0:
     - Remove as many macros as possible. Make build scripts as short as possibe. Solve as many problems as possible with C/C++ code, not build scripts
     - Move all cplug methods to one big vtable. This makes supporting multiple plugins in a single dll trivial, want of extensions (eg. parameter, gui, midi) could be implied by setting function pointers on the vtable.
-    - Update VST3 C API version to the new MIT licensed one
     - Convert everything into to single header library
     - Allow user to hijack `main()` and hook into file changes so they can write their own custom hotreloading code
 -   Finish supporting other note expressions (volume, pan, vibrato, brightness)
@@ -82,7 +81,7 @@ Most plugins don't support these features, & most users don't ask for them or kn
 
 ## Licensing
 
-The files [src/vst3_c_api.h](src/vst3_c_api.h) and [src/cplug_vst3.c](src/cplug_vst3.c) are required to use the [VST 3 SDK License](https://forums.steinberg.net/t/vst-3-sdk-license/201637)
+The file [src/vst3_c_api.h](src/vst3_c_api.h) is [MIT licensed](https://forums.steinberg.net/t/vst-3-sdk-license/201637)
 
 The file [src/clap/clap.h](src/clap/clap.h) uses an MIT license included at the top of the file.
 
@@ -90,5 +89,6 @@ Everything else is in the public domain, or MIT if you insist. See [LICENSE](LIC
 
 ## Credits
 
+-   CPLUG contributors! <3
 -   Filipe Coelho - Most of the VST3 wrapper and debugging code is a heavily edited version of his code from the [DISTRHO Plugin Framework](https://github.com/DISTRHO/DPF)
 -   Nakst - The drawing used in the example plugin was taken from the [CLAP tutorial](https://nakst.gitlab.io/tutorial/clap-part-1.html)
