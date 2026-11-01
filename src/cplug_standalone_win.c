@@ -51,12 +51,13 @@
 #endif
 
 #if !defined(CPLUG_DEFAULT_BLOCK_SIZE) || !defined(CPLUG_DEFAULT_SAMPLE_RATE)
-// WARNING: Only a sample rate of 48000 with a block size of 512 or less appears to work on my machine. Any other
-// setting produces stutters. I don't know why this is. Several DAWs I use seem to have this problem too when using
-// WASAPI. This may be Microsoft jank, it also may be me not understanding how use the API properly
 #define CPLUG_DEFAULT_SAMPLE_RATE 48000
 #define CPLUG_DEFAULT_BLOCK_SIZE  512
 #endif
+
+#define CPLUG_MAX_BLOCK_SIZE   2048
+#define CPLUG_MAX_NUM_CHANNELS 2
+_STATIC_ASSERT(CPLUG_DEFAULT_BLOCK_SIZE <= CPLUG_MAX_BLOCK_SIZE);
 
 #ifdef __cplusplus
 // In cpp, this should be a "reference"
@@ -778,14 +779,18 @@ struct
     HANDLE              hAudioProcessThread;
     volatile UINT32     FlagExitAudioThread;
 
-    SIZE_T ProcessBufferCap;
-    BYTE*  ProcessBuffer;
-    UINT32 ProcessBufferMaxFrames;
-    UINT32 ProcessBufferNumOverprocessedFrames;
     // Config
     UINT32 NumChannels;
     UINT32 SampleRate;
     UINT32 BlockSize;
+
+    // Output
+    UINT32 ProcessBufferMaxFrames;
+    UINT32 ProcessBufferNumOverprocessedFrames;
+    // Deinterleaved buffers the plugin processes into
+    __declspec(align(32)) float ProcessOutput[CPLUG_MAX_NUM_CHANNELS][CPLUG_MAX_BLOCK_SIZE];
+    // The last process blocks frames that didn't fit in the WASAPI buffer
+    __declspec(align(32)) float OverprocessedInterleaved[CPLUG_MAX_NUM_CHANNELS * CPLUG_MAX_BLOCK_SIZE];
 } g_Audio;
 
 static const PROPERTYKEY _PKEY_Device_FriendlyName = {
@@ -1032,7 +1037,7 @@ void Cplug_Audio_Process(const UINT32 blockSize)
                                   ? g_Audio.ProcessBufferNumOverprocessedFrames
                                   : remainingBlockFrames;
         SIZE_T bytesToCopy  = sizeof(float) * g_Audio.NumChannels * framesToCopy;
-        memcpy(outBuffer, g_Audio.ProcessBuffer, bytesToCopy);
+        memcpy(outBuffer, g_Audio.OverprocessedInterleaved, bytesToCopy);
 
         remainingBlockFrames                        -= framesToCopy;
         g_Audio.ProcessBufferNumOverprocessedFrames -= framesToCopy;
@@ -1042,7 +1047,10 @@ void Cplug_Audio_Process(const UINT32 blockSize)
         if (g_Audio.ProcessBufferNumOverprocessedFrames)
         {
             SIZE_T bytesRemaining = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferNumOverprocessedFrames;
-            memmove(g_Audio.ProcessBuffer, g_Audio.ProcessBuffer + bytesToCopy, bytesRemaining);
+            memmove(
+                g_Audio.OverprocessedInterleaved,
+                g_Audio.OverprocessedInterleaved + g_Audio.NumChannels * framesToCopy,
+                bytesRemaining);
         }
         cplug_assert(remainingBlockFrames < blockSize); // check overflow
     }
@@ -1058,10 +1066,8 @@ void Cplug_Audio_Process(const UINT32 blockSize)
     ctx.cplugContext.getAudioInput   = Cplug_Audio_getAudioInput;
     ctx.cplugContext.getAudioOutput  = Cplug_Audio_getAudioOutput;
 
-    SIZE_T processBufferOffset = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferMaxFrames;
-    processBufferOffset        = (SIZE_T)Cplug_RoundUp(processBufferOffset, 32);
-    ctx.output[0]              = (float*)(g_Audio.ProcessBuffer + processBufferOffset);
-    ctx.output[1]              = ctx.output[0] + g_Audio.BlockSize;
+    ctx.output[0] = g_Audio.ProcessOutput[0];
+    ctx.output[1] = g_Audio.ProcessOutput[1];
 
     while (remainingBlockFrames > 0)
     {
@@ -1078,7 +1084,7 @@ void Cplug_Audio_Process(const UINT32 blockSize)
             for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
                 *outputInterleaved++ = ctx.output[ch][i];
 
-        float* remainingInterleaved = (float*)g_Audio.ProcessBuffer;
+        float* remainingInterleaved = g_Audio.OverprocessedInterleaved;
         for (; i < g_Audio.BlockSize; i++)
             for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
                 *remainingInterleaved++ = ctx.output[ch][i];
@@ -1179,6 +1185,8 @@ void Cplug_Audio_Start()
 #endif // Hotreload
     cplug_assert(g_Audio.SampleRate != 0);
     cplug_assert(g_Audio.BlockSize != 0);
+    cplug_assert(g_Audio.BlockSize <= CPLUG_MAX_BLOCK_SIZE);
+    cplug_assert(g_Audio.NumChannels <= CPLUG_MAX_NUM_CHANNELS);
     cplug_assert(g_Audio.pIMMDevice != NULL);
     cplug_assert(g_Audio.pIAudioClient == NULL);
 
@@ -1234,27 +1242,6 @@ void Cplug_Audio_Start()
     cplug_assert(hr == S_OK);
     if (hr != S_OK)
         goto fail;
-
-    // Allocate buffer
-    {
-        SIZE_T req_bytes_reserve    = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferMaxFrames;
-        SIZE_T req_bytes_processing = sizeof(float) * g_Audio.NumChannels * g_Audio.BlockSize;
-        req_bytes_reserve           = (SIZE_T)Cplug_RoundUp(req_bytes_reserve, 32);
-        req_bytes_processing        = (SIZE_T)Cplug_RoundUp(req_bytes_processing, 32);
-
-        // Page sizes are typically 64kb on Windows
-        SIZE_T requiredCap = (SIZE_T)Cplug_RoundUp(req_bytes_reserve + req_bytes_processing, 1024 * 64);
-        if (requiredCap > g_Audio.ProcessBufferCap)
-        {
-            if (g_Audio.ProcessBuffer != NULL)
-                VirtualFree(g_Audio.ProcessBuffer, g_Audio.ProcessBufferCap, 0);
-
-            g_Audio.ProcessBufferCap = requiredCap;
-            g_Audio.ProcessBuffer =
-                (BYTE*)VirtualAlloc(NULL, g_Audio.ProcessBufferCap, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            cplug_assert(g_Audio.ProcessBuffer != NULL);
-        }
-    }
 
     g_plugin.setSampleRateAndBlockSize(g_plugin.UserPlugin, g_Audio.SampleRate, g_Audio.BlockSize);
 
@@ -1692,8 +1679,6 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         // Shutdown audio
         if (g_Audio.hAudioEvent)
             Cplug_Audio_Stop();
-        cplug_assert(g_Audio.ProcessBuffer != NULL);
-        VirtualFree(g_Audio.ProcessBuffer, g_Audio.ProcessBufferCap, 0);
         CPLUG_COM_RELEASE(g_Audio.pIMMDevice);
         CPLUG_COM_RELEASE(g_Audio.pIMMDeviceEnumerator);
 
@@ -2352,7 +2337,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         Cplug_Audio_ScanDevices();
         Cplug_Audio_SetDevice(-1); // -1 == default device
         Cplug_Audio_Start();
-        cplug_assert(g_Audio.ProcessBuffer);
     }
 
     // INIT MIDI
