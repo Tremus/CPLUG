@@ -1,6 +1,9 @@
 #ifndef PLUGIN_CONFIG_H
 #define PLUGIN_CONFIG_H
 
+#define WINVER 0x0601 // Widnows 7
+// #define WINVER 0x0602 // Windows 8
+
 #define CPLUG_IS_INSTRUMENT    1
 #define CPLUG_WANT_GUI         1
 #define CPLUG_GUI_RESIZABLE    1
