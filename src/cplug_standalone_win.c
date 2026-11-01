@@ -771,7 +771,9 @@ struct CplugAudioDevice
 {
     WCHAR              Name[128];
     CplugAudioDeviceID DeviceID;
-    BOOL               SupportedSampleRates[CPLUG_SAMPLE_RATES_COUNT];
+    // Rates the shared mode engine runs at without resampling.
+    // Other rates still play through AUTOCONVERTPCM
+    BOOL SupportedSampleRates[CPLUG_SAMPLE_RATES_COUNT];
 };
 
 struct
@@ -973,7 +975,15 @@ void Cplug_Audio_ScanDevices()
                 }
                 else if (hr == S_FALSE)
                 {
-                    // TODO: MS want you to check for the "closest match" inside SupportedFormat upon S_FALSE
+                    // The engine runs at a different rate and SupportedFormat holds its closest match. Mark that
+                    // rate native too, in case its exact format (eg. channel mask) never returns S_OK
+                    HasSupportedFormat = TRUE;
+                    if (SupportedFormat)
+                    {
+                        for (int k = 0; k < ARRAYSIZE(pDevice->SupportedSampleRates); k++)
+                            if ((DWORD)CPLUG_SAMPLE_RATES[k] == SupportedFormat->nSamplesPerSec)
+                                pDevice->SupportedSampleRates[k] = TRUE;
+                    }
                 }
 
                 if (SupportedFormat)
@@ -1112,10 +1122,10 @@ DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
     g_DebugMidiWorstLateFrames = 0;
     // Largest gap between frames written and the device position, and when it happened. The steady gap
     // ignores the first 500ms, to see whether the measured latency is a startup spike
-    INT64 debugWorstGapFrames     = 0;
-    INT64 debugWorstGapAtFrames   = 0;
-    INT64 debugSteadyGapFrames    = 0;
-    INT64 debugWarmupFrames       = g_Audio.SampleRate / 2;
+    INT64 debugWorstGapFrames   = 0;
+    INT64 debugWorstGapAtFrames = 0;
+    INT64 debugSteadyGapFrames  = 0;
+    INT64 debugWarmupFrames     = g_Audio.SampleRate / 2;
 #if CPLUG_DEBUG_MIDI_LATENCY == 2
     midiLatencyFrames = 0;
 #endif
@@ -1705,17 +1715,19 @@ void Cplug_Menu_RebuildSampleRateSubmenu()
     {
         struct CplugAudioDevice* pDevice = &g_Audio.Devices[DeviceIdx];
 
-        // Build submenu of supported sample rates
+        // Build submenu of sample rates. Rates not marked native are resampled by Windows (AUTOCONVERTPCM)
         for (UINT i = 0; i < ARRAYSIZE(pDevice->SupportedSampleRates); i++)
         {
-            if (pDevice->SupportedSampleRates[i])
-            {
-                INT          SampleRate    = CPLUG_SAMPLE_RATES[i];
-                const WCHAR* SampleRateStr = CPLUG_SAMPLE_RATES_STR[i];
+            INT   SampleRate = CPLUG_SAMPLE_RATES[i];
+            WCHAR SampleRateStr[32];
+            _snwprintf(
+                SampleRateStr,
+                ARRAYSIZE(SampleRateStr),
+                pDevice->SupportedSampleRates[i] ? L"%s (native)" : L"%s",
+                CPLUG_SAMPLE_RATES_STR[i]);
 
-                UINT Flag = Cplug_MenuFlag(g_Audio.SampleRate, SampleRate);
-                AppendMenuW(g_Menus.hSampleRateSubmenu, Flag, IDM_SampleRate_44100 + i, SampleRateStr);
-            }
+            UINT Flag = Cplug_MenuFlag(g_Audio.SampleRate, SampleRate);
+            AppendMenuW(g_Menus.hSampleRateSubmenu, Flag, IDM_SampleRate_44100 + i, SampleRateStr);
         }
     }
 }
@@ -2001,12 +2013,7 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDM_SampleRate_192000:
         {
             Cplug_Audio_Stop();
-            WCHAR text[8];
-            // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenustringw
-            int numCharsCopied =
-                GetMenuStringW(g_Menus.hSampleRateSubmenu, wParam, text, ARRAYSIZE(text), MF_BYCOMMAND);
-            cplug_assert(numCharsCopied > 0);
-            g_Audio.SampleRate = _wtoi(text);
+            g_Audio.SampleRate = CPLUG_SAMPLE_RATES[wParam - IDM_SampleRate_44100];
             Cplug_Audio_Start();
             Cplug_Menu_RebuildSampleRateSubmenu();
             break;
@@ -2518,6 +2525,30 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
 
         Cplug_Audio_ScanDevices();
         Cplug_Audio_SetDevice(-1); // -1 == default device
+
+        // Default to the engine's native rate so the stream isn't resampled. CPLUG_DEFAULT_SAMPLE_RATE is the fallback
+        // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-getmixformat
+        if (g_Audio.pIMMDevice)
+        {
+            IAudioClient* pIAudioClient = NULL;
+            hr                          = g_Audio.pIMMDevice->lpVtbl->Activate(
+                g_Audio.pIMMDevice,
+                CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClient),
+                CLSCTX_ALL,
+                0,
+                (void**)&pIAudioClient);
+            if (SUCCEEDED(hr) && pIAudioClient != NULL)
+            {
+                WAVEFORMATEX* pMixFormat = NULL;
+                hr                       = pIAudioClient->lpVtbl->GetMixFormat(pIAudioClient, &pMixFormat);
+                if (SUCCEEDED(hr) && pMixFormat != NULL && pMixFormat->nSamplesPerSec != 0)
+                    g_Audio.SampleRate = pMixFormat->nSamplesPerSec;
+                if (pMixFormat)
+                    CoTaskMemFree(pMixFormat);
+            }
+            CPLUG_COM_RELEASE(pIAudioClient);
+        }
+
         Cplug_Audio_Start();
     }
 
