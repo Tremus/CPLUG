@@ -45,7 +45,20 @@ bool Cplug_HostContext_GetHostName(CplugHostContext* ctx, char* buf, size_t bufl
     snprintf(buf, buflen, "CPLUG Standalone Linux");
     return true;
 }
-bool Cplug_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint32_t height) { return false; }
+static void set_fixed_size(uint32_t width, uint32_t height);
+
+// The only way the window resizes. The GUI decides its own size, so it's taken as given
+bool Cplug_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
+{
+    if (g_app.gui == NULL)
+        return false;
+    // The fixed size moves first, or the WM would hold the window at the old one
+    set_fixed_size(width, height);
+    const uint32_t size[] = {width, height};
+    xcb_configure_window(g_app.connection, g_app.window, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, size);
+    xcb_flush(g_app.connection);
+    return cplug_setSize(g_app.gui, width, height);
+}
 
 bool Cplug_HostContext_RegisterTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
 {
@@ -129,9 +142,30 @@ static void set_property(xcb_atom_t property, xcb_atom_t type, uint8_t format, u
     xcb_change_property(g_app.connection, XCB_PROP_MODE_REPLACE, g_app.window, property, type, format, len, data);
 }
 
+// WM_SIZE_HINTS from ICCCM 4.1.2.3. The WM never resizes the window. The GUI resizes it through requestResize
+static void set_fixed_size(uint32_t width, uint32_t height)
+{
+    enum
+    {
+        P_MIN_SIZE = 1 << 4,
+        P_MAX_SIZE = 1 << 5,
+    };
+    uint32_t sizeHints[18] = {0};
+    sizeHints[0]           = P_MIN_SIZE | P_MAX_SIZE;
+    sizeHints[5]           = width;
+    sizeHints[6]           = height;
+    sizeHints[7]           = width;
+    sizeHints[8]           = height;
+    set_property(XCB_ATOM_WM_NORMAL_HINTS, XCB_ATOM_WM_SIZE_HINTS, 32, CPLUG_ARRLEN(sizeHints), sizeHints);
+}
+
 static void create_window(uint32_t width, uint32_t height)
 {
     xcb_screen_t* screen = xcb_setup_roots_iterator(xcb_get_setup(g_app.connection)).data;
+
+    // If a WM resizes the window anyway, the area outside the GUI is cleared instead of left as garbage
+    const uint32_t valueMask   = XCB_CW_BACK_PIXEL;
+    const uint32_t valueList[] = {screen->black_pixel};
 
     g_app.window = xcb_generate_id(g_app.connection);
     xcb_create_window(
@@ -146,8 +180,8 @@ static void create_window(uint32_t width, uint32_t height)
         0,
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         screen->root_visual,
-        0,
-        NULL);
+        valueMask,
+        valueList);
 
     static const char name[] = CPLUG_PLUGIN_NAME;
     set_property(XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 8, sizeof(name) - 1, name);
@@ -168,19 +202,29 @@ static void create_window(uint32_t width, uint32_t height)
     g_app.wmDeleteWindow = intern_atom("WM_DELETE_WINDOW");
     set_property(g_app.wmProtocols, XCB_ATOM_ATOM, 32, 1, &g_app.wmDeleteWindow);
 
-    // WM_SIZE_HINTS from ICCCM 4.1.2.3. Fixed size until the GUI supports cplug_setSize
+    // Some WMs read these instead of the fixed size. Everything but resizing and maximising
     enum
     {
-        P_MIN_SIZE = 1 << 4,
-        P_MAX_SIZE = 1 << 5,
+        MWM_HINTS_FUNCTIONS   = 1 << 0,
+        MWM_HINTS_DECORATIONS = 1 << 1,
+        MWM_FUNC_MOVE         = 1 << 2,
+        MWM_FUNC_MINIMIZE     = 1 << 3,
+        MWM_FUNC_CLOSE        = 1 << 5,
+        MWM_DECOR_BORDER      = 1 << 1,
+        MWM_DECOR_TITLE       = 1 << 3,
+        MWM_DECOR_MENU        = 1 << 4,
+        MWM_DECOR_MINIMIZE    = 1 << 5,
     };
-    uint32_t sizeHints[18] = {0};
-    sizeHints[0]           = P_MIN_SIZE | P_MAX_SIZE;
-    sizeHints[5]           = width;
-    sizeHints[6]           = height;
-    sizeHints[7]           = width;
-    sizeHints[8]           = height;
-    set_property(XCB_ATOM_WM_NORMAL_HINTS, XCB_ATOM_WM_SIZE_HINTS, 32, CPLUG_ARRLEN(sizeHints), sizeHints);
+    // Flags, functions, decorations, input mode, status
+    const uint32_t motifHints[5] = {
+        MWM_HINTS_FUNCTIONS | MWM_HINTS_DECORATIONS,
+        MWM_FUNC_MOVE | MWM_FUNC_MINIMIZE | MWM_FUNC_CLOSE,
+        MWM_DECOR_BORDER | MWM_DECOR_TITLE | MWM_DECOR_MENU | MWM_DECOR_MINIMIZE,
+    };
+    xcb_atom_t motifAtom = intern_atom("_MOTIF_WM_HINTS");
+    set_property(motifAtom, motifAtom, 32, CPLUG_ARRLEN(motifHints), motifHints);
+
+    set_fixed_size(width, height);
 }
 
 static void close_gui()
@@ -337,7 +381,7 @@ int main(int argc, char** argv)
     {
         // Without a GUI the window stays empty, and closing it still quits
         uint32_t width = 640, height = 360;
-        g_app.gui      = cplug_createGUI(&host, g_app.plugin);
+        g_app.gui = cplug_createGUI(&host, g_app.plugin);
         if (g_app.gui)
             cplug_getSize(g_app.gui, &width, &height);
 
