@@ -78,6 +78,7 @@ typedef struct MyPlugin
     float oscPhase; // 0-1
     int   midiNote; // -1 == not playing, 0-127+ playing
     float velocity; // 0-1
+    float pitchBend; // Semitones, -2 to +2
 
     // GUI zone
     void* gui;
@@ -345,7 +346,8 @@ static void handleMidi(MyPlugin* plugin, const CplugEvent* event)
     }
     if ((event->midi.status & 0xf0) == MIDI_NOTE_PITCH_WHEEL)
     {
-        // int pb = (int)event->midi.data1 | ((int)event->midi.data2 << 7);
+        int pb            =(int)event->midi.data1 | ((int)event->midi.data2 << 7);
+        plugin->pitchBend = (float)(pb - 8192) / 8192.0f * 2.0f;
     }
 }
 
@@ -430,7 +432,7 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
             {
                 float phase = plugin->oscPhase;
 
-                float Hz  = 440.0f * exp2f(((float)plugin->midiNote - 69.0f) * 0.0833333f);
+                float Hz  = 440.0f * exp2f(((float)plugin->midiNote + plugin->pitchBend - 69.0f) * 0.0833333f);
                 float inc = Hz / plugin->sampleRate;
                 float dB  = -60.0f + plugin->velocity * 54; // -6dB max
                 float vol = powf(10.0f, dB / 20.0f);
