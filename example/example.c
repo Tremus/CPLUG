@@ -524,12 +524,24 @@ void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramId, d
 #define GUI_RATIO_X        16
 #define GUI_RATIO_Y        9
 
+#ifdef __linux__
+#include <xcb/xcb.h>
+#endif
+
 typedef struct MyGUI
 {
     MyPlugin* plugin;
     void*     window; // HWND / NSView
 #ifdef _WIN32
     char uniqueClassName[64];
+#endif
+#ifdef __linux__
+    // Each GUI has its own connection, pumped by the host's event loop through registerFd
+    xcb_connection_t* xcbConnection;
+    xcb_window_t      xcbWindow;
+    xcb_window_t      xcbParent; // 0 while unparented. The fd and timer are registered while parented
+    xcb_gcontext_t    xcbGC;
+    uint32_t          timerId;
 #endif
 
     uint32_t* img;
@@ -830,22 +842,205 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 }
 
 #elif defined(__linux__)
-// TODO: X11 GUI. These are stubs so the plugin links
-void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin) { return NULL; }
-void  cplug_destroyGUI(void* userGUI) {}
-void  cplug_setParent(void* userGUI, void* newParent) {}
-void  cplug_setVisible(void* userGUI, bool visible) {}
-void  cplug_setScaleFactor(void* userGUI, float scale) {}
-void  cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
+#include <stdlib.h>
+
+#define MY_TIMER_PERIOD_MS 10
+// Size of an xcb_put_image request without its pixels
+#define PUT_IMAGE_HEADER_BYTES 24
+
+static xcb_screen_t* getScreen(MyGUI* gui)
 {
-    *width  = GUI_DEFAULT_WIDTH;
-    *height = GUI_DEFAULT_HEIGHT;
+    return xcb_setup_roots_iterator(xcb_get_setup(gui->xcbConnection)).data;
 }
+
+static void presentGUI(MyGUI* gui)
+{
+    drawGUI(gui);
+
+    // A request can't be longer than the server's limit, so large images are sent in bands of rows
+    const uint32_t rowBytes = gui->width * sizeof(*gui->img);
+    const uint32_t maxBytes = xcb_get_maximum_request_length(gui->xcbConnection) * 4 - PUT_IMAGE_HEADER_BYTES;
+    const uint32_t maxRows  = maxBytes / rowBytes;
+    const uint8_t  depth    = getScreen(gui)->root_depth;
+    for (uint32_t y = 0; y < gui->height; y += maxRows)
+    {
+        uint32_t rows = gui->height - y < maxRows ? gui->height - y : maxRows;
+        xcb_put_image(
+            gui->xcbConnection,
+            XCB_IMAGE_FORMAT_Z_PIXMAP,
+            gui->xcbWindow,
+            gui->xcbGC,
+            gui->width,
+            rows,
+            0,
+            y,
+            0,
+            depth,
+            rows * rowBytes,
+            (const uint8_t*)(gui->img + y * gui->width));
+    }
+    xcb_flush(gui->xcbConnection);
+}
+
+static void pumpEvents(MyGUI* gui)
+{
+    bool                 needRedraw = false;
+    xcb_generic_event_t* event;
+    while ((event = xcb_poll_for_event(gui->xcbConnection)))
+    {
+        switch (event->response_type & ~0x80)
+        {
+        case XCB_EXPOSE:
+            needRedraw = true;
+            break;
+        default:
+            break;
+        }
+        free(event);
+    }
+    if (needRedraw)
+        presentGUI(gui);
+}
+
+void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin)
+{
+    MyPlugin* plugin = (MyPlugin*)userPlugin;
+    MyGUI*    gui    = (MyGUI*)malloc(sizeof(MyGUI));
+    memset(gui, 0, sizeof(*gui));
+
+    gui->xcbConnection = xcb_connect(NULL, NULL);
+    if (xcb_connection_has_error(gui->xcbConnection))
+    {
+        fprintf(stderr, "Failed connecting to the X server\n");
+        xcb_disconnect(gui->xcbConnection);
+        free(gui);
+        return NULL;
+    }
+
+    gui->plugin = plugin;
+    plugin->gui = gui;
+
+    gui->width  = GUI_DEFAULT_WIDTH;
+    gui->height = GUI_DEFAULT_HEIGHT;
+    gui->img    = (uint32_t*)realloc(gui->img, gui->width * gui->height * sizeof(*gui->img));
+
+    // Created under the root window and reparented in cplug_setParent, like the Windows example uses the desktop
+    // The visual is explicit because the host's window may not use the root's, which means a colormap and border too
+    xcb_screen_t*  screen      = getScreen(gui);
+    const uint32_t valueMask   = XCB_CW_BORDER_PIXEL | XCB_CW_EVENT_MASK | XCB_CW_COLORMAP;
+    const uint32_t valueList[] = {0, XCB_EVENT_MASK_EXPOSURE, screen->default_colormap};
+
+    gui->xcbWindow = xcb_generate_id(gui->xcbConnection);
+    xcb_create_window(
+        gui->xcbConnection,
+        screen->root_depth,
+        gui->xcbWindow,
+        screen->root,
+        0,
+        0,
+        gui->width,
+        gui->height,
+        0,
+        XCB_WINDOW_CLASS_INPUT_OUTPUT,
+        screen->root_visual,
+        valueMask,
+        valueList);
+
+    gui->xcbGC = xcb_generate_id(gui->xcbConnection);
+    xcb_create_gc(gui->xcbConnection, gui->xcbGC, gui->xcbWindow, 0, NULL);
+    xcb_flush(gui->xcbConnection);
+
+    return gui;
+}
+
+void cplug_destroyGUI(void* userGUI)
+{
+    MyGUI* gui = (MyGUI*)userGUI;
+    // Unregister the fd and timer if the host skipped setParent(NULL)
+    if (gui->xcbParent)
+        cplug_setParent(gui, NULL);
+    gui->plugin->gui = NULL;
+
+    if (gui->img)
+        free(gui->img);
+
+    xcb_free_gc(gui->xcbConnection, gui->xcbGC);
+    xcb_destroy_window(gui->xcbConnection, gui->xcbWindow);
+    xcb_disconnect(gui->xcbConnection);
+    free(gui);
+}
+
+void cplug_setParent(void* userGUI, void* newParent)
+{
+    MyGUI*            gui  = (MyGUI*)userGUI;
+    CplugHostContext* host = gui->plugin->hostContext;
+
+    if (gui->xcbParent)
+    {
+        host->unregisterTimer(host, gui->timerId);
+        host->unregisterFd(host, xcb_get_file_descriptor(gui->xcbConnection));
+        // Unmapped first so the window manager doesn't take it as a new top-level window
+        xcb_unmap_window(gui->xcbConnection, gui->xcbWindow);
+        xcb_reparent_window(gui->xcbConnection, gui->xcbWindow, getScreen(gui)->root, 0, 0);
+        gui->xcbParent = 0;
+    }
+
+    if (newParent)
+    {
+        // CLAP & VST3 pass the X11 window ID in the pointer
+        gui->xcbParent = (xcb_window_t)(uintptr_t)newParent;
+        xcb_reparent_window(gui->xcbConnection, gui->xcbWindow, gui->xcbParent, 0, 0);
+        memcpy(gui->plugin->paramValuesMain, gui->plugin->paramValuesAudio, sizeof(gui->plugin->paramValuesMain));
+
+        bool ok = host->registerFd(host, xcb_get_file_descriptor(gui->xcbConnection), CPLUG_FD_READ);
+        my_assert(ok);
+        ok = host->registerTimer(host, MY_TIMER_PERIOD_MS, &gui->timerId);
+        my_assert(ok);
+    }
+    xcb_flush(gui->xcbConnection);
+}
+
+void cplug_setVisible(void* userGUI, bool visible)
+{
+    MyGUI* gui = (MyGUI*)userGUI;
+    if (visible)
+        xcb_map_window(gui->xcbConnection, gui->xcbWindow);
+    else
+        xcb_unmap_window(gui->xcbConnection, gui->xcbWindow);
+    xcb_flush(gui->xcbConnection);
+}
+
+void cplug_setScaleFactor(void* userGUI, float scale)
+{
+    // handle change
+}
+void cplug_getSize(void* userGUI, uint32_t* width, uint32_t* height)
+{
+    MyGUI* gui = (MyGUI*)userGUI;
+    *width     = gui->width;
+    *height    = gui->height;
+}
+// TODO: resize the window and pixel buffer
 bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height) { return false; }
 
-// TODO: XCB events & tickGUI()
-void cplug_onTimer(void* userPlugin, uint32_t timerId) {}
-void cplug_onFd(void* userPlugin, int fd, uint32_t flags) {}
+void cplug_onTimer(void* userPlugin, uint32_t timerId)
+{
+    MyGUI* gui = (MyGUI*)((MyPlugin*)userPlugin)->gui;
+    if (gui == NULL || timerId != gui->timerId)
+        return;
+    // Replies read by other calls can leave events in XCB's queue without the fd becoming readable
+    pumpEvents(gui);
+    if (tickGUI(gui))
+        presentGUI(gui);
+}
+
+void cplug_onFd(void* userPlugin, int fd, uint32_t flags)
+{
+    MyGUI* gui = (MyGUI*)((MyPlugin*)userPlugin)->gui;
+    if (gui == NULL || fd != xcb_get_file_descriptor(gui->xcbConnection))
+        return;
+    pumpEvents(gui);
+}
 
 #endif // _WIN32
 
