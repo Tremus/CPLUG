@@ -188,7 +188,22 @@ bool STAND_requestResize(CplugHostContext* ctx, uint32_t width, uint32_t height)
     }
     return false;
 }
-_Static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+bool STAND_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
+{
+    CPLUG_LOG_ASSERT(false && "registerTimer() is Linux only");
+    return false;
+}
+void STAND_unregisterTimer(CplugHostContext* ctx, uint32_t timerId)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterTimer() is Linux only");
+}
+bool STAND_registerFd(CplugHostContext* ctx, int fd, uint32_t flags)
+{
+    CPLUG_LOG_ASSERT(false && "registerFd() is Linux only");
+    return false;
+}
+void STAND_unregisterFd(CplugHostContext* ctx, int fd) { CPLUG_LOG_ASSERT(false && "unregisterFd() is Linux only"); }
+_Static_assert(sizeof(CplugHostContext) == 72, "You may need to add support for new methods");
 
 #pragma mark -Utils
 
@@ -264,12 +279,16 @@ OSStatus STAND_audioDeviceChangeListener(
     STAND_openLibraryWithSymbols();
 
     g_plugin.libraryLoad();
-    g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-    g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
-    g_plugin.hostContext.rescan         = STAND_rescan;
-    g_plugin.hostContext.getHostName    = STAND_getHostName;
-    g_plugin.hostContext.requestResize  = STAND_requestResize;
-    g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
+    g_plugin.hostContext.type            = CPLUG_PLUGIN_IS_STANDALONE;
+    g_plugin.hostContext.sendParamEvent  = STAND_sendParamEvent;
+    g_plugin.hostContext.rescan          = STAND_rescan;
+    g_plugin.hostContext.getHostName     = STAND_getHostName;
+    g_plugin.hostContext.requestResize   = STAND_requestResize;
+    g_plugin.hostContext.registerTimer   = STAND_registerTimer;
+    g_plugin.hostContext.unregisterTimer = STAND_unregisterTimer;
+    g_plugin.hostContext.registerFd      = STAND_registerFd;
+    g_plugin.hostContext.unregisterFd    = STAND_unregisterFd;
+    g_plugin.userPlugin                  = g_plugin.createPlugin(&g_plugin.hostContext);
     cplug_assert(g_plugin.userPlugin != NULL);
 
     // Init MIDI
@@ -1373,12 +1392,16 @@ void STAND_filesystemEventCallback(
             {
                 STAND_openLibraryWithSymbols();
                 g_plugin.libraryLoad();
-                g_plugin.hostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-                g_plugin.hostContext.sendParamEvent = STAND_sendParamEvent;
-                g_plugin.hostContext.rescan         = STAND_rescan;
-                g_plugin.hostContext.getHostName    = STAND_getHostName;
-                g_plugin.hostContext.requestResize  = STAND_requestResize;
-                g_plugin.userPlugin                 = g_plugin.createPlugin(&g_plugin.hostContext);
+                g_plugin.hostContext.type            = CPLUG_PLUGIN_IS_STANDALONE;
+                g_plugin.hostContext.sendParamEvent  = STAND_sendParamEvent;
+                g_plugin.hostContext.rescan          = STAND_rescan;
+                g_plugin.hostContext.getHostName     = STAND_getHostName;
+                g_plugin.hostContext.requestResize   = STAND_requestResize;
+                g_plugin.hostContext.registerTimer   = STAND_registerTimer;
+                g_plugin.hostContext.unregisterTimer = STAND_unregisterTimer;
+                g_plugin.hostContext.registerFd      = STAND_registerFd;
+                g_plugin.hostContext.unregisterFd    = STAND_unregisterFd;
+                g_plugin.userPlugin                  = g_plugin.createPlugin(&g_plugin.hostContext);
                 cplug_assert(g_plugin.userPlugin != NULL);
                 g_plugin.loadState(g_plugin.userPlugin, &g_pluginState, STAND_readStateProc);
 

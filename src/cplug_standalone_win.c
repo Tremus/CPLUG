@@ -115,7 +115,7 @@ struct Cplug_Plugin
     void (*checkSize)(void* userGUI, uint32_t* width, uint32_t* height);
     bool (*setSize)(void* userGUI, uint32_t width, uint32_t height);
 } g_plugin;
-static_assert(sizeof(CplugHostContext) == 40, "You may need to add support for new methods");
+static_assert(sizeof(CplugHostContext) == 72, "You may need to add support for new methods");
 
 void Cplug_HostContext_SendParamEvent(CplugHostContext* ctx, const CplugEvent* e) {}
 void Cplug_HostContext_Rescan(CplugHostContext* ctx, uint32_t flags) {}
@@ -158,6 +158,25 @@ bool Cplug_HostContext_RequestResize(CplugHostContext* ctx, uint32_t width, uint
         }
     }
     return false;
+}
+
+bool Cplug_HostContext_RegisterTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
+{
+    CPLUG_LOG_ASSERT(false && "registerTimer() is Linux only");
+    return false;
+}
+void Cplug_HostContext_UnregisterTimer(CplugHostContext* ctx, uint32_t timerId)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterTimer() is Linux only");
+}
+bool Cplug_HostContext_RegisterFd(CplugHostContext* ctx, int fd, uint32_t flags)
+{
+    CPLUG_LOG_ASSERT(false && "registerFd() is Linux only");
+    return false;
+}
+void Cplug_HostContext_UnregisterFd(CplugHostContext* ctx, int fd)
+{
+    CPLUG_LOG_ASSERT(false && "unregisterFd() is Linux only");
 }
 
 #pragma region HOTRELOAD
@@ -503,11 +522,15 @@ void Cplug_LoadPlugin()
     CPLUG_GET_PROC(g_plugin.setSize, cplug_setSize);
 
     g_plugin.libraryLoad();
-    g_plugin.HostContext.type           = CPLUG_PLUGIN_IS_STANDALONE;
-    g_plugin.HostContext.sendParamEvent = Cplug_HostContext_SendParamEvent;
-    g_plugin.HostContext.rescan         = Cplug_HostContext_Rescan;
-    g_plugin.HostContext.getHostName    = Cplug_HostContext_GetHostName;
-    g_plugin.HostContext.requestResize  = Cplug_HostContext_RequestResize;
+    g_plugin.HostContext.type            = CPLUG_PLUGIN_IS_STANDALONE;
+    g_plugin.HostContext.sendParamEvent  = Cplug_HostContext_SendParamEvent;
+    g_plugin.HostContext.rescan          = Cplug_HostContext_Rescan;
+    g_plugin.HostContext.getHostName     = Cplug_HostContext_GetHostName;
+    g_plugin.HostContext.requestResize   = Cplug_HostContext_RequestResize;
+    g_plugin.HostContext.registerTimer   = Cplug_HostContext_RegisterTimer;
+    g_plugin.HostContext.unregisterTimer = Cplug_HostContext_UnregisterTimer;
+    g_plugin.HostContext.registerFd      = Cplug_HostContext_RegisterFd;
+    g_plugin.HostContext.unregisterFd    = Cplug_HostContext_UnregisterFd;
 
     g_plugin.UserPlugin = g_plugin.createPlugin(&g_plugin.HostContext);
     cplug_assert(g_plugin.UserPlugin != NULL);
