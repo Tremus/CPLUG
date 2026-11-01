@@ -1004,7 +1004,7 @@ void Cplug_Audio_Process(const UINT32 blockSize)
 
     if (g_Audio.ProcessBufferNumOverprocessedFrames)
     {
-        // Our remaining samples are already in a deinterleaved format
+        // Our remaining samples are already in an interleaved format
         UINT32 framesToCopy = g_Audio.ProcessBufferNumOverprocessedFrames < remainingBlockFrames
                                   ? g_Audio.ProcessBufferNumOverprocessedFrames
                                   : remainingBlockFrames;
@@ -1014,6 +1014,13 @@ void Cplug_Audio_Process(const UINT32 blockSize)
         remainingBlockFrames                        -= framesToCopy;
         g_Audio.ProcessBufferNumOverprocessedFrames -= framesToCopy;
         outBuffer                                   += bytesToCopy;
+
+        // WASAPI asked for fewer frames than we have left over. Shift the rest to the front for the next callback
+        if (g_Audio.ProcessBufferNumOverprocessedFrames)
+        {
+            SIZE_T bytesRemaining = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferNumOverprocessedFrames;
+            memmove(g_Audio.ProcessBuffer, g_Audio.ProcessBuffer + bytesToCopy, bytesRemaining);
+        }
         cplug_assert(remainingBlockFrames < blockSize); // check overflow
     }
 
