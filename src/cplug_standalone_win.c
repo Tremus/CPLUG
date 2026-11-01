@@ -554,8 +554,8 @@ typedef struct MIDIMessage
         BYTE bytes[4];
         UINT bytesAsInt;
     };
-    /* Milliseconds since first connected to MIDI port */
-    UINT timestampMs;
+    // QueryPerformanceCounter() when the message arrived
+    INT64 timestampQPC;
 } MIDIMessage;
 
 struct
@@ -611,12 +611,18 @@ void CALLBACK Cplug_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
     // https://learn.microsoft.com/en-gb/windows/win32/multimedia/mim-data?redirectedfrom=MSDN
     if (wMsg == MM_MIM_DATA)
     {
-        MIDIMessage midi;
-        LONG        writePos;
+        MIDIMessage   midi;
+        LONG          writePos;
+        LARGE_INTEGER now;
+
+        // dwParam2/dwTimestamp, is in "milliseconds, beginning at zero when the midiInStart function was called".
+        // This doesn't really help us though, because we need to synchronise with the audio thread...
+        // Using QPC, we share our clock with the audio thread, and get better resolution
+        QueryPerformanceCounter(&now);
 
         // take first 3 bytes. remember, the rest are junk, including possibly the ones we're taking
-        midi.bytesAsInt  = dwParam1 & 0xffffff;
-        midi.timestampMs = (UINT)dwParam2;
+        midi.bytesAsInt   = dwParam1 & 0xffffff;
+        midi.timestampQPC = now.QuadPart;
 
         writePos = _InterlockedCompareExchange(&g_MIDI.RingBuffer.writePos, 0, 0);
 
@@ -786,11 +792,8 @@ struct
 
     // Output
     UINT32 ProcessBufferMaxFrames;
-    UINT32 ProcessBufferNumOverprocessedFrames;
     // Deinterleaved buffers the plugin processes into
     __declspec(align(32)) float ProcessOutput[CPLUG_MAX_NUM_CHANNELS][CPLUG_MAX_BLOCK_SIZE];
-    // The last process blocks frames that didn't fit in the WASAPI buffer
-    __declspec(align(32)) float OverprocessedInterleaved[CPLUG_MAX_NUM_CHANNELS * CPLUG_MAX_BLOCK_SIZE];
 } g_Audio;
 
 static const PROPERTYKEY _PKEY_Device_FriendlyName = {
@@ -810,6 +813,12 @@ typedef struct WindowsProcessContext
 {
     CplugProcessContext cplugContext;
     float*              output[2];
+
+    // MIDI scheduling. A message's frame within the current block is:
+    // midiFrameOffset + (timestampQPC - midiAnchorQPC) * SampleRate / qpcFrequency
+    INT64 midiAnchorQPC;
+    INT64 qpcFrequency;
+    INT64 midiFrameOffset;
 } WindowsProcessContext;
 
 WAVEFORMATEXTENSIBLE Cplug_Audio_CreateWaveFormat(DWORD NumChannels, DWORD SampleRate)
@@ -984,6 +993,7 @@ bool Cplug_Audio_enqueueEvent(struct CplugProcessContext* ctx, const CplugEvent*
 // [Audio Thread]
 bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
 {
+    const WindowsProcessContext* winctx = (const WindowsProcessContext*)ctx;
     if (frameIdx >= ctx->numFrames)
         return false;
 
@@ -991,16 +1001,36 @@ bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
     LONG tail = _InterlockedCompareExchange(&g_MIDI.RingBuffer.readPos, 0, 0);
     if (head != tail)
     {
-        MIDIMessage* msg       = &g_MIDI.RingBuffer.buffer[tail];
-        event->midi.type       = CPLUG_EVENT_MIDI;
-        event->midi.bytesAsInt = msg->bytesAsInt;
+        MIDIMessage* msg = &g_MIDI.RingBuffer.buffer[tail];
 
-        tail++;
-        if (tail == CPLUG_MIDI_RINGBUFFER_SIZE)
-            tail = 0;
+        INT64 elapsedQPC = msg->timestampQPC - winctx->midiAnchorQPC;
+        INT64 frame      = winctx->midiFrameOffset + elapsedQPC * g_Audio.SampleRate / winctx->qpcFrequency;
+        // Arrived too late to keep the constant latency. Play it as soon as possible
+        if (frame < frameIdx)
+            frame = frameIdx;
 
-        g_MIDI.RingBuffer.readPos = tail;
-        return true;
+        // Messages scheduled for a later block stay in the ring buffer
+        if (frame < ctx->numFrames)
+        {
+            // Process audio up to the message
+            if (frame > frameIdx)
+            {
+                event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
+                event->processAudio.endFrame = (uint32_t)frame;
+                return true;
+            }
+
+            event->midi.type       = CPLUG_EVENT_MIDI;
+            event->midi.frame      = frameIdx;
+            event->midi.bytesAsInt = msg->bytesAsInt;
+
+            tail++;
+            if (tail == CPLUG_MIDI_RINGBUFFER_SIZE)
+                tail = 0;
+
+            g_MIDI.RingBuffer.readPos = tail;
+            return true;
+        }
     }
 
     event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
@@ -1030,34 +1060,12 @@ void Cplug_Audio_Process(const UINT32 blockSize)
     if (FAILED(hr))
         return;
 
-    if (g_Audio.ProcessBufferNumOverprocessedFrames)
-    {
-        // Our remaining samples are already in an interleaved format
-        UINT32 framesToCopy = g_Audio.ProcessBufferNumOverprocessedFrames < remainingBlockFrames
-                                  ? g_Audio.ProcessBufferNumOverprocessedFrames
-                                  : remainingBlockFrames;
-        SIZE_T bytesToCopy  = sizeof(float) * g_Audio.NumChannels * framesToCopy;
-        memcpy(outBuffer, g_Audio.OverprocessedInterleaved, bytesToCopy);
-
-        remainingBlockFrames                        -= framesToCopy;
-        g_Audio.ProcessBufferNumOverprocessedFrames -= framesToCopy;
-        outBuffer                                   += bytesToCopy;
-
-        // WASAPI asked for fewer frames than we have left over. Shift the rest to the front for the next callback
-        if (g_Audio.ProcessBufferNumOverprocessedFrames)
-        {
-            SIZE_T bytesRemaining = sizeof(float) * g_Audio.NumChannels * g_Audio.ProcessBufferNumOverprocessedFrames;
-            memmove(
-                g_Audio.OverprocessedInterleaved,
-                g_Audio.OverprocessedInterleaved + g_Audio.NumChannels * framesToCopy,
-                bytesRemaining);
-        }
-        cplug_assert(remainingBlockFrames < blockSize); // check overflow
-    }
+    LARGE_INTEGER nowQPC, qpcFrequency;
+    QueryPerformanceCounter(&nowQPC);
+    QueryPerformanceFrequency(&qpcFrequency);
 
     WindowsProcessContext ctx;
     memset(&ctx, 0, sizeof(ctx));
-    ctx.cplugContext.numFrames       = g_Audio.BlockSize;
     ctx.cplugContext.numInputBusses  = 0;
     ctx.cplugContext.numOutputBusses = 1;
     ctx.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
@@ -1069,31 +1077,25 @@ void Cplug_Audio_Process(const UINT32 blockSize)
     ctx.output[0] = g_Audio.ProcessOutput[0];
     ctx.output[1] = g_Audio.ProcessOutput[1];
 
+    ctx.midiAnchorQPC   = nowQPC.QuadPart;
+    ctx.qpcFrequency    = qpcFrequency.QuadPart;
+    ctx.midiFrameOffset = g_Audio.ProcessBufferMaxFrames;
+
     while (remainingBlockFrames > 0)
     {
-        cplug_assert(g_Audio.ProcessBufferNumOverprocessedFrames == 0);
+        UINT32 numFrames = remainingBlockFrames < g_Audio.BlockSize ? remainingBlockFrames : g_Audio.BlockSize;
+        ctx.cplugContext.numFrames = numFrames;
 
         g_plugin.process(g_plugin.UserPlugin, &ctx.cplugContext);
+        ctx.midiFrameOffset -= numFrames;
 
-        UINT32 framesToCopy = remainingBlockFrames < g_Audio.BlockSize ? remainingBlockFrames : g_Audio.BlockSize;
-        SIZE_T bytesToCopy  = sizeof(float) * g_Audio.NumChannels * framesToCopy;
-
-        UINT32 i                 = 0;
         float* outputInterleaved = (float*)outBuffer;
-        for (; i < framesToCopy; i++)
+        for (UINT32 i = 0; i < numFrames; i++)
             for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
                 *outputInterleaved++ = ctx.output[ch][i];
 
-        float* remainingInterleaved = g_Audio.OverprocessedInterleaved;
-        for (; i < g_Audio.BlockSize; i++)
-            for (UINT32 ch = 0; ch < g_Audio.NumChannels; ch++)
-                *remainingInterleaved++ = ctx.output[ch][i];
-        g_Audio.ProcessBufferNumOverprocessedFrames = g_Audio.BlockSize - framesToCopy;
-
-        remainingBlockFrames -= framesToCopy;
-        outBuffer            += bytesToCopy;
-
-        cplug_assert(remainingBlockFrames < blockSize); // check overflow
+        remainingBlockFrames -= numFrames;
+        outBuffer            += sizeof(float) * g_Audio.NumChannels * numFrames;
     }
 
     // This has a scary name 'Release', however I don't think any resources are deallocated,
@@ -1245,8 +1247,7 @@ void Cplug_Audio_Start()
 
     g_plugin.setSampleRateAndBlockSize(g_plugin.UserPlugin, g_Audio.SampleRate, g_Audio.BlockSize);
 
-    g_Audio.ProcessBufferNumOverprocessedFrames = 0;
-    g_Audio.FlagExitAudioThread                 = 0;
+    g_Audio.FlagExitAudioThread = 0;
 
     g_Audio.hAudioProcessThread = CreateThread(NULL, 0, Cplug_Audio_RunProcessThread, NULL, 0, 0);
     cplug_assert(g_Audio.hAudioProcessThread != NULL);
