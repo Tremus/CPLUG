@@ -325,6 +325,30 @@ void cplug_setSampleRateAndBlockSize(void* ptr, double sampleRate, uint32_t maxB
     plugin->maxBufferSize = maxBlockSize;
 }
 
+static void handleMidi(MyPlugin* plugin, const CplugEvent* event)
+{
+    static const uint8_t MIDI_NOTE_OFF         = 0x80;
+    static const uint8_t MIDI_NOTE_ON          = 0x90;
+    static const uint8_t MIDI_NOTE_PITCH_WHEEL = 0xe0;
+
+    if ((event->midi.status & 0xf0) == MIDI_NOTE_ON)
+    {
+        plugin->midiNote = event->midi.data1;
+        plugin->velocity = (float)event->midi.data2 / 127.0f;
+    }
+    if ((event->midi.status & 0xf0) == MIDI_NOTE_OFF)
+    {
+        int note = event->midi.data1;
+        if (note == plugin->midiNote)
+            plugin->midiNote = -1;
+        plugin->velocity = (float)event->midi.data2 / 127.0f;
+    }
+    if ((event->midi.status & 0xf0) == MIDI_NOTE_PITCH_WHEEL)
+    {
+        // int pb = (int)event->midi.data1 | ((int)event->midi.data2 << 7);
+    }
+}
+
 void cplug_process(void* ptr, CplugProcessContext* ctx)
 {
     DISABLE_DENORMALS
@@ -345,7 +369,11 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
             plugin->paramValuesAudio[idx] = (float)event->parameter.value;
         }
 
-        ctx->enqueueEvent(ctx, event, 0);
+        // Notes from the GUI are played here, not sent to the host as MIDI out
+        if (event->type == CPLUG_EVENT_MIDI)
+            handleMidi(plugin, event);
+        else
+            ctx->enqueueEvent(ctx, event, 0);
 
         tail++;
         tail &= CPLUG_EVENT_QUEUE_MASK;
@@ -367,29 +395,8 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
             break;
         }
         case CPLUG_EVENT_MIDI:
-        {
-            static const uint8_t MIDI_NOTE_OFF         = 0x80;
-            static const uint8_t MIDI_NOTE_ON          = 0x90;
-            static const uint8_t MIDI_NOTE_PITCH_WHEEL = 0xe0;
-
-            if ((event.midi.status & 0xf0) == MIDI_NOTE_ON)
-            {
-                plugin->midiNote = event.midi.data1;
-                plugin->velocity = (float)event.midi.data2 / 127.0f;
-            }
-            if ((event.midi.status & 0xf0) == MIDI_NOTE_OFF)
-            {
-                int note = event.midi.data1;
-                if (note == plugin->midiNote)
-                    plugin->midiNote = -1;
-                plugin->velocity = (float)event.midi.data2 / 127.0f;
-            }
-            if ((event.midi.status & 0xf0) == MIDI_NOTE_PITCH_WHEEL)
-            {
-                // int pb = (int)event.midi.data1 | ((int)event.midi.data2 << 7);
-            }
+            handleMidi(plugin, &event);
             break;
-        }
         case CPLUG_EVENT_PROCESS_AUDIO:
         {
             // If your plugin does not require sample accurate processing, use this line below to break the loop
@@ -519,6 +526,21 @@ void sendParamEventFromMain(MyPlugin* plugin, uint32_t type, uint32_t paramId, d
     cplug_atomic_fetch_and_i32(&plugin->mainToAudioHead, CPLUG_EVENT_QUEUE_MASK);
 }
 
+void sendMidiEventFromMain(MyPlugin* plugin, uint8_t status, uint8_t data1, uint8_t data2)
+{
+    int         mainToAudioHead = cplug_atomic_load_i32(&plugin->mainToAudioHead) & CPLUG_EVENT_QUEUE_MASK;
+    CplugEvent* midiEvent       = &plugin->mainToAudioQueue[mainToAudioHead];
+    midiEvent->midi.type        = CPLUG_EVENT_MIDI;
+    midiEvent->midi.frame       = 0;
+    midiEvent->midi.bytesAsInt  = 0;
+    midiEvent->midi.status      = status;
+    midiEvent->midi.data1       = data1;
+    midiEvent->midi.data2       = data2;
+
+    cplug_atomic_fetch_add_i32(&plugin->mainToAudioHead, 1);
+    cplug_atomic_fetch_and_i32(&plugin->mainToAudioHead, CPLUG_EVENT_QUEUE_MASK);
+}
+
 #define GUI_DEFAULT_WIDTH  640
 #define GUI_DEFAULT_HEIGHT 360
 #define GUI_RATIO_X        16
@@ -542,7 +564,8 @@ typedef struct MyGUI
     xcb_window_t      xcbParent; // 0 while unparented. The fd and timer are registered while parented
     xcb_gcontext_t    xcbGC;
     uint32_t          timerId;
-    bool              resizing; // Dragging the resize corner
+    bool              resizing;     // Dragging the resize corner
+    uint8_t           keysDown[32]; // Bit per keycode. Auto-repeats are presses of keys already down
 #endif
 
     uint32_t* img;
@@ -849,8 +872,144 @@ bool cplug_setSize(void* userGUI, uint32_t width, uint32_t height)
 #define RESIZE_CORNER_SIZE     16
 // Size of an xcb_put_image request without its pixels
 #define PUT_IMAGE_HEADER_BYTES 24
+// X keycodes are evdev codes + 8, which are physical key positions whatever the layout
+#define EVDEV_KEYCODE_OFFSET   8
+#define KEYBOARD_BASE_NOTE     60
+
+#include <xcb/xcbext.h>
+
+// The computer keyboard as one octave from C: the A-K row are the white keys and W E T Y U the black keys
+static const uint8_t NOTE_EVDEV_KEYCODES[] = {
+    30, // A  C
+    17, // W  C#
+    31, // S  D
+    18, // E  D#
+    32, // D  E
+    33, // F  F
+    20, // T  F#
+    34, // G  G
+    21, // Y  G#
+    35, // H  A
+    22, // U  A#
+    36, // J  B
+    37, // K  C
+};
 
 static xcb_screen_t* getScreen(MyGUI* gui) { return xcb_setup_roots_iterator(xcb_get_setup(gui->xcbConnection)).data; }
+
+// Returns -1 for keys that aren't notes
+static int getKeyNote(xcb_keycode_t keycode)
+{
+    for (int i = 0; i < (int)CPLUG_ARRLEN(NOTE_EVDEV_KEYCODES); i++)
+        if (keycode == NOTE_EVDEV_KEYCODES[i] + EVDEV_KEYCODE_OFFSET)
+            return KEYBOARD_BASE_NOTE + i;
+    return -1;
+}
+
+static const char* getFocusDetailName(uint8_t detail)
+{
+    static const char* NAMES[] = {
+        "Ancestor",
+        "Virtual",
+        "Inferior",
+        "Nonlinear",
+        "NonlinearVirtual",
+        "Pointer",
+        "PointerRoot",
+        "None",
+    };
+    return detail < CPLUG_ARRLEN(NAMES) ? NAMES[detail] : "?";
+}
+
+// Without detectable auto-repeat, a held key sends release/press pairs. With it, repeats are presses only.
+// xcb/xkb.h isn't always installed, so the two XKB requests are sent raw
+static bool enableDetectableAutoRepeat(xcb_connection_t* connection)
+{
+    enum
+    {
+        XKB_USE_EXTENSION              = 0,
+        XKB_PER_CLIENT_FLAGS           = 21,
+        XKB_USE_CORE_KBD               = 0x100,
+        XKB_PCF_DETECTABLE_AUTO_REPEAT = 1 << 0,
+    };
+    static xcb_extension_t xkbExtension = {"XKEYBOARD", 0};
+
+    const xcb_query_extension_reply_t* extension = xcb_get_extension_data(connection, &xkbExtension);
+    if (extension == NULL || !extension->present)
+        return false;
+
+    // The server ignores other XKB requests until this one
+    struct
+    {
+        uint8_t  majorOpcode;
+        uint8_t  minorOpcode;
+        uint16_t length;
+        uint16_t wantedMajor;
+        uint16_t wantedMinor;
+    } useExtension = {0, 0, 0, 1, 0};
+
+    struct
+    {
+        uint8_t  majorOpcode;
+        uint8_t  minorOpcode;
+        uint16_t length;
+        uint16_t deviceSpec;
+        uint16_t pad;
+        uint32_t change;
+        uint32_t value;
+        uint32_t ctrlsToChange;
+        uint32_t autoCtrls;
+        uint32_t autoCtrlValues;
+    } perClientFlags = {
+        0,
+        0,
+        0,
+        XKB_USE_CORE_KBD,
+        0,
+        XKB_PCF_DETECTABLE_AUTO_REPEAT,
+        XKB_PCF_DETECTABLE_AUTO_REPEAT,
+        0,
+        0,
+        0,
+    };
+
+    // xcb_send_request fills in the opcodes and length
+    struct iovec           part    = {&useExtension, sizeof(useExtension)};
+    xcb_protocol_request_t request = {1, &xkbExtension, XKB_USE_EXTENSION, 0};
+    xcb_generic_error_t*   error   = NULL;
+    unsigned int           seq     = xcb_send_request(connection, XCB_REQUEST_CHECKED, &part, &request);
+    uint8_t*               reply   = (uint8_t*)xcb_wait_for_reply(connection, seq, &error);
+    // Byte 1 of the reply is whether the server supports the version asked for
+    bool supported = reply && reply[1];
+    free(reply);
+    free(error);
+    if (!supported)
+        return false;
+
+    part.iov_base  = &perClientFlags;
+    part.iov_len   = sizeof(perClientFlags);
+    request.opcode = XKB_PER_CLIENT_FLAGS;
+    error          = NULL;
+    seq            = xcb_send_request(connection, XCB_REQUEST_CHECKED, &part, &request);
+    reply          = (uint8_t*)xcb_wait_for_reply(connection, seq, &error);
+    // After the 8 byte header and the 'supported' flags come the flags now set
+    uint32_t value = 0;
+    if (reply)
+        memcpy(&value, reply + 12, sizeof(value));
+    free(reply);
+    free(error);
+    return (value & XKB_PCF_DETECTABLE_AUTO_REPEAT) != 0;
+}
+
+static bool isKeyDown(MyGUI* gui, xcb_keycode_t keycode) { return gui->keysDown[keycode / 8] & (1 << (keycode % 8)); }
+
+static void handleKeyRelease(MyGUI* gui, xcb_keycode_t keycode)
+{
+    gui->keysDown[keycode / 8] &= ~(1 << (keycode % 8));
+    int note                    = getKeyNote(keycode);
+    if (note >= 0)
+        sendMidiEventFromMain(gui->plugin, 0x80, note, 0);
+}
 
 static void presentGUI(MyGUI* gui)
 {
@@ -900,6 +1059,9 @@ static void pumpEvents(MyGUI* gui)
             xcb_button_press_event_t* press = (xcb_button_press_event_t*)event;
             if (press->detail != XCB_BUTTON_INDEX_1)
                 break;
+            // Keys go to the window under the pointer only while it's inside the focused window, so take focus
+            xcb_set_input_focus(gui->xcbConnection, XCB_INPUT_FOCUS_PARENT, gui->xcbWindow, press->time);
+            xcb_flush(gui->xcbConnection);
             // Hosts on Linux leave resizing to the plugin, so an invisible corner in the bottom right asks for new
             // sizes
             if (press->event_x >= (int)gui->width - RESIZE_CORNER_SIZE &&
@@ -933,6 +1095,44 @@ static void pumpEvents(MyGUI* gui)
             handleMouseMove(gui, motion->event_x, motion->event_y);
             if (gui->mouseDragging)
                 needRedraw = true;
+            break;
+        }
+        case XCB_KEY_PRESS:
+        {
+            xcb_key_press_event_t* key = (xcb_key_press_event_t*)event;
+            if (isKeyDown(gui, key->detail))
+            {
+                cplug_log("KeyRepeat keycode %u state 0x%x", key->detail, key->state);
+                break;
+            }
+            cplug_log("KeyPress keycode %u state 0x%x", key->detail, key->state);
+            gui->keysDown[key->detail / 8] |= 1 << (key->detail % 8);
+            int note                        = getKeyNote(key->detail);
+            if (note >= 0)
+                sendMidiEventFromMain(gui->plugin, 0x90, note, 100);
+            break;
+        }
+        case XCB_KEY_RELEASE:
+        {
+            xcb_key_release_event_t* key = (xcb_key_release_event_t*)event;
+            cplug_log("KeyRelease keycode %u state 0x%x", key->detail, key->state);
+            handleKeyRelease(gui, key->detail);
+            break;
+        }
+        case XCB_FOCUS_IN:
+        {
+            xcb_focus_in_event_t* focus = (xcb_focus_in_event_t*)event;
+            cplug_log("FocusIn detail %s mode %u", getFocusDetailName(focus->detail), focus->mode);
+            break;
+        }
+        case XCB_FOCUS_OUT:
+        {
+            xcb_focus_out_event_t* focus = (xcb_focus_out_event_t*)event;
+            cplug_log("FocusOut detail %s mode %u", getFocusDetailName(focus->detail), focus->mode);
+            // Releases while unfocused go elsewhere, so let go of everything now instead of leaving notes stuck
+            for (int keycode = 0; keycode < (int)CPLUG_ARRLEN(gui->keysDown) * 8; keycode++)
+                if (isKeyDown(gui, keycode))
+                    handleKeyRelease(gui, keycode);
             break;
         }
         default:
@@ -972,6 +1172,10 @@ void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin)
     gui->plugin = plugin;
     plugin->gui = gui;
 
+    // Per connection, so it doesn't change the host's own key handling
+    if (!enableDetectableAutoRepeat(gui->xcbConnection))
+        cplug_log("Detectable auto-repeat unsupported. Held keys will send release/press pairs");
+
     gui->width  = GUI_DEFAULT_WIDTH;
     gui->height = GUI_DEFAULT_HEIGHT;
     gui->img    = (uint32_t*)realloc(gui->img, gui->width * gui->height * sizeof(*gui->img));
@@ -981,7 +1185,8 @@ void* cplug_createGUI(CplugHostContext* ctx, void* userPlugin)
     xcb_screen_t*  screen    = getScreen(gui);
     const uint32_t valueMask = XCB_CW_BORDER_PIXEL | XCB_CW_EVENT_MASK | XCB_CW_COLORMAP;
     const uint32_t eventMask = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE |
-                               XCB_EVENT_MASK_POINTER_MOTION;
+                               XCB_EVENT_MASK_POINTER_MOTION | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_KEY_RELEASE |
+                               XCB_EVENT_MASK_FOCUS_CHANGE;
     const uint32_t valueList[] = {0, eventMask, screen->default_colormap};
 
     gui->xcbWindow = xcb_generate_id(gui->xcbConnection);
