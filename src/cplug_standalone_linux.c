@@ -1,10 +1,6 @@
 /* Released into the public domain by Tré Dudman - 2026
  * For licensing and more info see https://github.com/Tremus/CPLUG */
 
-// This is a stub so my builds compile. Piece by piece, things will be unstubbed. Wish me luck
-// TODO:
-// - Jack MIDI
-
 #include <cplug.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -142,6 +138,12 @@ typedef struct jack_port_t   jack_port_t;
 typedef uint32_t             jack_nframes_t;
 typedef int (*JackProcessCallback)(jack_nframes_t nframes, void* arg);
 typedef void (*JackShutdownCallback)(void* arg);
+typedef struct jack_midi_event_t
+{
+    jack_nframes_t time;
+    size_t         size;
+    uint8_t*       buffer;
+} jack_midi_event_t;
 
 enum
 {
@@ -152,6 +154,7 @@ enum
     JackPortIsPhysical = 0x4,
 };
 #define JACK_DEFAULT_AUDIO_TYPE "32 bit float mono audio"
+#define JACK_DEFAULT_MIDI_TYPE  "8 bit raw midi"
 
 // Return type, name, arguments
 #define JACK_FUNCTIONS(X)                                                                                              \
@@ -169,6 +172,8 @@ enum
       jack_port_register,                                                                                              \
       (jack_client_t*, const char* name, const char* type, unsigned long flags, unsigned long bufferSize))             \
     X(void*, jack_port_get_buffer, (jack_port_t*, jack_nframes_t))                                                     \
+    X(uint32_t, jack_midi_get_event_count, (void* portBuffer))                                                         \
+    X(int, jack_midi_event_get, (jack_midi_event_t*, void* portBuffer, uint32_t eventIndex))                           \
     X(const char*, jack_port_name, (const jack_port_t*))                                                               \
     X(const char**, jack_get_ports, (jack_client_t*, const char* namePattern, const char* typePattern, unsigned long)) \
     X(int, jack_connect, (jack_client_t*, const char* sourcePort, const char* destinationPort))                        \
@@ -179,6 +184,7 @@ static struct
     void*          lib;
     jack_client_t* client;
     jack_port_t*   outputs[2];
+    jack_port_t*   midiInput;
 
     // The plugin's sample rate and block size can only change on the main thread while cplug_process isn't running.
     // The notification thread stores the server's new settings and wakes the main thread through this eventfd. The
@@ -202,6 +208,8 @@ typedef struct JackProcessContext
 {
     CplugProcessContext cplugContext;
     float*              output[2];
+    void*               midiBuffer;
+    uint32_t            midiEventIdx;
 } JackProcessContext;
 
 static bool JackProcessContext_enqueueEvent(CplugProcessContext* ctx, const CplugEvent* e, uint32_t frameIdx)
@@ -209,10 +217,39 @@ static bool JackProcessContext_enqueueEvent(CplugProcessContext* ctx, const Cplu
     return true;
 }
 
+// JACK sorts events by frame. Audio up to the next event's frame is processed before it is sent
 static bool JackProcessContext_dequeueEvent(CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
 {
-    if (frameIdx == ctx->numFrames)
+    JackProcessContext* jackCtx = (JackProcessContext*)ctx;
+    if (frameIdx >= ctx->numFrames)
         return false;
+
+    uint32_t numEvents = g_jack.jack_midi_get_event_count(jackCtx->midiBuffer);
+    for (; jackCtx->midiEventIdx < numEvents; jackCtx->midiEventIdx++)
+    {
+        jack_midi_event_t midi;
+        if (g_jack.jack_midi_event_get(&midi, jackCtx->midiBuffer, jackCtx->midiEventIdx) != 0)
+            continue;
+        // CplugEvent holds up to 3 bytes. SysEx is skipped. JACK never sends running status
+        if (midi.size == 0 || midi.size > 3 || midi.buffer[0] == 0xf0)
+            continue;
+
+        // An event behind frameIdx means the plugin skipped ahead, so it's sent now
+        if (midi.time > frameIdx)
+        {
+            event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
+            event->processAudio.endFrame = midi.time < ctx->numFrames ? midi.time : ctx->numFrames;
+            return true;
+        }
+
+        event->midi.type       = CPLUG_EVENT_MIDI;
+        event->midi.frame      = frameIdx;
+        event->midi.bytesAsInt = 0;
+        memcpy(event->midi.bytes, midi.buffer, midi.size);
+        jackCtx->midiEventIdx++;
+        return true;
+    }
+
     event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
     event->processAudio.endFrame = ctx->numFrames;
     return true;
@@ -255,6 +292,7 @@ static int jack_process(jack_nframes_t nframes, void* arg)
     ctx.cplugContext.getAudioInput   = JackProcessContext_getAudioInput;
     ctx.cplugContext.getAudioOutput  = JackProcessContext_getAudioOutput;
     memcpy(ctx.output, output, sizeof(output));
+    ctx.midiBuffer = g_jack.jack_port_get_buffer(g_jack.midiInput, nframes);
 
     cplug_process(g_app.plugin, &ctx.cplugContext);
     cplug_atomic_exchange_i32(&g_jack.inProcess, 0);
@@ -366,6 +404,13 @@ static bool open_jack()
             return false;
         }
     }
+    g_jack.midiInput = g_jack.jack_port_register(g_jack.client, "midi_in", JACK_DEFAULT_MIDI_TYPE, JackPortIsInput, 0);
+    if (g_jack.midiInput == NULL)
+    {
+        fprintf(stderr, "Failed registering JACK port midi_in\n");
+        close_jack();
+        return false;
+    }
 
     int reconfigureFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (reconfigureFd == -1 || !Cplug_HostContext_RegisterFd(NULL, reconfigureFd, CPLUG_FD_READ))
@@ -413,6 +458,16 @@ static bool open_jack()
     }
     if (playback)
         g_jack.jack_free(playback);
+
+    // Physical MIDI capture ports are outputs. Software keyboards aren't physical, so they're connected by hand
+    const char** capture =
+        g_jack.jack_get_ports(g_jack.client, NULL, JACK_DEFAULT_MIDI_TYPE, JackPortIsPhysical | JackPortIsOutput);
+    if (capture == NULL || capture[0] == NULL)
+        fprintf(stderr, "No JACK MIDI capture ports to connect to\n");
+    else
+        g_jack.jack_connect(g_jack.client, capture[0], g_jack.jack_port_name(g_jack.midiInput));
+    if (capture)
+        g_jack.jack_free(capture);
     return true;
 }
 
