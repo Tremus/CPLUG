@@ -612,7 +612,7 @@ void CALLBACK Cplug_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
     if (wMsg == MM_MIM_DATA)
     {
         MIDIMessage   midi;
-        LONG          writePos;
+        LONG          writePos, nextPos, readPos;
         LARGE_INTEGER now;
 
         // dwParam2/dwTimestamp, is in "milliseconds, beginning at zero when the midiInStart function was called".
@@ -625,12 +625,17 @@ void CALLBACK Cplug_MIDIInProc(HMIDIIN hMidiIn, UINT wMsg, DWORD_PTR dwInstance,
         midi.timestampQPC = now.QuadPart;
 
         writePos = _InterlockedCompareExchange(&g_MIDI.RingBuffer.writePos, 0, 0);
+        readPos  = _InterlockedCompareExchange(&g_MIDI.RingBuffer.readPos, 0, 0);
+
+        nextPos = writePos + 1;
+        if (nextPos == ARRAYSIZE(g_MIDI.RingBuffer.buffer))
+            nextPos = 0;
+        // Buffer full. Discard event
+        if (nextPos == readPos)
+            return;
 
         g_MIDI.RingBuffer.buffer[writePos] = midi;
-        writePos++;
-        if (writePos == ARRAYSIZE(g_MIDI.RingBuffer.buffer))
-            writePos = 0;
-        _InterlockedExchange(&g_MIDI.RingBuffer.writePos, writePos);
+        _InterlockedExchange(&g_MIDI.RingBuffer.writePos, nextPos);
     }
     // handle sysex?
     // https://www.midi.org/specifications-old/item/table-4-universal-system-exclusive-messages */
@@ -800,7 +805,8 @@ struct
 static const PROPERTYKEY _PKEY_Device_FriendlyName = {
     {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
     14};
-static const IID  _IID_IAudioClient = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};
+static const IID  _IID_IAudioClient  = {0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}};
+static const IID  _IID_IAudioClient3 = {0x7ed4ee07, 0x8e67, 0x4cd4, {0x8c, 0x1a, 0x2b, 0x7a, 0x59, 0x87, 0xad, 0x42}};
 static const GUID _KSDATAFORMAT_SUBTYPE_IEEE_FLOAT =
     {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
 static const IID _IID_IAudioRenderClient =
@@ -823,6 +829,15 @@ typedef struct WindowsProcessContext
     LARGE_INTEGER qpcFrequency;
     INT64         midiFrameOffset;
 } WindowsProcessContext;
+
+// MIDI latency logging. 1 = print a summary when audio stops, 2 = also force the latency to 0, so
+// nearly every message should be reported late (checks the logging works)
+#define CPLUG_DEBUG_MIDI_LATENCY 0
+#if CPLUG_DEBUG_MIDI_LATENCY
+// [Audio Thread]
+static UINT32 g_DebugMidiLateCount;
+static INT64  g_DebugMidiWorstLateFrames;
+#endif
 
 WAVEFORMATEXTENSIBLE Cplug_Audio_CreateWaveFormat(DWORD NumChannels, DWORD SampleRate)
 {
@@ -1010,7 +1025,14 @@ bool Cplug_Audio_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event
         INT64 frame      = winctx->midiFrameOffset + elapsedQPC * g_Audio.SampleRate / winctx->qpcFrequency.QuadPart;
         // Arrived too late to keep the constant latency. Play it as soon as possible
         if (frame < frameIdx)
+        {
+#if CPLUG_DEBUG_MIDI_LATENCY
+            g_DebugMidiLateCount++;
+            if (frameIdx - frame > g_DebugMidiWorstLateFrames)
+                g_DebugMidiWorstLateFrames = frameIdx - frame;
+#endif
             frame = frameIdx;
+        }
 
         // Messages scheduled for a later block stay in the ring buffer
         if (frame < ctx->numFrames)
@@ -1085,6 +1107,19 @@ DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
     INT64 midiLatencyFrames = g_Audio.ProcessBufferMaxFrames;
     // Frames handed to WASAPI so far. IAudioClock positions count from the same origin
     INT64 framesWritten = 0;
+#if CPLUG_DEBUG_MIDI_LATENCY
+    g_DebugMidiLateCount       = 0;
+    g_DebugMidiWorstLateFrames = 0;
+    // Largest gap between frames written and the device position, and when it happened. The steady gap
+    // ignores the first 500ms, to see whether the measured latency is a startup spike
+    INT64 debugWorstGapFrames     = 0;
+    INT64 debugWorstGapAtFrames   = 0;
+    INT64 debugSteadyGapFrames    = 0;
+    INT64 debugWarmupFrames       = g_Audio.SampleRate / 2;
+#if CPLUG_DEBUG_MIDI_LATENCY == 2
+    midiLatencyFrames = 0;
+#endif
+#endif
 
     // The first pass pre-fills the whole buffer before the client is started
     BOOL started = FALSE;
@@ -1160,8 +1195,21 @@ DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
                 g_Audio.pIAudioRenderClient->lpVtbl->ReleaseBuffer(g_Audio.pIAudioRenderClient, blockSize, 0);
                 framesWritten += blockSize;
 
-                if (hasPosition && framesWritten - positionFrames > midiLatencyFrames)
+                if (hasPosition && framesWritten - positionFrames > midiLatencyFrames && CPLUG_DEBUG_MIDI_LATENCY != 2)
                     midiLatencyFrames = framesWritten - positionFrames;
+#if CPLUG_DEBUG_MIDI_LATENCY
+                if (hasPosition)
+                {
+                    INT64 gap = framesWritten - positionFrames;
+                    if (gap > debugWorstGapFrames)
+                    {
+                        debugWorstGapFrames   = gap;
+                        debugWorstGapAtFrames = framesWritten;
+                    }
+                    if (framesWritten > debugWarmupFrames && gap > debugSteadyGapFrames)
+                        debugSteadyGapFrames = gap;
+                }
+#endif
             }
         }
 
@@ -1171,6 +1219,26 @@ DWORD WINAPI Cplug_Audio_RunProcessThread(LPVOID data)
             started = TRUE;
         }
     }
+
+#if CPLUG_DEBUG_MIDI_LATENCY
+    fprintf(
+        stderr,
+        "[MIDI] latency %lld frames (%.2f ms), buffer %u frames, clock %s, late %u (worst %lld frames)\n",
+        midiLatencyFrames,
+        midiLatencyFrames * 1000.0 / g_Audio.SampleRate,
+        g_Audio.ProcessBufferMaxFrames,
+        clockFrequency != 0 ? "ok" : "unavailable",
+        g_DebugMidiLateCount,
+        g_DebugMidiWorstLateFrames);
+    fprintf(
+        stderr,
+        "[MIDI] worst gap %lld frames at %.2f ms, steady worst gap (after %.0f ms) %lld frames (%.2f ms)\n",
+        debugWorstGapFrames,
+        debugWorstGapAtFrames * 1000.0 / g_Audio.SampleRate,
+        debugWarmupFrames * 1000.0 / g_Audio.SampleRate,
+        debugSteadyGapFrames,
+        debugSteadyGapFrames * 1000.0 / g_Audio.SampleRate);
+#endif
 
     // https://learn.microsoft.com/en-us/windows/win32/api/avrt/nf-avrt-avrevertmmthreadcharacteristics
     BOOL ok = AvRevertMmThreadCharacteristics(ThreadCharacteristics);
@@ -1242,18 +1310,82 @@ void Cplug_Audio_Start()
 
     {
         WAVEFORMATEXTENSIBLE wfmt = Cplug_Audio_CreateWaveFormat(g_Audio.NumChannels, g_Audio.SampleRate);
-        REFERENCE_TIME reftime    = (REFERENCE_TIME)((double)g_Audio.BlockSize / ((double)g_Audio.SampleRate * 1.e-7));
+        hr                        = E_FAIL;
 
-        // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize
-        hr = g_Audio.pIAudioClient->lpVtbl->Initialize(
+        // Low latency path (Windows 10+). Runs the engine at its smallest period. This only accepts formats the
+        // engine supports natively, so resampled sample rates fail here and take the fallback below
+        // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient3-initializesharedaudiostream
+        IAudioClient3* pIAudioClient3 = NULL;
+        g_Audio.pIAudioClient->lpVtbl->QueryInterface(
             g_Audio.pIAudioClient,
-            AUDCLNT_SHAREMODE_SHARED,
-            AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-                AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-            reftime,
-            0,
-            (WAVEFORMATEX*)&wfmt,
-            0);
+            CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClient3),
+            (void**)&pIAudioClient3);
+        if (pIAudioClient3 != NULL)
+        {
+            UINT32 defaultPeriod = 0, fundamentalPeriod = 0, minPeriod = 0, maxPeriod = 0;
+            hr = pIAudioClient3->lpVtbl->GetSharedModeEnginePeriod(
+                pIAudioClient3,
+                (WAVEFORMATEX*)&wfmt,
+                &defaultPeriod,
+                &fundamentalPeriod,
+                &minPeriod,
+                &maxPeriod);
+            if (SUCCEEDED(hr))
+                hr = pIAudioClient3->lpVtbl->InitializeSharedAudioStream(
+                    pIAudioClient3,
+                    AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                    minPeriod,
+                    (WAVEFORMATEX*)&wfmt,
+                    NULL);
+            CPLUG_COM_RELEASE(pIAudioClient3);
+#if CPLUG_DEBUG_MIDI_LATENCY
+            fprintf(
+                stderr,
+                "[MIDI] IAudioClient3 %s, period %u frames (min %u, default %u, max %u)\n",
+                SUCCEEDED(hr) ? "ok" : "failed",
+                minPeriod,
+                minPeriod,
+                defaultPeriod,
+                maxPeriod);
+#endif
+
+            // A client can't be initialised twice, so the fallback starts over with a fresh one
+            if (FAILED(hr))
+            {
+                CPLUG_COM_RELEASE(g_Audio.pIAudioClient);
+                hr = g_Audio.pIMMDevice->lpVtbl->Activate(
+                    g_Audio.pIMMDevice,
+                    CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClient),
+                    CLSCTX_ALL,
+                    0,
+                    (void**)&g_Audio.pIAudioClient);
+                cplug_assert(!FAILED(hr));
+                if (FAILED(hr))
+                    goto fail;
+                hr = E_FAIL;
+            }
+        }
+
+        if (FAILED(hr))
+        {
+            // Events fire once per device period. Two periods of buffer leaves one period of headroom
+            REFERENCE_TIME defaultPeriod = 0;
+            g_Audio.pIAudioClient->lpVtbl->GetDevicePeriod(g_Audio.pIAudioClient, &defaultPeriod, NULL);
+
+            // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-initialize
+            hr = g_Audio.pIAudioClient->lpVtbl->Initialize(
+                g_Audio.pIAudioClient,
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                2 * defaultPeriod,
+                0,
+                (WAVEFORMATEX*)&wfmt,
+                0);
+#if CPLUG_DEBUG_MIDI_LATENCY
+            fprintf(stderr, "[MIDI] IAudioClient fallback, default period %.2f ms\n", defaultPeriod / 10000.0);
+#endif
+        }
     }
     cplug_assert(hr == S_OK);
     cplug_assert(g_Audio.pIAudioClient != NULL);
