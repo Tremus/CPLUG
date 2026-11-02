@@ -75,9 +75,12 @@ typedef struct MyPlugin
 
     float paramValuesAudio[NUM_PARAMS];
 
-    float oscPhase; // 0-1
-    int   midiNote; // -1 == not playing, 0-127+ playing
-    float velocity; // 0-1
+    struct OscVoice
+    {
+        uint64_t phase_acc; // 0-1 phase is 0-UINT64_MAX, so it wraps for free
+        int      midi_note; // -1 == not playing, 0-127 playing
+        float    velocity;  // 0-1
+    } voices[128];
     float pitchBend; // Semitones, -2 to +2
 
     // GUI zone
@@ -134,7 +137,8 @@ void* cplug_createPlugin(CplugHostContext* ctx)
     plugin->paramInfo[idx].max          = 1.0f;
     plugin->paramInfo[idx].defaultValue = 0.0f;
 
-    plugin->midiNote = -1;
+    for (int i = 0; i < ARRLEN(plugin->voices); i++)
+        plugin->voices[i].midi_note = -1;
 
     return plugin;
 }
@@ -332,21 +336,44 @@ static void handleMidi(MyPlugin* plugin, const CplugEvent* event)
     static const uint8_t MIDI_NOTE_ON          = 0x90;
     static const uint8_t MIDI_NOTE_PITCH_WHEEL = 0xe0;
 
-    if ((event->midi.status & 0xf0) == MIDI_NOTE_ON)
+    uint8_t status = event->midi.status & 0xf0;
+    int     note   = event->midi.data1;
+    // A note on with 0 velocity is a note off
+    if (status == MIDI_NOTE_ON && event->midi.data2 == 0)
+        status = MIDI_NOTE_OFF;
+
+    if (status == MIDI_NOTE_ON)
     {
-        plugin->midiNote = event->midi.data1;
-        plugin->velocity = (float)event->midi.data2 / 127.0f;
+        // Retrigger the voice already playing this note, else take the first free one.
+        // There's a voice per MIDI note, so one is always found
+        int slot = -1;
+        for (int i = 0; i < ARRLEN(plugin->voices); i++)
+        {
+            if (plugin->voices[i].midi_note == note)
+            {
+                slot = i;
+                break;
+            }
+            if (slot == -1 && plugin->voices[i].midi_note == -1)
+                slot = i;
+        }
+        my_assert(slot != -1);
+
+        struct OscVoice* voice = &plugin->voices[slot];
+        if (voice->midi_note == -1)
+            voice->phase_acc = 0;
+        voice->midi_note = note;
+        voice->velocity  = (float)event->midi.data2 / 127.0f;
     }
-    if ((event->midi.status & 0xf0) == MIDI_NOTE_OFF)
+    if (status == MIDI_NOTE_OFF)
     {
-        int note = event->midi.data1;
-        if (note == plugin->midiNote)
-            plugin->midiNote = -1;
-        plugin->velocity = (float)event->midi.data2 / 127.0f;
+        for (int i = 0; i < ARRLEN(plugin->voices); i++)
+            if (plugin->voices[i].midi_note == note)
+                plugin->voices[i].midi_note = -1;
     }
     if ((event->midi.status & 0xf0) == MIDI_NOTE_PITCH_WHEEL)
     {
-        int pb            =(int)event->midi.data1 | ((int)event->midi.data2 << 7);
+        int pb            = (int)event->midi.data1 | ((int)event->midi.data2 << 7);
         plugin->pitchBend = (float)(pb - 8192) / 8192.0f * 2.0f;
     }
 }
@@ -407,62 +434,67 @@ void cplug_process(void* ptr, CplugProcessContext* ctx)
             void* output = ctx->getAudioOutput(ctx, 0);
             CPLUG_LOG_ASSERT(output != NULL)
 
-            if (plugin->midiNote == -1)
+            const uint32_t endFrame = event.processAudio.endFrame;
+
+            // Silence, then each playing voice is summed on top
+            if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
             {
-                // Silence
-                if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
-                {
-                    double** output64 = (double**)output;
-                    CPLUG_LOG_ASSERT(output64[0] != NULL);
-                    CPLUG_LOG_ASSERT(output64[1] != NULL);
-                    memset(&output64[0][frame], 0, sizeof(double) * (event.processAudio.endFrame - frame));
-                    memset(&output64[1][frame], 0, sizeof(double) * (event.processAudio.endFrame - frame));
-                }
-                else
-                {
-                    float** output32 = (float**)output;
-                    CPLUG_LOG_ASSERT(output32[0] != NULL);
-                    CPLUG_LOG_ASSERT(output32[1] != NULL);
-                    memset(&output32[0][frame], 0, sizeof(float) * (event.processAudio.endFrame - frame));
-                    memset(&output32[1][frame], 0, sizeof(float) * (event.processAudio.endFrame - frame));
-                }
-                frame = event.processAudio.endFrame;
+                double** output64 = (double**)output;
+                CPLUG_LOG_ASSERT(output64[0] != NULL);
+                CPLUG_LOG_ASSERT(output64[1] != NULL);
+                memset(&output64[0][frame], 0, sizeof(double) * (endFrame - frame));
+                memset(&output64[1][frame], 0, sizeof(double) * (endFrame - frame));
             }
             else
             {
-                float phase = plugin->oscPhase;
+                float** output32 = (float**)output;
+                CPLUG_LOG_ASSERT(output32[0] != NULL);
+                CPLUG_LOG_ASSERT(output32[1] != NULL);
+                memset(&output32[0][frame], 0, sizeof(float) * (endFrame - frame));
+                memset(&output32[1][frame], 0, sizeof(float) * (endFrame - frame));
+            }
 
-                float Hz  = 440.0f * exp2f(((float)plugin->midiNote + plugin->pitchBend - 69.0f) * 0.0833333f);
-                float inc = Hz / plugin->sampleRate;
-                float dB  = -60.0f + plugin->velocity * 54; // -6dB max
-                float vol = powf(10.0f, dB / 20.0f);
+            for (int v = 0; v < ARRLEN(plugin->voices); v++)
+            {
+                struct OscVoice* voice = &plugin->voices[v];
+                if (voice->midi_note == -1)
+                    continue;
 
-                for (; frame < event.processAudio.endFrame; frame++)
+                float Hz = 440.0f * exp2f(((float)voice->midi_note + plugin->pitchBend - 69.0f) * 0.0833333f);
+                // Phase increment as a fraction of 2^64
+                uint64_t inc   = (uint64_t)((double)Hz / plugin->sampleRate * 18446744073709551616.0);
+                float    dB    = -60.0f + voice->velocity * 54; // -6dB max
+                float    vol   = powf(10.0f, dB / 20.0f);
+                uint64_t phase = voice->phase_acc;
+
+                for (uint32_t f = frame; f < endFrame; f++)
                 {
                     static const float mypi = 3.141592653589793f;
 
-                    float sample = vol * sinf(2 * mypi * phase);
+                    // The top 24 bits are all the precision a float has
+                    float phase01 = (float)(phase >> 40) * (1.0f / 16777216.0f);
+                    float sample  = vol * sinf(2 * mypi * phase01);
 
                     // Write the oscillator sample in the precision selected by the host
                     if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
                     {
                         double** output64 = (double**)output;
                         for (int ch = 0; ch < 2; ch++)
-                            output64[ch][frame] = sample;
+                            output64[ch][f] += sample;
                     }
                     else
                     {
                         float** output32 = (float**)output;
                         for (int ch = 0; ch < 2; ch++)
-                            output32[ch][frame] = sample;
+                            output32[ch][f] += sample;
                     }
 
                     phase += inc;
-                    phase -= (int)phase;
                 }
 
-                plugin->oscPhase = phase;
+                voice->phase_acc = phase;
             }
+            frame = endFrame;
             break;
         }
         default:
