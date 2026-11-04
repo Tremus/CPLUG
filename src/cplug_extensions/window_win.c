@@ -464,7 +464,8 @@ HRESULT STDMETHODCALLTYPE PWDropTarget_DragOver(IDropTarget* This, DWORD grfKeyS
     };
     bool ok = PWSendEvent(&event);
 
-    // TODO: make this change cursor. Currently not working?
+    // Shows a legacy copy cursor, else IDC_NO
+    // NOTE: if you created your HWND with the WS_EX_ACCEPTFILES style, File Explorer only shows the legacy copy cursor
     *pdwEffect = ok ? DROPEFFECT_COPY : DROPEFFECT_NONE;
 
     return S_OK;
@@ -752,8 +753,8 @@ uint32_t PWGetKeyModifiers()
 static BOOL PWHasPrecisionTouchpad()
 {
     RAWINPUTDEVICELIST List[64] = {0};
-    UINT               Num = ARRAYSIZE(List);
-    UINT               Count = GetRawInputDeviceList(List, &Num, sizeof(RAWINPUTDEVICELIST));
+    UINT               Num      = ARRAYSIZE(List);
+    UINT               Count    = GetRawInputDeviceList(List, &Num, sizeof(RAWINPUTDEVICELIST));
     if (Count == (UINT)-1)
         return FALSE;
 
@@ -872,8 +873,9 @@ HRESULT STDMETHODCALLTYPE PWDirectManipulation_OnViewportStatusChanged(
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE
-PWDirectManipulation_OnViewportUpdated(IDirectManipulationViewportEventHandler* This, IDirectManipulationViewport* viewport)
+HRESULT STDMETHODCALLTYPE PWDirectManipulation_OnViewportUpdated(
+    IDirectManipulationViewportEventHandler* This,
+    IDirectManipulationViewport*             viewport)
 {
     return S_OK;
 }
@@ -979,8 +981,8 @@ void PWDMInit(CplugWindow* pw)
     pw->DirectManipulation.RefCount                     = 1;
     pw->DirectManipulation.LastScale                    = 1;
 
-    const BOOL             IsWindows8OrGreater =
-        pw->OsVersionInfo.dwMajorVersion > 6 || (pw->OsVersionInfo.dwMajorVersion == 6 && pw->OsVersionInfo.dwMinorVersion >= 2);
+    const BOOL IsWindows8OrGreater = pw->OsVersionInfo.dwMajorVersion > 6 ||
+                                     (pw->OsVersionInfo.dwMajorVersion == 6 && pw->OsVersionInfo.dwMinorVersion >= 2);
     if (!IsWindows8OrGreater)
         return;
 
@@ -1844,9 +1846,8 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         // https://learn.microsoft.com/en-us/windows/win32/api/directmanipulation/nf-directmanipulation-idirectmanipulationupdatemanager-update
         if (pw->DirectManipulation.pUpdateManager)
         {
-            HRESULT hr = pw->DirectManipulation.pUpdateManager->lpVtbl->Update(
-                pw->DirectManipulation.pUpdateManager,
-                NULL);
+            HRESULT hr =
+                pw->DirectManipulation.pUpdateManager->lpVtbl->Update(pw->DirectManipulation.pUpdateManager, NULL);
             PW_ASSERT(SUCCEEDED(hr));
         }
 #ifdef PW_DX11
@@ -2522,8 +2523,9 @@ void* cplug_createGUI(CplugHostContext* host_ctx, void* userPlugin)
     PW_ASSERT(Info.init_size.width > 0);
     PW_ASSERT(Info.init_size.height > 0);
 
+    // WARNING: the WS_EX_ACCEPTFILES style conflicts with IDropTarget. Don't use it!
     pw->hwnd = CreateWindowExW(
-        WS_EX_ACCEPTFILES,
+        0,
         pw->ClassName,
         TEXT(CPLUG_PLUGIN_NAME),
         WS_CHILD | WS_CLIPSIBLINGS,
