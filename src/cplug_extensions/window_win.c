@@ -1726,7 +1726,7 @@ LRESULT CALLBACK PWWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         e.mouse.x = 0;
         e.mouse.y = GET_WHEEL_DELTA_WPARAM(wParam);
         PWSendEvent(&e);
-        cplug_log("WM_MOUSEWHEEL: %f %f 0x%x", e.mouse.x, e.mouse.y, e.mouse.modifiers);
+        // cplug_log("WM_MOUSEWHEEL: %f %f 0x%x", e.mouse.x, e.mouse.y, e.mouse.modifiers);
         return 0;
     }
     // Sent when a touch screen or touchpad contact first lands on our window, while Direct Manipulation is active
