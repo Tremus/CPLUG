@@ -295,8 +295,8 @@ void pw_beep(); // System default beep sound. Often used by alert popups to anno
 void pw_drag_files(void* pw, const char* const* paths, uint32_t num_paths);
 
 // Open & Save file dialogue box.
-// Must be called from the main thread.
 // Your supplied callback is called asynchronously from the main thread
+// [WARNING] Must be called from the main thread. macOS enters a modal loop when you call this
 bool pw_choose_file(const struct PWChooseFileArgs*);
 
 // callback_data: Pointer passed in PWChooseFileArgs
