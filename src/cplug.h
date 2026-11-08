@@ -64,6 +64,7 @@ enum
     CPLUG_FLAG_RESCAN_PARAM_VALUES   = 1 << 4,
     CPLUG_FLAG_RESCAN_PARAM_NAMES    = 1 << 5,
     CPLUG_FLAG_RESCAN_PARAM_METADATA = 1 << 6,
+    CPLUG_FLAG_RESCAN_MARK_DIRTY     = 1 << 7,
 };
 
 struct CplugHostContext
