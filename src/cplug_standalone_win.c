@@ -1326,16 +1326,11 @@ void Cplug_Audio_Stop()
     }
 }
 
-// [Main Thread]
-void Cplug_Audio_Start()
+// [Main Thread, or the audio init thread at startup]
+// Opens a stream on g_Audio.pIMMDevice. Doesn't touch the plugin or start the process thread, so it's safe to run off
+// the main thread while it creates the GUI. Follow with Cplug_Audio_StartProcessThread() on the main thread
+BOOL Cplug_Audio_OpenStream()
 {
-#ifdef HOTRELOAD_WATCH_DIR
-    if (g_Hotreload.hPluginDLL == NULL)
-    {
-        fprintf(stderr, "[FAILED] Called Cplug_Audio_Start when no plugin is loaded\n");
-        return;
-    }
-#endif // Hotreload
     cplug_assert(g_Audio.SampleRate != 0);
     cplug_assert(g_Audio.BlockSize != 0);
     cplug_assert(g_Audio.BlockSize <= CPLUG_MAX_BLOCK_SIZE);
@@ -1469,17 +1464,41 @@ void Cplug_Audio_Start()
     if (hr != S_OK)
         goto fail;
 
+    return TRUE;
+
+fail:
+    Cplug_Audio_Stop();
+    return FALSE;
+}
+
+// [Main Thread]
+// Requires a stream opened by Cplug_Audio_OpenStream()
+void Cplug_Audio_StartProcessThread()
+{
+    cplug_assert(g_Audio.pIAudioClient != NULL);
+    cplug_assert(g_Audio.hAudioProcessThread == NULL);
+
     g_plugin.setSampleRateAndBlockSize(g_plugin.UserPlugin, g_Audio.SampleRate, g_Audio.BlockSize);
 
     g_Audio.FlagExitAudioThread = 0;
 
     g_Audio.hAudioProcessThread = CreateThread(NULL, 0, Cplug_Audio_RunProcessThread, NULL, 0, 0);
     cplug_assert(g_Audio.hAudioProcessThread != NULL);
+}
 
-    return;
-
-fail:
-    Cplug_Audio_Stop();
+// [Main Thread]
+void Cplug_Audio_Start()
+{
+#ifdef HOTRELOAD_WATCH_DIR
+    if (g_Hotreload.hPluginDLL == NULL)
+    {
+        fprintf(stderr, "[FAILED] Called Cplug_Audio_Start when no plugin is loaded\n");
+        return;
+    }
+#endif // Hotreload
+    BOOL opened = Cplug_Audio_OpenStream();
+    if (opened)
+        Cplug_Audio_StartProcessThread();
 }
 
 // [Main Thread]
@@ -2424,6 +2443,112 @@ LRESULT CALLBACK Cplug_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     return DefWindowProcW(hWnd, uMsg, wParam, lParam);
 }
 
+// [Audio init thread, or Main Thread on Windows 7] Owns g_Audio from CreateThread until WinMain joins it. Never calls
+// into the plugin. WinMain calls it directly when the init threads can't be used
+DWORD WINAPI Cplug_Audio_InitThread(LPVOID data)
+{
+    // The objects created here (IMMDeviceEnumerator, IMMDevice, IAudioClient...) are apartment agnostic, so the main
+    // thread (STA) and audio thread (MTA) use them directly afterwards. WinMain keeps the MTA alive with
+    // CoIncrementMTAUsage, so it isn't torn down when this thread uninitialises.
+    // On the main thread this fails with RPC_E_CHANGED_MODE (it's an STA), so the objects live in its STA instead
+    HRESULT hrCoInit = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+    HRESULT hr = CoCreateInstance(
+        (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_CLSID_MMDeviceEnumerator),
+        0,
+        CLSCTX_ALL,
+        (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_IID_IMMDeviceEnumerator),
+        (void**)&g_Audio.pIMMDeviceEnumerator);
+    cplug_assert(!FAILED(hr));
+
+    if (g_Audio.pIMMDeviceEnumerator)
+    {
+        Cplug_Audio_ScanDevices();
+        Cplug_Audio_SetDevice(-1); // -1 == default device
+    }
+
+    // Default to the engine's native rate so the stream isn't resampled. CPLUG_DEFAULT_SAMPLE_RATE is the fallback
+    // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-getmixformat
+    if (g_Audio.pIMMDevice)
+    {
+        IAudioClient* pIAudioClient = NULL;
+        hr                          = g_Audio.pIMMDevice->lpVtbl->Activate(
+            g_Audio.pIMMDevice,
+            CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClient),
+            CLSCTX_ALL,
+            0,
+            (void**)&pIAudioClient);
+        if (SUCCEEDED(hr) && pIAudioClient != NULL)
+        {
+            WAVEFORMATEX* pMixFormat = NULL;
+            hr                       = pIAudioClient->lpVtbl->GetMixFormat(pIAudioClient, &pMixFormat);
+            if (SUCCEEDED(hr) && pMixFormat != NULL && pMixFormat->nSamplesPerSec != 0)
+                g_Audio.SampleRate = pMixFormat->nSamplesPerSec;
+            if (pMixFormat)
+                CoTaskMemFree(pMixFormat);
+        }
+        CPLUG_COM_RELEASE(pIAudioClient);
+
+        // Only the stream. WinMain calls the plugin & starts the process thread after the join
+        BOOL opened = Cplug_Audio_OpenStream();
+        cplug_assert(opened);
+    }
+
+    if (SUCCEEDED(hrCoInit))
+        CoUninitialize();
+    return 0;
+}
+
+// [MIDI init thread, or Main Thread on Windows 7] Owns g_MIDI from CreateThread until WinMain joins it. WinMain calls
+// it directly when the init threads can't be used
+DWORD WINAPI Cplug_MIDI_InitThread(LPVOID data)
+{
+    // WinMM doesn't need COM, but Windows 11's MIDI service layer may use it internally
+    HRESULT hrCoInit = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+    for (int i = 0; i < ARRAYSIZE(g_MIDI.Buffers); i++)
+    {
+        MIDIHDR* head        = &g_MIDI.Buffers[i].Header;
+        head->lpData         = &g_MIDI.Buffers[i].Buffer[0];
+        head->dwBufferLength = ARRAYSIZE(g_MIDI.Buffers[i].Buffer);
+        head->dwUser         = i;
+    }
+    // For some mysterious reason, possibly in a new update of Windows 11, calling midiInOpen(portnum=0) before
+    // midiInOpen() appears to not to work. It's like they recently removed any scanning for
+    // devices that used to occur in midiInOpen or something?
+    // HMIDIIN has no thread affinity. The main thread disconnects/reconnects it later
+    Cplug_MIDI_RescanInputs();
+    Cplug_MIDI_ConnectInput(0);
+
+    if (SUCCEEDED(hrCoInit))
+        CoUninitialize();
+    return 0;
+}
+
+// IMPORTANT
+// Audio & MIDI device setup is slow (~90-100ms warm, ~230ms cold, mostly WASAPI device scanning & WinMM MIDI
+// enumeration), so it runs on two init threads while the main thread creates the GUI & window. Measured on Windows 11
+// (Release): time to first DXGI Present went from ~245ms to ~150ms warm, and ~370ms to ~175ms cold.
+//
+// Startup order:
+//  1. Single instance mutex, OleInitialize (main thread is an STA), DPI awareness
+//  2. Load the plugin (cplug_libraryLoad, cplug_createPlugin)
+//  3. Read plugin config needed by the init threads (output channel count):
+//     If MTA is available (Windows 8+):
+//         - Audio init thread: create IMMDeviceEnumerator, scan devices, pick the default device, read its mix format
+//           & open a stream. It never calls into the plugin
+//         - MIDI init thread: rescan inputs, connect input 0
+//     Else (Windows 7):
+//         - Init Audio & MIDI on the main thread
+//  4. Main thread meanwhile: cplug_createGUI (D3D device, swapchain, plugin GUI), main window, dark mode, menu bar
+//  5. Join the audio & MIDI init threads (if applicable)
+//  6. Main thread: setSampleRateAndBlockSize, then start the audio process thread
+//  7. Register the audio hotplug callback. Its notifications post messages that rebuild the menus, so it must come
+//     after the join & the menu bar
+//  8. Populate the submenus from the scanned devices
+//  9. setParent (starts the vblank thread, which drives the first frame), ShowWindow
+//
+// Nothing pumps window messages before step 9's message loop, so WM_DEVICECHANGE can't run during the init threads
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmdshow)
 {
     // https://stackoverflow.com/questions/171213/how-to-block-running-two-instances-of-the-same-program
@@ -2479,6 +2604,45 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
     }
 
     Cplug_LoadPlugin();
+
+    // SPAWN AUDIO & MIDI INIT THREADS
+    HANDLE hInitThreads[2] = {0};
+    {
+        g_Audio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
+        g_Audio.BlockSize   = CPLUG_DEFAULT_BLOCK_SIZE;
+        g_Audio.NumChannels = g_plugin.getOutputBusChannelCount(g_plugin.UserPlugin, 0);
+        cplug_assert(g_Audio.NumChannels == 1 || g_Audio.NumChannels == 2); // TODO: supported other configurations
+
+        // COM in typically wants to associate resources with single threads, and tear down those resources when the
+        // threads exit. By setting up a "Multithreaded Apartment", CoIncrementMTAUsage() will help us avoid this and
+        // keep those resources alive, past the lifetime of this init thread
+        // It's a Windows 8+ feature. Windows 7 just inits on the main thread
+        // https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coincrementmtausage
+        BOOL UseInitThreads = FALSE;
+        {
+            typedef HRESULT(WINAPI * CoIncrementMTAUsageProc)(void** pCookie);
+            HMODULE                 hOle32 = GetModuleHandleW(L"ole32.dll");
+            CoIncrementMTAUsageProc pCoIncrementMTAUsage =
+                hOle32 ? (CoIncrementMTAUsageProc)(void*)GetProcAddress(hOle32, "CoIncrementMTAUsage") : NULL;
+            if (pCoIncrementMTAUsage)
+            {
+                void*   MTACookie = NULL;
+                HRESULT hr        = pCoIncrementMTAUsage(&MTACookie);
+                UseInitThreads    = SUCCEEDED(hr);
+            }
+        }
+
+        if (UseInitThreads)
+        {
+            hInitThreads[0] = CreateThread(NULL, 0, Cplug_Audio_InitThread, NULL, 0, 0);
+            hInitThreads[1] = CreateThread(NULL, 0, Cplug_MIDI_InitThread, NULL, 0, 0);
+        }
+        else
+        {
+            Cplug_Audio_InitThread(NULL);
+            Cplug_MIDI_InitThread(NULL);
+        }
+    }
 
     // INIT WINDOW
     {
@@ -2602,66 +2766,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdline, int cmds
         SetMenu(g_hwnd, g_Menus.hMain);
     }
 
-    // INIT AUDIO
+    // JOIN AUDIO & MIDI INIT THREADS
     {
-        g_Audio.SampleRate  = CPLUG_DEFAULT_SAMPLE_RATE;
-        g_Audio.BlockSize   = CPLUG_DEFAULT_BLOCK_SIZE;
-        g_Audio.NumChannels = g_plugin.getOutputBusChannelCount(g_plugin.UserPlugin, 0);
-        cplug_assert(g_Audio.NumChannels == 1 || g_Audio.NumChannels == 2); // TODO: supported other configurations
-
-        // Scan for device
-        HRESULT hr = CoCreateInstance(
-            (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_CLSID_MMDeviceEnumerator),
-            0,
-            CLSCTX_ALL,
-            (REFCLSID)CPLUG_WTF_IS_A_REFERENCE(_IID_IMMDeviceEnumerator),
-            (void**)&g_Audio.pIMMDeviceEnumerator);
-        cplug_assert(!FAILED(hr));
-
-        Cplug_Audio_ScanDevices();
-        Cplug_Audio_SetDevice(-1); // -1 == default device
-
-        // Default to the engine's native rate so the stream isn't resampled. CPLUG_DEFAULT_SAMPLE_RATE is the fallback
-        // https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-getmixformat
-        if (g_Audio.pIMMDevice)
+        if (hInitThreads[0])
         {
-            IAudioClient* pIAudioClient = NULL;
-            hr                          = g_Audio.pIMMDevice->lpVtbl->Activate(
-                g_Audio.pIMMDevice,
-                CPLUG_WTF_IS_A_REFERENCE(_IID_IAudioClient),
-                CLSCTX_ALL,
-                0,
-                (void**)&pIAudioClient);
-            if (SUCCEEDED(hr) && pIAudioClient != NULL)
-            {
-                WAVEFORMATEX* pMixFormat = NULL;
-                hr                       = pIAudioClient->lpVtbl->GetMixFormat(pIAudioClient, &pMixFormat);
-                if (SUCCEEDED(hr) && pMixFormat != NULL && pMixFormat->nSamplesPerSec != 0)
-                    g_Audio.SampleRate = pMixFormat->nSamplesPerSec;
-                if (pMixFormat)
-                    CoTaskMemFree(pMixFormat);
-            }
-            CPLUG_COM_RELEASE(pIAudioClient);
+            DWORD waited = WaitForSingleObject(hInitThreads[0], INFINITE);
+            cplug_assert(waited == WAIT_OBJECT_0);
+            CloseHandle(hInitThreads[0]);
         }
-
-        Cplug_Audio_Start();
+        if (hInitThreads[1])
+        {
+            DWORD waited = WaitForSingleObject(hInitThreads[1], INFINITE);
+            cplug_assert(waited == WAIT_OBJECT_0);
+            CloseHandle(hInitThreads[1]);
+        }
     }
 
-    // INIT MIDI
-    {
-        for (int i = 0; i < ARRAYSIZE(g_MIDI.Buffers); i++)
-        {
-            MIDIHDR* head        = &g_MIDI.Buffers[i].Header;
-            head->lpData         = &g_MIDI.Buffers[i].Buffer[0];
-            head->dwBufferLength = ARRAYSIZE(g_MIDI.Buffers[i].Buffer);
-            head->dwUser         = i;
-        }
-        // For some mysterious reason, possibly in a new update of Windows 11, calling midiInOpen(portnum=0) before
-        // midiInOpen() appears to not to work. It's like they recently removed any scanning for
-        // devices that used to occur in midiInOpen or something?
-        Cplug_MIDI_RescanInputs();
-        Cplug_MIDI_ConnectInput(0);
-    }
+    // START AUDIO
+    if (g_Audio.pIAudioClient)
+        Cplug_Audio_StartProcessThread();
 
     // Hotplugging
     {
