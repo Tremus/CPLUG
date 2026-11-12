@@ -92,3 +92,4 @@ Everything else is in the public domain, or MIT if you insist. See [LICENSE](LIC
 -   CPLUG contributors! <3
 -   Filipe Coelho - Most of the VST3 wrapper and debugging code is a heavily edited version of his code from the [DISTRHO Plugin Framework](https://github.com/DISTRHO/DPF)
 -   Nakst - The drawing used in the example plugin was taken from the [CLAP tutorial](https://nakst.gitlab.io/tutorial/clap-part-1.html)
+-   [Cure Audio](https://cure.audio/) and all the [Scream](https://github.com/Cure-Audio/Scream) beta teseters. Helped a lot with getting the window extension running rock solid on more that 20k+ devices
