@@ -1875,10 +1875,11 @@ VST3Processor_canProcessSampleSize(void* self, const int32_t symbolic_sample_siz
 {
     // NOTE runs during RT
     // cplug_log("%s => %i", __FUNCTION__, symbolic_sample_size);
-    return symbolic_sample_size == Steinberg_Vst_SymbolicSampleSizes_kSample32 ||
-                   symbolic_sample_size == Steinberg_Vst_SymbolicSampleSizes_kSample64
-               ? Steinberg_kResultTrue
-               : Steinberg_kResultFalse;
+    // 64-bit audio is opt in, see CPLUG_SUPPORT_64BIT_AUDIO in cplug.h
+    bool is_32bit  = symbolic_sample_size == Steinberg_Vst_SymbolicSampleSizes_kSample32;
+    bool is_64bit  = symbolic_sample_size == Steinberg_Vst_SymbolicSampleSizes_kSample64;
+    bool supported = is_32bit || (CPLUG_SUPPORT_64BIT_AUDIO && is_64bit);
+    return supported ? Steinberg_kResultTrue : Steinberg_kResultFalse;
 }
 
 static uint32_t SMTG_STDMETHODCALLTYPE VST3Processor_getLatencySamples(void* const self)
@@ -1899,7 +1900,7 @@ VST3Processor_setupProcessing(void* const self, struct Steinberg_Vst_ProcessSetu
 
     CPLUG_LOG_ASSERT_RETURN(
         setup->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample32 ||
-            setup->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample64,
+            (CPLUG_SUPPORT_64BIT_AUDIO && setup->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample64),
         Steinberg_kInvalidArgument);
 
     // TODO processMode can be:

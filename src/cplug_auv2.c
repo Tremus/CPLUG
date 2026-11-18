@@ -702,7 +702,7 @@ static OSStatus AUMethodGetProperty(
         if (inScope == kAudioUnitScope_Output)
             nChannels = cplug_getOutputBusChannelCount(auv2->userPlugin, inElement);
 
-        // Report the currently negotiated precision, starting with float64 by default
+        // Report the currently negotiated precision, starting with float64 only when CPLUG_PREFER_64BIT_AUDIO
         UInt32 sampleBytes      = auv2->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64 ? sizeof(double) : sizeof(float);
         desc->mSampleRate       = auv2->sampleRate;
         desc->mFormatID         = kAudioFormatLinearPCM;
@@ -977,13 +977,14 @@ static OSStatus AUMethodSetProperty(
         CPLUG_LOG_ASSERT_RETURN(!auv2->isInitialized, kAudioUnitErr_Initialized);
         CPLUG_LOG_ASSERT_RETURN(desc->mChannelsPerFrame <= nChannels, kAudioUnitErr_FormatNotSupported);
 
-        // Accept non-interleaved native float32 or float64 and retain the host's fallback choice
+        // Accept non-interleaved native float32, or float64 when CPLUG_SUPPORT_64BIT_AUDIO, and retain the host's
+        // fallback choice
         CPLUG_LOG_ASSERT_RETURN(desc->mFormatID == kAudioFormatLinearPCM, kAudioUnitErr_FormatNotSupported);
         CPLUG_LOG_ASSERT_RETURN((desc->mFormatFlags & kAudioFormatFlagIsFloat) != 0, kAudioUnitErr_FormatNotSupported);
         CPLUG_LOG_ASSERT_RETURN(
             (desc->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0,
             kAudioUnitErr_FormatNotSupported);
-        if (desc->mBitsPerChannel == 64 && desc->mBytesPerFrame == sizeof(double))
+        if (CPLUG_SUPPORT_64BIT_AUDIO && desc->mBitsPerChannel == 64 && desc->mBytesPerFrame == sizeof(double))
             audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT64;
         else if (desc->mBitsPerChannel == 32 && desc->mBytesPerFrame == sizeof(float))
             audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
@@ -1628,9 +1629,8 @@ static bool AUv2HostContext_getHostName(CplugHostContext* ctx, char* buf, size_t
 }
 static bool AUv2HostContext_requestResize_stub(CplugHostContext* ctx, uint32_t w, uint32_t h)
 {
-    cplug_log(
-        "[WARNING] This implementation of requestResize() will not work. You need to replace this method in your "
-        "Cocoa code");
+    cplug_log("[WARNING] This implementation of requestResize() will not work. You need to replace this method in your "
+              "Cocoa code");
     return false;
 }
 static bool AUv2HostContext_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
@@ -1695,8 +1695,8 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     AUv2Plugin* auv2 = (AUv2Plugin*)(calloc(1, sizeof(AUv2Plugin)));
     _Static_assert(offsetof(AUv2Plugin, mPlugInInterface) == 0, "Required by the AU format to be first");
 
-    auv2->mPlugInInterface.Open       = (OSStatus (*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
-    auv2->mPlugInInterface.Close      = (OSStatus (*)(void*))ComponentBase_AP_Close;
+    auv2->mPlugInInterface.Open       = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
+    auv2->mPlugInInterface.Close      = (OSStatus(*)(void*))ComponentBase_AP_Close;
     auv2->mPlugInInterface.Lookup     = AULookup;
     auv2->desc                        = *inDesc;
     auv2->hostContext.type            = CPLUG_PLUGIN_IS_AUV2;
@@ -1712,6 +1712,7 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     auv2->supportsInPlaceProcessing = 1;
     auv2->mMaxFramesPerSlice        = kAUDefaultMaxFramesPerSlice;
     auv2->sampleRate                = kAUDefaultSampleRate;
-    auv2->audioSampleType           = CPLUG_AUDIO_SAMPLE_FLOAT64;
+    // 64-bit audio is opt in, see CPLUG_SUPPORT_64BIT_AUDIO in cplug.h
+    auv2->audioSampleType = CPLUG_PREFER_64BIT_AUDIO ? CPLUG_AUDIO_SAMPLE_FLOAT64 : CPLUG_AUDIO_SAMPLE_FLOAT32;
     return auv2;
 }
