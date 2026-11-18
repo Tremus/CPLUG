@@ -19,6 +19,19 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
+// Standalone builds only use 32bit
+// "Prefer" is a CLAP & AU only feature
+// Hosts like Reaper deafult to 64bit with VST3 if its on offer
+#ifndef CPLUG_SUPPORT_64BIT_AUDIO
+#define CPLUG_SUPPORT_64BIT_AUDIO 0
+#endif
+#ifndef CPLUG_PREFER_64BIT_AUDIO
+#define CPLUG_PREFER_64BIT_AUDIO 0
+#endif
+#if CPLUG_PREFER_64BIT_AUDIO && !CPLUG_SUPPORT_64BIT_AUDIO
+#error "CPLUG_PREFER_64BIT_AUDIO requires CPLUG_SUPPORT_64BIT_AUDIO"
+#endif
+
 #ifndef CPLUG_FOURCC
 // GCC will blow its lid if you use multi-character constants
 #define CPLUG_FOURCC(a, b, c, d)                                                                                       \

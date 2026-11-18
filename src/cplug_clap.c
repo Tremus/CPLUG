@@ -6,6 +6,17 @@
 #include <stdio.h>
 #include <string.h>
 
+// 64-bit audio is opt in, see CPLUG_SUPPORT_64BIT_AUDIO in cplug.h
+#if CPLUG_PREFER_64BIT_AUDIO
+#define CPLUG_CLAP_AUDIO_PORT_SAMPLE_SIZE_FLAGS                                                                        \
+    (CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS | CLAP_AUDIO_PORT_PREFERS_64BITS)
+#elif CPLUG_SUPPORT_64BIT_AUDIO
+#define CPLUG_CLAP_AUDIO_PORT_SAMPLE_SIZE_FLAGS                                                                        \
+    (CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS)
+#else
+#define CPLUG_CLAP_AUDIO_PORT_SAMPLE_SIZE_FLAGS 0
+#endif
+
 typedef struct CLAPPlugin
 {
     clap_plugin_t    clapPlugin;
@@ -57,8 +68,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         info->id = index;
         cplug_getInputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getInputBusChannelCount(clap->userPlugin, index);
-        info->flags         = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
-                      CLAP_AUDIO_PORT_PREFERS_64BITS;
+        info->flags         = CPLUG_CLAP_AUDIO_PORT_SAMPLE_SIZE_FLAGS;
         if (index == 0)
             info->flags |= CLAP_AUDIO_PORT_IS_MAIN;
 
@@ -81,8 +91,7 @@ CLAPExtAudioPorts_get(const clap_plugin_t* plugin, uint32_t index, bool is_input
         info->id = numInputBusses + index;
         cplug_getOutputBusName(clap->userPlugin, index, info->name, sizeof(info->name));
         info->channel_count = cplug_getOutputBusChannelCount(clap->userPlugin, index);
-        info->flags         = CLAP_AUDIO_PORT_REQUIRES_COMMON_SAMPLE_SIZE | CLAP_AUDIO_PORT_SUPPORTS_64BITS |
-                      CLAP_AUDIO_PORT_PREFERS_64BITS;
+        info->flags         = CPLUG_CLAP_AUDIO_PORT_SAMPLE_SIZE_FLAGS;
         if (index == 0)
             info->flags |= CLAP_AUDIO_PORT_IS_MAIN;
 
@@ -831,13 +840,14 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
     translator.cplugContext.numInputBusses  = process->audio_inputs_count;
     translator.cplugContext.numOutputBusses = process->audio_outputs_count;
 
+    translator.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
+#if CPLUG_SUPPORT_64BIT_AUDIO
     // Prefer the host's double-precision buffers and fall back to single precision
     if ((process->audio_outputs_count > 0 && process->audio_outputs[0].data64 != NULL) ||
         (process->audio_outputs_count == 0 && process->audio_inputs_count > 0 &&
          process->audio_inputs[0].data64 != NULL))
         translator.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT64;
-    else
-        translator.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
+#endif
 
     if (process->transport)
     {
