@@ -598,7 +598,7 @@ static bool CLAPPlugin_init(const struct clap_plugin* plugin)
     CPLUG_LOG_ASSERT(clap->host_audio_ports != NULL);
     CPLUG_LOG_ASSERT(clap->host_params != NULL);
     CPLUG_LOG_ASSERT(clap->host_latency != NULL);
-    CPLUG_LOG_ASSERT(clap->host_tail != NULL);
+    // CPLUG_LOG_ASSERT(clap->host_tail != NULL); // Not supported in Bitwig
     CPLUG_LOG_ASSERT(clap->host_state != NULL);
     CPLUG_LOG_ASSERT(clap->host_gui != NULL);
 
