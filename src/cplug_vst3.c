@@ -564,7 +564,6 @@ static void _cplug_vst3_sendParamEvent(CplugHostContext* ctx, const CplugEvent* 
     VST3Plugin* vst3 = (VST3Plugin*)ctx;
 
     Steinberg_Vst_IComponentHandler* handler = vst3->controller.componentHandler;
-    CPLUG_LOG_ASSERT(handler != NULL);
     if (handler)
     {
         if (event->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN)
@@ -672,9 +671,8 @@ static void _cplug_vst3_setFrameRunLoop(VST3Plugin* vst3, Steinberg_IPlugFrame* 
         vst3->frameRunLoop->lpVtbl->release(vst3->frameRunLoop);
         vst3->frameRunLoop = NULL;
     }
-    if (frame &&
-        frame->lpVtbl->queryInterface(frame, Steinberg_Linux_IRunLoop_iid, (void**)&vst3->frameRunLoop) ==
-            Steinberg_kResultOk)
+    if (frame && frame->lpVtbl->queryInterface(frame, Steinberg_Linux_IRunLoop_iid, (void**)&vst3->frameRunLoop) ==
+                     Steinberg_kResultOk)
         _cplug_vst3_attachRunLoop(vst3, vst3->frameRunLoop, true);
     else
         vst3->frameRunLoop = NULL;
@@ -2094,9 +2092,9 @@ VST3Processor_process(void* const self, struct Steinberg_Vst_ProcessData* const 
     translator.cplugContext.numFrames       = data->numSamples;
     translator.cplugContext.numInputBusses  = data->numInputs;
     translator.cplugContext.numOutputBusses = data->numOutputs;
-    translator.cplugContext.audioSampleType =
-        data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample64 ? CPLUG_AUDIO_SAMPLE_FLOAT64
-                                                                               : CPLUG_AUDIO_SAMPLE_FLOAT32;
+    translator.cplugContext.audioSampleType = data->symbolicSampleSize == Steinberg_Vst_SymbolicSampleSizes_kSample64
+                                                  ? CPLUG_AUDIO_SAMPLE_FLOAT64
+                                                  : CPLUG_AUDIO_SAMPLE_FLOAT32;
 
     if (data->processContext != NULL)
     {
@@ -2750,18 +2748,18 @@ VST3Factory_createInstance(void* self, const Steinberg_TUID class_id, const Stei
     if (cplug_tuid_match(class_id, cplug_tuid_component) &&
         (cplug_tuid_match(iid, Steinberg_Vst_IComponent_iid) || cplug_tuid_match(iid, Steinberg_FUnknown_iid)))
     {
-        VST3Plugin* vst3                 = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
-        vst3->hostContext.type           = CPLUG_PLUGIN_IS_VST3;
-        vst3->hostContext.sendParamEvent = _cplug_vst3_sendParamEvent;
-        vst3->hostContext.rescan         = _cplug_vst3_rescan;
-        vst3->hostContext.getHostName    = _cplug_vst3_getHostName;
-        vst3->hostContext.requestResize  = _cplug_vst3_requestResize;
+        VST3Plugin* vst3                  = (VST3Plugin*)calloc(1, sizeof(VST3Plugin));
+        vst3->hostContext.type            = CPLUG_PLUGIN_IS_VST3;
+        vst3->hostContext.sendParamEvent  = _cplug_vst3_sendParamEvent;
+        vst3->hostContext.rescan          = _cplug_vst3_rescan;
+        vst3->hostContext.getHostName     = _cplug_vst3_getHostName;
+        vst3->hostContext.requestResize   = _cplug_vst3_requestResize;
         vst3->hostContext.registerTimer   = _cplug_vst3_registerTimer;
         vst3->hostContext.unregisterTimer = _cplug_vst3_unregisterTimer;
         vst3->hostContext.registerFd      = _cplug_vst3_registerFd;
         vst3->hostContext.unregisterFd    = _cplug_vst3_unregisterFd;
-        vst3->component.lpVtbl           = &vst3->component.base;
-        vst3->component.refcounter       = 1;
+        vst3->component.lpVtbl            = &vst3->component.base;
+        vst3->component.refcounter        = 1;
         // Steinberg_FUnknown
         vst3->component.base.queryInterface = VST3Component_queryInterface;
         vst3->component.base.addRef         = VST3Component_addRef;
