@@ -442,7 +442,8 @@ OSStatus AUMethodGetPropertyInfo(
     case kAudioUnitProperty_ParameterList:
     {
         // Global params only, else auval starts asking for input and output parameter detials
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
+        if (inScope != kAudioUnitScope_Global)
+            return kAudioUnitErr_InvalidScope;
         uint32_t numParams = cplug_getNumParameters(auv2->userPlugin);
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(AudioUnitParameterID) * numParams);
         break;
@@ -454,12 +455,14 @@ OSStatus AUMethodGetPropertyInfo(
 
     case kAudioUnitProperty_Latency:
         // auval will ask for latency in the global and input scopes and then test you on it
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
+        if (inScope != kAudioUnitScope_Global)
+            return kAudioUnitErr_InvalidScope;
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(Float64));
         break;
 
     case kAudioUnitProperty_TailTime:
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
+        if (inScope != kAudioUnitScope_Global)
+            return kAudioUnitErr_InvalidScope;
         CPLUG_SAFE_SET_PTR(outDataSize, sizeof(Float64));
         break;
 
@@ -575,7 +578,8 @@ static OSStatus AUMethodGetProperty(
         outData,
         *ioDataSize);
 
-    CPLUG_LOG_ASSERT_RETURN(inScope < kAudioUnitScope_Group, kAudioUnitErr_InvalidScope);
+    if (inScope >= kAudioUnitScope_Group)
+        return kAudioUnitErr_InvalidScope;
 
     OSStatus result = noErr;
 
@@ -740,7 +744,8 @@ static OSStatus AUMethodGetProperty(
     }
 
     case kAudioUnitProperty_Latency:
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
+        if (inScope != kAudioUnitScope_Global)
+            return kAudioUnitErr_InvalidScope;
         *(Float64*)outData = cplug_getLatencyInSamples(auv2->userPlugin);
         *ioDataSize        = sizeof(Float64);
         break;
@@ -764,7 +769,8 @@ static OSStatus AUMethodGetProperty(
         break;
 
     case kAudioUnitProperty_TailTime:
-        CPLUG_LOG_ASSERT_RETURN(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
+        if (inScope != kAudioUnitScope_Global)
+            return kAudioUnitErr_InvalidScope;
         *(Float64*)outData = cplug_getTailInSamples(auv2->userPlugin);
         *ioDataSize        = sizeof(Float64);
         break;
@@ -931,7 +937,7 @@ static OSStatus AUMethodSetProperty(
         CFStringRef     presetDataKey = CFStringCreateWithCString(0, kAUPresetDataKey, 0);
 
         CFDataRef data = (CFDataRef)CFDictionaryGetValue(dict, presetDataKey);
-        CPLUG_LOG_ASSERT(data != NULL);
+        // auval WILL have NULL preset data
         if (data)
         {
             struct AUv2ReadStateContext readCtx = {
@@ -974,8 +980,12 @@ static OSStatus AUMethodSetProperty(
         default:
             return kAudioUnitErr_InvalidScope;
         }
-        CPLUG_LOG_ASSERT_RETURN(!auv2->isInitialized, kAudioUnitErr_Initialized);
-        CPLUG_LOG_ASSERT_RETURN(desc->mChannelsPerFrame <= nChannels, kAudioUnitErr_FormatNotSupported);
+
+        // CPLUG_LOG_ASSERT_RETURN(!auv2->isInitialized, kAudioUnitErr_Initialized);
+        // if (!auv2->isInitialized)
+        //     return kAudioUnitErr_Initialized;
+        if (desc->mChannelsPerFrame != nChannels)
+            return kAudioUnitErr_FormatNotSupported;
 
         // Accept non-interleaved native float32, or float64 when CPLUG_SUPPORT_64BIT_AUDIO, and retain the host's
         // fallback choice
@@ -1298,13 +1308,13 @@ void* AUv2ProcessContextTranslator_getAudioInput(const CplugProcessContext* ctx,
 {
     const AUv2ProcessContextTranslator* translator = (const AUv2ProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT(busIdx == 0); // TODO: support more busses
-    return translator->channels;
+    return (void*)translator->channels;
 }
 void* AUv2ProcessContextTranslator_getAudioOutput(const CplugProcessContext* ctx, uint32_t busIdx)
 {
     const AUv2ProcessContextTranslator* translator = (const AUv2ProcessContextTranslator*)ctx;
     CPLUG_LOG_ASSERT(busIdx == 0); // TODO: support more busses
-    return translator->channels;
+    return (void*)translator->channels;
 }
 
 static OSStatus AUMethodProcessAudio(
@@ -1396,7 +1406,9 @@ static OSStatus AUMethodProcessAudio(
             UInt32 numChannels = ioData->mBuffers[ch].mNumberChannels;
             CPLUG_LOG_ASSERT(numChannels == 1);
             // The very smart people at Apple test you on this. Yes you actually have to return noErr.
-            CPLUG_LOG_ASSERT_RETURN(ioData->mBuffers[ch].mData != NULL, noErr);
+            if (ioData->mBuffers[ch].mData == NULL)
+                return noErr;
+
             translator.channels[ch] = ioData->mBuffers[ch].mData;
         }
 
@@ -1629,8 +1641,9 @@ static bool AUv2HostContext_getHostName(CplugHostContext* ctx, char* buf, size_t
 }
 static bool AUv2HostContext_requestResize_stub(CplugHostContext* ctx, uint32_t w, uint32_t h)
 {
-    cplug_log("[WARNING] This implementation of requestResize() will not work. You need to replace this method in your "
-              "Cocoa code");
+    cplug_log(
+        "[WARNING] This implementation of requestResize() will not work. You need to replace this method in your "
+        "Cocoa code");
     return false;
 }
 static bool AUv2HostContext_registerTimer(CplugHostContext* ctx, uint32_t periodMs, uint32_t* timerId)
@@ -1695,8 +1708,8 @@ __attribute__((visibility("default"))) void* GetAUv2PluginFactory(const AudioCom
     AUv2Plugin* auv2 = (AUv2Plugin*)(calloc(1, sizeof(AUv2Plugin)));
     _Static_assert(offsetof(AUv2Plugin, mPlugInInterface) == 0, "Required by the AU format to be first");
 
-    auv2->mPlugInInterface.Open       = (OSStatus(*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
-    auv2->mPlugInInterface.Close      = (OSStatus(*)(void*))ComponentBase_AP_Close;
+    auv2->mPlugInInterface.Open       = (OSStatus (*)(void*, AudioComponentInstance))ComponentBase_AP_Open;
+    auv2->mPlugInInterface.Close      = (OSStatus (*)(void*))ComponentBase_AP_Close;
     auv2->mPlugInInterface.Lookup     = AULookup;
     auv2->desc                        = *inDesc;
     auv2->hostContext.type            = CPLUG_PLUGIN_IS_AUV2;
