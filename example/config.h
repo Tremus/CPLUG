@@ -13,11 +13,12 @@
 #define CPLUG_SUPPORT_64BIT_AUDIO 0
 #define CPLUG_PREFER_64BIT_AUDIO  0
 
-#define CPLUG_COMPANY_NAME   "CPLUG"
-#define CPLUG_COMPANY_EMAIL  ""
-#define CPLUG_PLUGIN_NAME    "CPLUG Example"
-#define CPLUG_PLUGIN_URI     "http://github.com/Tremus/CPLUG"
-#define CPLUG_PLUGIN_VERSION "1.0.0"
+#define CPLUG_COMPANY_NAME       "CPLUG"
+#define CPLUG_COMPANY_EMAIL      ""
+#define CPLUG_PLUGIN_NAME        "CPLUG Example"
+#define CPLUG_PLUGIN_URI         "http://github.com/Tremus/CPLUG"
+#define CPLUG_PLUGIN_VERSION     "1.0.0"
+#define CPLUG_PLUGIN_DESCRIPTION CPLUG_PLUGIN_NAME
 
 // See list of categories here:
 // https://steinbergmedia.github.io/vst3_doc/vstinterfaces/namespaceSteinberg_1_1Vst_1_1PlugType.html
