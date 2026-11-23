@@ -17,6 +17,12 @@
 #define CPLUG_CLAP_AUDIO_PORT_SAMPLE_SIZE_FLAGS 0
 #endif
 
+// Holds parameter events sent with sendParamEvent until the next process() or params.flush(). One slot stays unused.
+// It only fills if the host ignores request_flush() for a long time
+#ifndef CPLUG_CLAP_PARAM_QUEUE_SIZE
+#define CPLUG_CLAP_PARAM_QUEUE_SIZE 1024
+#endif
+
 typedef struct CLAPPlugin
 {
     clap_plugin_t    clapPlugin;
@@ -40,6 +46,16 @@ typedef struct CLAPPlugin
     const clap_host_timer_support_t*    host_timer;
     const clap_host_posix_fd_support_t* host_fd;
 #endif
+
+    // Parameter events from sendParamEvent (main thread), passed to the host through out_events at the start of the
+    // next process() or params.flush(). Single producer: the main thread. Single consumer: process() or flush(), which
+    // the CLAP spec never runs at the same time
+    CplugEvent       paramQueue[CPLUG_CLAP_PARAM_QUEUE_SIZE];
+    cplug_atomic_i32 paramQueueHead; // next slot to read. Written by the consumer
+    cplug_atomic_i32 paramQueueTail; // next slot to write. Written by the producer
+    // Set by the producer when it calls request_flush(), cleared by the consumer before it reads the queue. Either the
+    // consumer sees a new event, or the producer sees the flag cleared and requests another flush
+    cplug_atomic_i32 paramFlushRequested;
 } CLAPPlugin;
 
 /////////////////////////////
@@ -278,12 +294,9 @@ bool CLAPExtParams_text_to_value(
     return true;
 }
 
-void CLAPExtParams_flush(const clap_plugin_t* plugin, const clap_input_events_t* in, const clap_output_events_t* out)
-{
-    cplug_log("[WARNING: NOT SUPPORTED] CLAPExtParams_flush => %p %p", in, out);
-    // NOTE: Bitwig & Reaper won't actually call this method if you process all your events in the process callback
-    // We include this method anyway to prevent any segfault that may occur in future from not having it.
-}
+// Defined after CLAPPlugin_process, which it shares the process context translator with
+static void
+CLAPExtParams_flush(const clap_plugin_t* plugin, const clap_input_events_t* in, const clap_output_events_t* out);
 
 static const clap_plugin_params_t s_clap_params = {
     .count         = CLAPExtParams_count,
@@ -455,7 +468,29 @@ static const clap_plugin_gui_t s_clap_gui = {
 // clap_plugin //
 /////////////////
 
-static void _cplug_clap_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event) {}
+// [main thread] Queues the event for the next process() or params.flush(), and asks the host for a flush
+static void _cplug_clap_sendParamEvent(CplugHostContext* ctx, const CplugEvent* event)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
+
+    const int tail = cplug_atomic_load_i32(&clap->paramQueueTail);
+    const int head = cplug_atomic_load_i32(&clap->paramQueueHead);
+    const int next = (tail + 1) % CPLUG_CLAP_PARAM_QUEUE_SIZE;
+    if (next == head)
+    {
+        cplug_log("[WARNING] CLAP sendParamEvent: queue full, dropping event. Is the host ignoring request_flush?");
+        return;
+    }
+    clap->paramQueue[tail] = *event;
+    cplug_atomic_exchange_i32(&clap->paramQueueTail, next);
+
+    if (clap->host_params && clap->host_params->request_flush)
+    {
+        const int alreadyRequested = cplug_atomic_exchange_i32(&clap->paramFlushRequested, 1);
+        if (!alreadyRequested)
+            clap->host_params->request_flush(clap->host);
+    }
+}
 static void _cplug_clap_rescan(CplugHostContext* ctx, uint32_t flags)
 {
     CLAPPlugin* clap = (CLAPPlugin*)((char*)ctx - offsetof(CLAPPlugin, hostContext));
@@ -609,7 +644,9 @@ static void CLAPPlugin_destroy(const struct clap_plugin* plugin)
 {
     cplug_log("CLAPPlugin_destroy");
     CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
-    cplug_destroyPlugin(clap->userPlugin);
+    // A host may destroy a plugin it never called init() on, eg. after reading its descriptor
+    if (clap->userPlugin != NULL)
+        cplug_destroyPlugin(clap->userPlugin);
     free(clap);
 }
 
@@ -636,19 +673,24 @@ static void CLAPPlugin_stop_processing(const struct clap_plugin* plugin) { cplug
 
 static void CLAPPlugin_reset(const struct clap_plugin* plugin) { cplug_log("CLAPPlugin_reset"); }
 
+// Used by process() and by params.flush(). A flush has no audio: numFrames is 0 and process is NULL
 typedef struct ClapProcessContextTranslator
 {
     CplugProcessContext cplugContext;
 
-    const clap_process_t* process;
-    uint32_t              eventIdx;
-    uint32_t              numEvents;
+    const clap_process_t*       process; // NULL in params.flush()
+    const clap_input_events_t*  in_events;
+    const clap_output_events_t* out_events;
+    uint32_t                    eventIdx;
+    uint32_t                    numEvents;
 } ClapProcessContextTranslator;
 
 bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const CplugEvent* cplugEvent, uint32_t frameIdx)
 {
     ClapProcessContextTranslator* translator = (ClapProcessContextTranslator*)ctx;
-    const clap_process_t*         process    = translator->process;
+    const clap_output_events_t*   out_events = translator->out_events;
+    if (out_events == NULL)
+        return false;
 
     switch (cplugEvent->type)
     {
@@ -662,7 +704,7 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         event.header.type = cplugEvent->type == CPLUG_EVENT_PARAM_CHANGE_BEGIN ? CLAP_EVENT_PARAM_GESTURE_BEGIN
                                                                                : CLAP_EVENT_PARAM_GESTURE_END;
         event.param_id    = cplugEvent->parameter.id;
-        return process->out_events->try_push(process->out_events, &event.header);
+        return out_events->try_push(out_events, &event.header);
     }
     case CPLUG_EVENT_PARAM_CHANGE_UPDATE:
     {
@@ -673,7 +715,12 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         event.header.type = CLAP_EVENT_PARAM_VALUE;
         event.param_id    = cplugEvent->parameter.id;
         event.value       = cplugEvent->parameter.value;
-        return process->out_events->try_push(process->out_events, &event.header);
+        // -1 is the wildcard: the value applies to every note, port, channel and key
+        event.note_id    = -1;
+        event.port_index = -1;
+        event.channel    = -1;
+        event.key        = -1;
+        return out_events->try_push(out_events, &event.header);
     }
     case CPLUG_EVENT_MIDI:
     {
@@ -687,7 +734,7 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
         event.data[1] = cplugEvent->midi.bytes[1];
         event.data[2] = cplugEvent->midi.bytes[2];
 
-        return process->out_events->try_push(process->out_events, &event.header);
+        return out_events->try_push(out_events, &event.header);
     }
     default:
         break;
@@ -698,22 +745,41 @@ bool ClapProcessContext_enqueueEvent(struct CplugProcessContext* ctx, const Cplu
 bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
 {
     ClapProcessContextTranslator* translator = (ClapProcessContextTranslator*)ctx;
-    const clap_process_t*         process    = translator->process;
+    const clap_input_events_t*    in_events  = translator->in_events;
 
-    if (frameIdx >= translator->cplugContext.numFrames)
+    // params.flush() has no audio: hand out every event at frame 0, then stop. Never CPLUG_EVENT_PROCESS_AUDIO
+    const bool isFlush = translator->cplugContext.numFrames == 0;
+
+    if (!isFlush && frameIdx >= translator->cplugContext.numFrames)
         return false;
 
-    if (translator->eventIdx == translator->numEvents)
+    // Skip events from other namespaces, which only share their type numbers with core events by chance.
+    // A flush is "a set of parameter changes", so skip everything but parameter values there (as clap-wrapper does)
+    const clap_event_header_t* hdr = NULL;
+    while (translator->eventIdx < translator->numEvents)
     {
+        const clap_event_header_t* next    = in_events->get(in_events, translator->eventIdx);
+        const bool                 is_core = next->space_id == CLAP_CORE_EVENT_SPACE_ID;
+        const bool                 wanted  = is_core && (!isFlush || next->type == CLAP_EVENT_PARAM_VALUE);
+        if (wanted)
+        {
+            hdr = next;
+            break;
+        }
+        translator->eventIdx++;
+    }
+
+    if (hdr == NULL)
+    {
+        if (isFlush)
+            return false;
         // we reached the end of the event list
         event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
         event->processAudio.endFrame = translator->cplugContext.numFrames;
         return true;
     }
 
-    const clap_event_header_t* hdr = process->in_events->get(process->in_events, translator->eventIdx);
-
-    uint32_t event_time = hdr->time;
+    uint32_t event_time = isFlush ? 0 : hdr->time;
 
     if (event_time != frameIdx)
     {
@@ -819,6 +885,8 @@ bool ClapProcessContext_dequeueEvent(struct CplugProcessContext* ctx, CplugEvent
 void* ClapProcessContext_getAudioInput(const struct CplugProcessContext* ctx, uint32_t busIdx)
 {
     const ClapProcessContextTranslator* translator = (const ClapProcessContextTranslator*)ctx;
+    if (translator->process == NULL) // params.flush(): no audio
+        return NULL;
     CPLUG_LOG_ASSERT_RETURN(busIdx < translator->process->audio_inputs_count, NULL);
     if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
         return translator->process->audio_inputs[busIdx].data64;
@@ -828,10 +896,32 @@ void* ClapProcessContext_getAudioInput(const struct CplugProcessContext* ctx, ui
 void* ClapProcessContext_getAudioOutput(const struct CplugProcessContext* ctx, uint32_t busIdx)
 {
     const ClapProcessContextTranslator* translator = (const ClapProcessContextTranslator*)ctx;
+    if (translator->process == NULL) // params.flush(): no audio
+        return NULL;
     CPLUG_LOG_ASSERT_RETURN(busIdx < translator->process->audio_outputs_count, NULL);
     if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
         return translator->process->audio_outputs[busIdx].data64;
     return translator->process->audio_outputs[busIdx].data32;
+}
+
+// [process() or params.flush()] Moves events queued by sendParamEvent into out_events at frame 0, in the order they
+// were sent, before the plugin runs
+static void CLAPPlugin_sendQueuedParamEvents(CLAPPlugin* clap, ClapProcessContextTranslator* translator)
+{
+    // Clear before reading the tail. See paramFlushRequested
+    cplug_atomic_exchange_i32(&clap->paramFlushRequested, 0);
+
+    int       head = cplug_atomic_load_i32(&clap->paramQueueHead);
+    const int tail = cplug_atomic_load_i32(&clap->paramQueueTail);
+    while (head != tail)
+    {
+        const bool pushed = ClapProcessContext_enqueueEvent(&translator->cplugContext, &clap->paramQueue[head], 0);
+        if (!pushed)
+            cplug_log("[WARNING] CLAP: the host's out_events refused a parameter event (type %u)",
+                      clap->paramQueue[head].type);
+        head = (head + 1) % CPLUG_CLAP_PARAM_QUEUE_SIZE;
+    }
+    cplug_atomic_exchange_i32(&clap->paramQueueHead, head);
 }
 
 static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, const clap_process_t* process)
@@ -893,13 +983,45 @@ static clap_process_status CLAPPlugin_process(const struct clap_plugin* plugin, 
     translator.cplugContext.getAudioInput  = &ClapProcessContext_getAudioInput;
     translator.cplugContext.getAudioOutput = &ClapProcessContext_getAudioOutput;
 
-    translator.process   = process;
-    translator.eventIdx  = 0;
-    translator.numEvents = process->in_events->size(process->in_events);
+    translator.process    = process;
+    translator.in_events  = process->in_events;
+    translator.out_events = process->out_events;
+    translator.eventIdx   = 0;
+    translator.numEvents  = process->in_events->size(process->in_events);
 
+    CLAPPlugin_sendQueuedParamEvents(clap, &translator);
     cplug_process(clap->userPlugin, &translator.cplugContext);
 
     return CLAP_PROCESS_CONTINUE;
+}
+
+// [audio thread while active, main thread while inactive, never at the same time as process()]
+// Exchanges parameter events without audio, through cplug_process with numFrames == 0
+static void
+CLAPExtParams_flush(const clap_plugin_t* plugin, const clap_input_events_t* in, const clap_output_events_t* out)
+{
+    CLAPPlugin* clap = (CLAPPlugin*)plugin->plugin_data;
+
+    struct ClapProcessContextTranslator translator;
+    memset(&translator, 0, sizeof(translator));
+    translator.cplugContext.numFrames       = 0;
+    translator.cplugContext.numInputBusses  = 0;
+    translator.cplugContext.numOutputBusses = 0;
+    translator.cplugContext.audioSampleType = CPLUG_AUDIO_SAMPLE_FLOAT32;
+
+    translator.cplugContext.enqueueEvent   = &ClapProcessContext_enqueueEvent;
+    translator.cplugContext.dequeueEvent   = &ClapProcessContext_dequeueEvent;
+    translator.cplugContext.getAudioInput  = &ClapProcessContext_getAudioInput;
+    translator.cplugContext.getAudioOutput = &ClapProcessContext_getAudioOutput;
+
+    translator.process    = NULL;
+    translator.in_events  = in;
+    translator.out_events = out;
+    translator.eventIdx   = 0;
+    translator.numEvents  = in ? in->size(in) : 0;
+
+    CLAPPlugin_sendQueuedParamEvents(clap, &translator);
+    cplug_process(clap->userPlugin, &translator.cplugContext);
 }
 
 #if defined(__linux__)

@@ -2014,7 +2014,11 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
     // cplug_log("%s => %p %p %u", __FUNCTION__, ctx, event, frameIdx);
     VST3ProcessContextTranslator* translator = (VST3ProcessContextTranslator*)ctx;
 
-    if (frameIdx >= translator->cplugContext.numFrames)
+    // Hosts call process() with numSamples == 0 to flush parameters. Hand out every event, then stop. Never
+    // CPLUG_EVENT_PROCESS_AUDIO
+    const bool isFlush = translator->cplugContext.numFrames == 0;
+
+    if (!isFlush && frameIdx >= translator->cplugContext.numFrames)
         return false;
 
     uint32_t nextFrameIdx = ctx->numFrames;
@@ -2023,7 +2027,7 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
         VST3Plugin* vst3       = translator->vst3;
         CplugEvent* next_event = &vst3->events[translator->eventIdx];
 
-        nextFrameIdx = next_event->type >> 4;
+        nextFrameIdx = isFlush ? frameIdx : next_event->type >> 4;
         if (nextFrameIdx == frameIdx)
         {
             *event       = *next_event;
@@ -2033,10 +2037,23 @@ bool VST3ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEv
             return true;
         }
     }
+    if (isFlush)
+        return false;
     event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
     event->processAudio.endFrame = nextFrameIdx;
 
     return true;
+}
+
+// Hosts can process a bus with fewer channels than the plugin declared, or with NULL channels, eg. pluginval's bus
+// layout tests. Plugins index every declared channel, so they get NULL instead. 32 and 64 bit buffers share a union
+static void* _cplug_vst3_getBusChannels(const struct Steinberg_Vst_AudioBusBuffers* bus, uint32_t numDeclared)
+{
+    void** channels = (void**)bus->Steinberg_Vst_AudioBusBuffers_channelBuffers32;
+    bool   ok       = channels != NULL && bus->numChannels >= (int32_t)numDeclared;
+    for (uint32_t ch = 0; ok && ch < numDeclared; ch++)
+        ok = channels[ch] != NULL;
+    return ok ? channels : NULL;
 }
 
 void* VST3ProcessContextTranslator_getAudioInput(const CplugProcessContext* ctx, uint32_t busIdx)
@@ -2048,11 +2065,8 @@ void* VST3ProcessContextTranslator_getAudioInput(const CplugProcessContext* ctx,
     void* ptr = NULL;
     if (vst3ctx->data->inputs && busIdx < vst3ctx->data->numInputs)
     {
-        // Return channels matching the precision selected by the host
-        if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
-            ptr = vst3ctx->data->inputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers64;
-        else
-            ptr = vst3ctx->data->inputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
+        const uint32_t numDeclared = cplug_getInputBusChannelCount(vst3ctx->vst3->userPlugin, busIdx);
+        ptr                        = _cplug_vst3_getBusChannels(&vst3ctx->data->inputs[busIdx], numDeclared);
     }
     return ptr;
 }
@@ -2066,13 +2080,9 @@ void* VST3ProcessContextTranslator_getAudioOutput(const CplugProcessContext* ctx
     void* ptr = NULL;
     if (vst3ctx->data->outputs && busIdx < vst3ctx->data->numOutputs)
     {
-        // Return channels matching the precision selected by the host
-        if (ctx->audioSampleType == CPLUG_AUDIO_SAMPLE_FLOAT64)
-            ptr = vst3ctx->data->outputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers64;
-        else
-            ptr = vst3ctx->data->outputs[busIdx].Steinberg_Vst_AudioBusBuffers_channelBuffers32;
+        const uint32_t numDeclared = cplug_getOutputBusChannelCount(vst3ctx->vst3->userPlugin, busIdx);
+        ptr                        = _cplug_vst3_getBusChannels(&vst3ctx->data->outputs[busIdx], numDeclared);
     }
-
     return ptr;
 }
 

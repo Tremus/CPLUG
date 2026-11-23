@@ -86,7 +86,9 @@ struct CplugHostContext
 {
     uint32_t type; // CPLUG_PLUGIN_IS_XXX
 
-    // VST3 & AUv2 only, UI thread only.
+    // All formats. Main thread only. Tells the host about a parameter change the plugin made (eg. from its GUI):
+    // CPLUG_EVENT_PARAM_CHANGE_BEGIN, UPDATE (denormalised value) and END.
+    // CLAP queues events and asks the host for a flush, so they reach it at the next process() or params.flush()
     void (*sendParamEvent)(CplugHostContext* ctx, const CplugEvent*);
     void (*rescan)(CplugHostContext* ctx, uint32_t flags /* CPLUG_RESCAN_XXX */);
     bool (*getHostName)(CplugHostContext* ctx, char* buf, size_t buflen);
@@ -213,11 +215,17 @@ struct CplugProcessContext
     bool (*enqueueEvent)(CplugProcessContext* ctx, const CplugEvent*, uint32_t frameIdx);
     bool (*dequeueEvent)(CplugProcessContext* ctx, CplugEvent*, uint32_t frameIdx);
 
-    // Cast each returned channel-pointer array according to audioSampleType
+    // Cast each returned channel-pointer array according to audioSampleType. May return NULL, eg. a bypassed FX slot in
+    // FL Studio or Ableton, or a VST3 bus with NULL channels or fewer than cplug_get(In|Out)putBusChannelCount declared
     void* (*getAudioInput)(const CplugProcessContext* ctx, uint32_t busIdx);
     void* (*getAudioOutput)(const CplugProcessContext* ctx, uint32_t busIdx);
 };
 
+// [audio thread] Plugins must handle numFrames == 0. Hosts use it to exchange events without audio (CLAP
+// params.flush(), VST3 parameter flushes): dequeueEvent hands out every input event at frame 0, then returns false,
+// never CPLUG_EVENT_PROCESS_AUDIO. getAudioInput/getAudioOutput may return NULL, and there is no transport info.
+// enqueueEvent still works. CLAP calls params.flush() on the main thread while the plugin is inactive, but never at the
+// same time as process()
 CPLUG_API void cplug_process(void* userPlugin, CplugProcessContext* ctx);
 
 enum
@@ -241,10 +249,13 @@ CPLUG_API void cplug_getParameterRange(void*, uint32_t paramId, double* min, dou
 // NOTE: AUv2 supports a max length of 52 bytes, VST3 128, CLAP 256
 CPLUG_API void cplug_getParameterName(void*, uint32_t paramId, char* buf, size_t buflen);
 
-// NOTE: some hosts will test you with garbage IDs
+// [any thread] NOTE: some hosts will test you with garbage IDs
 CPLUG_API double cplug_getParameterValue(void*, uint32_t paramId);
 CPLUG_API double cplug_getDefaultParameterValue(void*, uint32_t paramId);
-// [hopefully audio thread] VST3 & AU only
+// [any thread] A value change from the host that isn't tied to a sample position. Hosts call this from the main thread,
+// the audio thread or threads of their own. VST3, AUv2 and AAX only: CLAP sends every change through cplug_process.
+// Sample-accurate changes arrive in cplug_process as CPLUG_EVENT_PARAM_CHANGE_UPDATE instead (CLAP, VST3, and AUv2
+// changes with a buffer offset)
 CPLUG_API void cplug_setParameterValue(void*, uint32_t paramId, double value);
 // VST3 only
 CPLUG_API double cplug_denormaliseParameterValue(void*, uint32_t paramId, double value);

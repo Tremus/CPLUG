@@ -209,6 +209,13 @@ typedef struct AUv2Plugin
     // Store events here because AUv2 won't simply pass us all events in a single process callback
     UInt32     numEvents;
     CplugEvent events[CPLUG_EVENT_QUEUE_SIZE];
+
+    // Sample-accurate parameter changes for the next render (SetParameter / ScheduleParameters with a buffer offset),
+    // sorted by frame. Like the VST3 wrapper, the frame is packed into the type: type = CPLUG_EVENT_XXX | frame << 4.
+    // Like the MIDI events above, hosts send them on the render thread before calling render, and only the render
+    // thread touches them
+    UInt32     numParamEvents;
+    CplugEvent paramEvents[CPLUG_EVENT_QUEUE_SIZE];
 } AUv2Plugin;
 
 // This is a disgusting mess but what are you going to do about it?
@@ -1191,6 +1198,30 @@ static OSStatus AUMethodGetParameterValue(
     return noErr;
 }
 
+// [render thread] Queues a parameter change for frame 'frame' of the next render, keeping the queue sorted by frame.
+// Events at the same frame keep the order the host sent them
+static void AUv2QueueParamEvent(AUv2Plugin* auv2, AudioUnitParameterID id, double value, UInt32 frame)
+{
+    if (auv2->numParamEvents >= CPLUG_ARRSIZE(auv2->paramEvents))
+    {
+        // Full. Apply it as a plain value change rather than lose it
+        cplug_log("[WARNING] AUv2: too many sample-accurate parameter events in one render");
+        cplug_setParameterValue(auv2->userPlugin, id, value);
+        return;
+    }
+
+    UInt32 i = auv2->numParamEvents;
+    while (i > 0 && (auv2->paramEvents[i - 1].type >> 4) > frame)
+    {
+        auv2->paramEvents[i] = auv2->paramEvents[i - 1];
+        i--;
+    }
+    auv2->paramEvents[i].parameter.type  = CPLUG_EVENT_PARAM_CHANGE_UPDATE | (frame << 4);
+    auv2->paramEvents[i].parameter.id    = id;
+    auv2->paramEvents[i].parameter.value = value;
+    auv2->numParamEvents++;
+}
+
 static OSStatus AUMethodSetParameterValue(
     AUv2Plugin*             auv2,
     AudioUnitParameterID    param,
@@ -1207,7 +1238,12 @@ static OSStatus AUMethodSetParameterValue(
     if (!isfinite(value))
         return kAudioUnitErr_InvalidParameterValue;
 
-    cplug_setParameterValue(auv2->userPlugin, param, value);
+    // An offset means "at this frame of the next render": deliver it from dequeueEvent as
+    // CPLUG_EVENT_PARAM_CHANGE_UPDATE. Without one, it's a plain value change
+    if (bufferOffset > 0)
+        AUv2QueueParamEvent(auv2, param, value, bufferOffset);
+    else
+        cplug_setParameterValue(auv2->userPlugin, param, value);
     return noErr;
 }
 
@@ -1224,9 +1260,18 @@ static OSStatus AUMethodScheduleParameters(AUv2Plugin* auv2, const AudioUnitPara
         switch (event->eventType)
         {
         case kParameterEvent_Immediate:
-            CPLUG_LOG_ASSERT(isfinite(event->eventValues.immediate.value));
-            cplug_setParameterValue(auv2->userPlugin, event->parameter, event->eventValues.immediate.value);
+        {
+            const AudioUnitParameterValue value  = event->eventValues.immediate.value;
+            const UInt32                  offset = event->eventValues.immediate.bufferOffset;
+            CPLUG_LOG_ASSERT(isfinite(value));
+            if (!isfinite(value))
+                status = kAudioUnitErr_InvalidParameterValue;
+            else if (offset > 0)
+                AUv2QueueParamEvent(auv2, event->parameter, value, offset);
+            else
+                cplug_setParameterValue(auv2->userPlugin, event->parameter, value);
             break;
+        }
         case kParameterEvent_Ramped:
             CPLUG_LOG_ASSERT(isfinite(event->eventValues.ramp.startValue));
             CPLUG_LOG_ASSERT(isfinite(event->eventValues.ramp.endValue));
@@ -1264,6 +1309,7 @@ typedef struct AUv2ProcessContextTranslator
     CplugProcessContext cplugContext;
     AUv2Plugin*         auv2;
     UInt32              midiIdx;
+    UInt32              paramIdx;
     void*               channels[2];
 } AUv2ProcessContextTranslator;
 
@@ -1277,30 +1323,49 @@ bool AUv2ProcessContextTranslator_enqueueEvent(CplugProcessContext* ctx, const C
 bool AUv2ProcessContextTranslator_dequeueEvent(CplugProcessContext* ctx, CplugEvent* event, uint32_t frameIdx)
 {
     AUv2ProcessContextTranslator* translator = (AUv2ProcessContextTranslator*)ctx;
+    AUv2Plugin*                   auv2       = translator->auv2;
+    const UInt32                  numFrames  = translator->cplugContext.numFrames;
 
-    if (frameIdx >= translator->cplugContext.numFrames)
+    if (frameIdx >= numFrames)
         return false;
 
-    if (translator->midiIdx == translator->auv2->numEvents)
+    // The next frame of each list (parameters, MIDI), or numFrames if it's empty. An event before frameIdx is late and
+    // goes now. One past the end of this render goes at its last frame
+    const bool hasParam   = translator->paramIdx < auv2->numParamEvents;
+    const bool hasMidi    = translator->midiIdx < auv2->numEvents;
+    UInt32     paramFrame = numFrames;
+    UInt32     midiFrame  = numFrames;
+    if (hasParam)
     {
-        event->type                  = CPLUG_EVENT_PROCESS_AUDIO;
-        event->processAudio.endFrame = translator->cplugContext.numFrames;
+        paramFrame = auv2->paramEvents[translator->paramIdx].type >> 4;
+        paramFrame = paramFrame < frameIdx ? frameIdx : paramFrame;
+        paramFrame = paramFrame >= numFrames ? numFrames - 1 : paramFrame;
+    }
+    if (hasMidi)
+    {
+        CPLUG_LOG_ASSERT(translator->midiIdx < CPLUG_ARRSIZE(auv2->events));
+        midiFrame = auv2->events[translator->midiIdx].midi.frame;
+        midiFrame = midiFrame < frameIdx ? frameIdx : midiFrame;
+        midiFrame = midiFrame >= numFrames ? numFrames - 1 : midiFrame;
+    }
+
+    // At the same frame, parameters go first, so a note starts with the new value
+    if (hasParam && paramFrame == frameIdx)
+    {
+        *event       = auv2->paramEvents[translator->paramIdx];
+        event->type &= 0xf; // Remove packed frame in type
+        translator->paramIdx++;
+        return true;
+    }
+    if (hasMidi && midiFrame == frameIdx)
+    {
+        *event = auv2->events[translator->midiIdx];
+        translator->midiIdx++;
         return true;
     }
 
-    CPLUG_LOG_ASSERT(translator->midiIdx < CPLUG_ARRSIZE(translator->auv2->events));
-    const CplugEvent* cachedEvent = &translator->auv2->events[translator->midiIdx];
-    if (cachedEvent->midi.frame != frameIdx)
-    {
-        event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
-        event->processAudio.endFrame = cachedEvent->midi.frame;
-        return true;
-    }
-
-    // Send MIDI event
-    *event = *cachedEvent;
-    translator->midiIdx++;
-
+    event->processAudio.type     = CPLUG_EVENT_PROCESS_AUDIO;
+    event->processAudio.endFrame = paramFrame < midiFrame ? paramFrame : midiFrame;
     return true;
 }
 
@@ -1419,8 +1484,9 @@ static OSStatus AUMethodProcessAudio(
         }
 
         cplug_process(auv2->userPlugin, (CplugProcessContext*)&translator);
-        // Clear MIDI event list
-        auv2->numEvents = 0;
+        // Clear MIDI and parameter event lists
+        auv2->numEvents      = 0;
+        auv2->numParamEvents = 0;
     }
 
     return noErr;
