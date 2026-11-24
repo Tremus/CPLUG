@@ -55,6 +55,18 @@ Also gain additional getter functions for:
 - id<CAMetalDrawable> currentDrawable          pw_get_metal_drawable()
 - id<MTLTexture>      depthStencilTexture      pw_get_metal_depth_stencil_texture()
 
+Define the macro PW_VULKAN to automatically set up a Vulkan device & swapchain etc.
+Also gain additional getter functions for:
+- VkInstance          instance                 pw_get_vulkan_instance()
+- VkPhysicalDevice    physicalDevice           pw_get_vulkan_physical_device()
+- VkDevice            device                   pw_get_vulkan_device()
+- VkQueue             queue                    pw_get_vulkan_queue()
+- uint32_t            queueFamilyIndex         pw_get_vulkan_queue_family_index()
+- VkImage             renderImage              pw_get_vulkan_render_image()
+- VkImageView         renderView               pw_get_vulkan_render_view()
+- VkSemaphore         presentComplete          pw_get_vulkan_present_complete_semaphore()
+- VkSemaphore         renderFinished           pw_get_vulkan_render_finished_semaphore()
+
 $$$$$$$$$$$$$$$$$$$
 $ Example program $
 $$$$$$$$$$$$$$$$$$$
@@ -154,6 +166,7 @@ bool pw_event(const PWEvent* event)
 - [macOS] -framework Cocoa
 - [macOS] -framework Metal    (if using Metal)
 - [macOS] -framework MetalKit (if using Metal)
+- [Linux] Vulkan headers (if using Vulkan)
 
 >>>>>>>>>>>
 > Roadmap >
@@ -247,6 +260,20 @@ void* pw_get_dx11_render_target_view(void* pw);
 void* pw_get_dx11_depth_stencil_view(void* pw);
 
 #endif
+
+#if defined(PW_VULKAN) && defined(__linux__)
+
+void*    pw_get_vulkan_instance(void* pw);
+void*    pw_get_vulkan_physical_device(void* pw);
+void*    pw_get_vulkan_device(void* pw);
+void*    pw_get_vulkan_queue(void* pw);
+uint32_t pw_get_vulkan_queue_family_index(void* pw);
+void*    pw_get_vulkan_render_image(void* pw);
+void*    pw_get_vulkan_render_view(void* pw);
+void*    pw_get_vulkan_present_complete_semaphore(void* pw);
+void*    pw_get_vulkan_render_finished_semaphore(void* pw);
+
+#endif // PW_VULKAN
 
 // BONUS UTILITIES API
 
@@ -355,7 +382,8 @@ enum PWCursorType
 // clang-format off
 // NOTE: Virtual keys values are a mirror of that found in the OS headers.
 // Values between Windows and macOS are different
-#if defined(_WIN32)
+// Linux reuses the Windows values
+#if defined(_WIN32) || defined(__linux__)
 // https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
 enum PWVirtualKey
 {
@@ -618,7 +646,7 @@ enum
     // See: [NSEvent isDirectionInvertedFromDevice]
     PW_MOD_INVERTED_SCROLL = 1 << 9,
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     PW_MOD_PLATFORM_KEY_CTRL = PW_MOD_KEY_CTRL,
     PW_MOD_PLATFORM_KEY_ALT  = PW_MOD_KEY_ALT,
 #elif defined(__APPLE__)
