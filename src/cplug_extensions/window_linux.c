@@ -271,7 +271,7 @@ typedef struct PWVKSwapchain
 {
     VkSurfaceKHR   surface;
     VkSwapchainKHR swapchain;
-    VkExtent2D     extent;
+    VkExtent2D     requested_extent; // Size passed to the last recreate, before clamping to the surface caps
     bool           needs_recreate;
 
     uint32_t    num_images;
@@ -824,8 +824,9 @@ static bool pwvk_swapchain_recreate(PWVKSwapchain* sc, uint32_t width, uint32_t 
         vkCreateImageView(ctx->device, &view_info, NULL, &sc->views[i]);
     }
 
-    sc->extent         = extent;
-    sc->needs_recreate = false;
+    // Compare against the unclamped size, or a clamped swapchain would be recreated every frame
+    sc->requested_extent = (VkExtent2D){width, height};
+    sc->needs_recreate   = false;
     return true;
 }
 
@@ -836,15 +837,17 @@ PWVK_FUNC bool pwvk_swapchain_acquire(PWVKSwapchain* sc, uint32_t width, uint32_
 
     for (int attempt = 0; attempt < 2; attempt++)
     {
-        bool size_changed = sc->extent.width != width || sc->extent.height != height;
+        bool size_changed = sc->requested_extent.width != width || sc->requested_extent.height != height;
         if (sc->needs_recreate || size_changed || !sc->swapchain)
             if (!pwvk_swapchain_recreate(sc, width, height))
                 return false;
 
+        // Never wait. With FIFO, or a compositor holding every image (eg. hidden window), this would block the main
+        // thread indefinitely. Skip the frame instead
         VkResult res = vkAcquireNextImageKHR(
             g_pwvk.ctx.device,
             sc->swapchain,
-            UINT64_MAX,
+            0,
             sc->present_complete[(sc->frame_index + 1) % PWVK_NUM_ACQUIRE_SEMAPHORES],
             VK_NULL_HANDLE,
             &sc->image_index);
@@ -856,6 +859,9 @@ PWVK_FUNC bool pwvk_swapchain_acquire(PWVKSwapchain* sc, uint32_t width, uint32_
                 sc->needs_recreate = true;
             return true;
         }
+        // No image free yet. The semaphore isn't signalled, so its slot can be reused next frame
+        if (res == VK_NOT_READY || res == VK_TIMEOUT)
+            return false;
         if (res != VK_ERROR_OUT_OF_DATE_KHR)
         {
             cplug_log("[vulkan] vkAcquireNextImageKHR failed (%d)", res);
