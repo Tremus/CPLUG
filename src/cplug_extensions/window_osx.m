@@ -1363,8 +1363,8 @@ bool pw_choose_file(const PWChooseFileArgs* args)
 
     NSModalResponse response = [panel runModal];
 
-    char**   paths    = NULL;
-    uint32_t numPaths = 0;
+    char**     paths    = NULL;
+    NSUInteger numPaths = 0;
 
     if (response == NSModalResponseOK)
     {
@@ -1372,18 +1372,18 @@ bool pw_choose_file(const PWChooseFileArgs* args)
         {
             NSOpenPanel* opanel = (NSOpenPanel*)panel;
 
-            NSArray<NSURL*>* urls = [opanel URLs];
-            numPaths              = [urls count];
+            NSArray<NSURL*>* urls    = [opanel URLs];
+            NSUInteger       numURLs = [urls count];
 
-            const size_t arrSize   = (sizeof(char*) * numPaths);
+            const size_t arrSize   = (sizeof(char*) * numURLs);
             const size_t stride    = 1024;
-            const size_t allocSize = arrSize + stride * numPaths;
+            const size_t allocSize = arrSize + stride * numURLs;
 
             paths = PW_MALLOC(allocSize);
             memset(paths, 0, allocSize);
-            char* path = (char*)(paths + numPaths);
+            char* path = (char*)(paths + numURLs);
 
-            for (NSInteger i = 0; i < numPaths; i++)
+            for (NSUInteger i = 0; i < numURLs; i++)
             {
                 NSURL* url_obj = [urls objectAtIndex:i];
                 if (!url_obj)
